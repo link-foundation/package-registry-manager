@@ -49,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [rust, actions]
+        language: [rust, javascript-typescript, actions]
     steps:
       - uses: actions/checkout@v6
         with:

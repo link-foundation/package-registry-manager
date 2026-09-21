@@ -546,6 +546,50 @@ jobs:
           bash scripts/run-with-budget-warning.sh "$DOC_TEST_BUDGET_SECONDS" "Doc tests"
           cargo test --doc --verbose
 
+  # === JAVASCRIPT ===
+  # The Node implementation has the same discovery and setup contract as the
+  # root Rust package, with its own locked dependency graph.
+  javascript:
+    name: JavaScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-javascript
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    needs: [detect-changes]
+    if: |
+      !cancelled() && (
+        github.event_name == 'workflow_dispatch' ||
+        needs.detect-changes.outputs.any-code-changed == 'true' ||
+        needs.detect-changes.outputs.workflow-changed == 'true'
+      )
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --prefix js
+
+      - name: Check JavaScript sources
+        run: npm run check --prefix js
+
+      - name: Test JavaScript implementation
+        env:
+          JAVASCRIPT_TEST_BUDGET_SECONDS: 300
+        run: >-
+          bash scripts/run-with-budget-warning.sh "$JAVASCRIPT_TEST_BUDGET_SECONDS" "JavaScript tests"
+          npm test --prefix js
+
+      - name: Audit JavaScript dependencies
+        run: npm audit --audit-level=high --prefix js
+
   # === RELEASE SCRIPT TESTS ===
   # `cargo test` only builds the library crate, so the inline `#[cfg(test)]`
   # suites in scripts/*.rs — including the regression guard on
@@ -1292,6 +1336,7 @@ jobs:
       - cargo-lock
       - lint
       - test
+      - javascript
       - script-tests
       - coverage
       - build

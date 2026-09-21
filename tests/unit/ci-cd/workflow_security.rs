@@ -193,7 +193,7 @@ fn release_workflow_separates_check_and_write_concurrency() {
 /// Regression test for issue #115:
 /// <https://github.com/link-foundation/rust-ai-driven-development-pipeline-template/issues/115>
 #[test]
-fn security_workflow_scans_rust_actions_and_pull_request_dependencies() {
+fn security_workflow_scans_rust_javascript_actions_and_pull_request_dependencies() {
     let workflow = security_workflow();
     let header = workflow.split("\njobs:\n").next().unwrap();
 
@@ -206,7 +206,7 @@ fn security_workflow_scans_rust_actions_and_pull_request_dependencies() {
     let codeql = job_block(&workflow, "codeql");
     assert!(codeql.contains("timeout-minutes: 30"));
     assert!(codeql.contains("security-events: write"));
-    assert!(codeql.contains("language: [rust, actions]"));
+    assert!(codeql.contains("language: [rust, javascript-typescript, actions]"));
     assert!(codeql.contains("uses: github/codeql-action/init@v4"));
     assert!(codeql.contains("languages: ${{ matrix.language }}"));
     assert!(codeql.contains("uses: github/codeql-action/autobuild@v4"));
