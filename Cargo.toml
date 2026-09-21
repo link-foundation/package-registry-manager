@@ -16,11 +16,11 @@ rust-version = "1.85"
 # changelog fragments, and experiments from silently inflating the release
 # archive past the crates.io 10 MiB upload limit. See issue #58.
 include = [
-    "src/**/*.rs",
-    "examples/**/*.rs",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md",
+    "/src/**/*.rs",
+    "/examples/**/*.rs",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
 ]
 
 [lib]

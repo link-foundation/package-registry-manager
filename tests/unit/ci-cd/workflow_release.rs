@@ -585,8 +585,8 @@ fn cargo_manifest_uses_narrow_include_allowlist() {
         "Cargo.toml should declare a narrow include allowlist to keep release archives small"
     );
     assert!(
-        manifest.contains("\"src/**/*.rs\""),
-        "include allowlist should ship the crate sources"
+        manifest.contains("\"/src/**/*.rs\""),
+        "include allowlist should anchor crate sources at the package root"
     );
     // Docs, case studies, changelog fragments, scripts, and experiments must not
     // be opted into the published archive.
