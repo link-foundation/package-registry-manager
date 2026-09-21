@@ -172,5 +172,5 @@ export function packageDirectory(manifest) {
 }
 
 function urlPathSegment(value) {
-  return encodeURIComponent(value).replace('%40', '@');
+  return encodeURIComponent(value).replaceAll('%40', '@');
 }

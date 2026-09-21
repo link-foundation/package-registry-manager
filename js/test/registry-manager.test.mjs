@@ -63,6 +63,12 @@ test('prefills npm trusted-publisher identity', async () => {
     npm.steps.find((step) => step.kind === 'browser').url,
     'https://www.npmjs.com/package/@acme%2Fwidgets/access'
   );
+  const repeatedAt = structuredClone(inspection);
+  repeatedAt.packages.find((item) => item.registry === 'npm').name = '@acme/@widgets';
+  assert.equal(
+    buildPlans(repeatedAt).find((plan) => plan.registry === 'npm').steps.at(-1).url,
+    'https://www.npmjs.com/package/@acme%2F@widgets/access'
+  );
   const script = npmPrefillScript(npm.trusted_publisher);
   assert.match(script, /publish\.yml/);
   assert.doesNotThrow(() => new Function(`return ${script}`));
