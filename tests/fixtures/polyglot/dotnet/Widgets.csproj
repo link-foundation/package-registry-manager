@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>Acme.Widgets</PackageId>
+    <Version>1.2.3</Version>
+  </PropertyGroup>
+</Project>

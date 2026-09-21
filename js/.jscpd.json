@@ -1,0 +1,10 @@
+{
+  "threshold": 10,
+  "minTokens": 30,
+  "minLines": 5,
+  "skipComments": true,
+  "ignore": ["**/node_modules/**", "**/coverage/**", "**/reports/**"],
+  "format": ["javascript"],
+  "reporters": ["console"],
+  "output": "./reports/jscpd"
+}

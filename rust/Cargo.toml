@@ -1,0 +1,76 @@
+[package]
+name = "package-registry-manager"
+version = "0.19.35"
+edition = "2021"
+description = "Inspect repositories and guide secure package-registry setup"
+readme = "README.md"
+license = "Unlicense"
+keywords = ["registry", "publishing", "automation", "cli"]
+categories = ["development-tools", "command-line-utilities"]
+repository = "https://github.com/link-foundation/package-registry-manager"
+documentation = "https://github.com/link-foundation/package-registry-manager#readme"
+rust-version = "1.85"
+
+# Narrow allowlist of files shipped in the published `.crate` archive.
+# Keeping this list tight prevents docs, case studies, generated CI artifacts,
+# changelog fragments, and experiments from silently inflating the release
+# archive past the crates.io 10 MiB upload limit. See issue #58.
+include = [
+    "/src/**/*.rs",
+    "/examples/**/*.rs",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+]
+
+[lib]
+name = "package_registry_manager"
+path = "src/lib.rs"
+
+[[bin]]
+name = "package-registry-manager"
+path = "src/main.rs"
+
+[dependencies]
+lino-arguments = "0.3"
+clap = { version = "4.4", features = ["derive", "env"] }
+anyhow = "1"
+browser-commander = "0.12"
+command-stream = "0.25"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+toml = "0.8"
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+walkdir = "2"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+# Allow some common patterns
+module_name_repetitions = "allow"
+too_many_lines = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[[test]]
+name = "unit"
+path = "tests/unit/mod.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration/mod.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

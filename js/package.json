@@ -1,0 +1,52 @@
+{
+  "name": "package-registry-manager",
+  "version": "0.19.35",
+  "description": "Inspect repositories and guide secure package-registry setup",
+  "type": "module",
+  "bin": {
+    "package-registry-manager-js": "./src/cli.mjs"
+  },
+  "exports": "./src/index.mjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/link-foundation/package-registry-manager.git",
+    "directory": "js"
+  },
+  "license": "Unlicense",
+  "files": [
+    "src/",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "syntax": "node --check src/cli.mjs && node --check src/index.mjs && node --check src/browser.mjs && node --check scripts/publish-to-npm.mjs && node --check scripts/setup-npm.mjs && node --check scripts/sanitize-npm-userconfig.mjs",
+    "lint": "eslint src test scripts --max-warnings 0",
+    "lint:fix": "eslint src test scripts --fix --max-warnings 0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check:duplication": "jscpd src",
+    "check": "npm run syntax && npm run lint && npm run format:check && npm run check:duplication",
+    "test": "node --test --test-timeout=30000",
+    "pack:check": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "browser-commander": "^0.19.0",
+    "command-stream": "^0.25.0",
+    "playwright": "^1.63.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "jscpd": "^4.3.0",
+    "prettier": "^3.9.6"
+  }
+}

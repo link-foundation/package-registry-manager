@@ -91,13 +91,13 @@ jobs:
           toolchain: stable
 
       - name: Install rust-script
-        run: ./scripts/install-rust-script.sh
+        run: ./rust/scripts/install-rust-script.sh
 
       - name: Detect changes
         id: changes
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
-        run: rust-script scripts/detect-code-changes.rs
+        run: rust-script rust/scripts/detect-code-changes.rs
 
   # === DOCS VALIDATION - required documents and their sections (issue #161) ===
   # A diff review reliably misses a deleted CONTRIBUTING.md or a gutted
@@ -156,7 +156,7 @@ jobs:
           DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: bash scripts/preflight-credentials.sh
+        run: bash rust/scripts/preflight-credentials.sh
 
   # === CHANGELOG CHECK - only runs on PRs with code changes ===
   # Docs-only PRs (./docs folder, markdown files) don't require changelog fragments
@@ -183,12 +183,12 @@ jobs:
           toolchain: stable
 
       - name: Install rust-script
-        run: ./scripts/install-rust-script.sh
+        run: ./rust/scripts/install-rust-script.sh
 
       - name: Check for changelog fragments
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
-        run: rust-script scripts/check-changelog-fragment.rs
+        run: rust-script rust/scripts/check-changelog-fragment.rs
 
   # === VERSION CHECK - prevents manual version modification in PRs ===
   # This ensures versions are only modified by the automated release pipeline
@@ -214,14 +214,14 @@ jobs:
           toolchain: stable
 
       - name: Install rust-script
-        run: ./scripts/install-rust-script.sh
+        run: ./rust/scripts/install-rust-script.sh
 
       - name: Check for manual version changes
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_HEAD_REF: ${{ github.head_ref }}
           GITHUB_BASE_REF: ${{ github.base_ref }}
-        run: rust-script scripts/check-version-modification.rs
+        run: rust-script rust/scripts/check-version-modification.rs
 
   # === SECRETS SCAN ===
   # Language-agnostic credential scan; runs via npx so no Node dependency is committed.
@@ -272,10 +272,17 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            rust/target
           key: ${{ runner.os }}-cargo-fresh-merge-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-fresh-merge-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: js/package-lock.json
 
       - name: Simulate fresh merge with base branch
         env:
@@ -370,10 +377,10 @@ jobs:
           toolchain: stable
 
       - name: Install rust-script
-        run: ./scripts/install-rust-script.sh
+        run: ./rust/scripts/install-rust-script.sh
 
       - name: Check committed Cargo.lock for binary crates
-        run: rust-script scripts/check-cargo-lock.rs
+        run: rust-script rust/scripts/check-cargo-lock.rs
 
   # === LINT AND FORMAT CHECK ===
   # Lint runs independently of changelog check - it's a fast check that should always run
@@ -414,7 +421,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install rust-script
-        run: ./scripts/install-rust-script.sh
+        run: ./rust/scripts/install-rust-script.sh
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -422,16 +429,16 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            rust/target
           key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-lint-
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --all-targets --all-features
+        run: cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features
 
       # Warning-band annotations are limited to files this pull request changed,
       # so unchanged files stop repeating the same warning on every run.
@@ -459,12 +466,12 @@ jobs:
         # instead of in the post-release deploy-docs job.
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps --all-features
+        run: cargo doc --manifest-path rust/Cargo.toml --no-deps --all-features
 
       - name: Check file size limit
         env:
           CHANGED_FILES: ${{ steps.changed-files.outputs.files }}
-        run: rust-script scripts/check-file-size.rs
+        run: rust-script rust/scripts/check-file-size.rs
 
   # === TEST ===
   # Test runs independently of changelog check and only for code-affecting changes
@@ -525,7 +532,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            rust/target
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-test-
@@ -536,7 +543,7 @@ jobs:
           TEST_BUDGET_SECONDS: 900
         run: >-
           bash scripts/run-with-budget-warning.sh "$TEST_BUDGET_SECONDS" "Test suite"
-          cargo test --all-features --verbose
+          cargo test --manifest-path rust/Cargo.toml --all-features --verbose
 
       - name: Run doc tests
         shell: bash
@@ -544,7 +551,66 @@ jobs:
           DOC_TEST_BUDGET_SECONDS: 300
         run: >-
           bash scripts/run-with-budget-warning.sh "$DOC_TEST_BUDGET_SECONDS" "Doc tests"
-          cargo test --doc --verbose
+          cargo test --manifest-path rust/Cargo.toml --doc --verbose
+
+  # === JAVASCRIPT ===
+  # The Node implementation has the same discovery and setup contract as the
+  # root Rust package, with its own locked dependency graph.
+  javascript:
+    name: JavaScript (Node ${{ matrix.node }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-javascript-${{ matrix.node }}-${{ matrix.os }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    needs: [detect-changes]
+    if: |
+      !cancelled() && (
+        github.event_name == 'workflow_dispatch' ||
+        needs.detect-changes.outputs.any-code-changed == 'true' ||
+        needs.detect-changes.outputs.workflow-changed == 'true'
+      )
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, node: 20 }
+          - { os: ubuntu-24.04, node: 24 }
+          - { os: macos-latest, node: 24 }
+          - { os: windows-latest, node: 24 }
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --prefix js
+
+      - name: Check JavaScript sources
+        if: matrix.os == 'ubuntu-24.04' && matrix.node == 24
+        run: npm run check --prefix js
+
+      - name: Test JavaScript implementation
+        shell: bash
+        env:
+          JAVASCRIPT_TEST_BUDGET_SECONDS: 300
+        run: >-
+          bash scripts/run-with-budget-warning.sh "$JAVASCRIPT_TEST_BUDGET_SECONDS" "JavaScript tests"
+          npm test --prefix js
+
+      - name: Audit JavaScript dependencies
+        if: matrix.os == 'ubuntu-24.04' && matrix.node == 24
+        run: npm audit --audit-level=high --prefix js
+
+      - name: Verify JavaScript package contents
+        if: matrix.os == 'ubuntu-24.04' && matrix.node == 24
+        run: npm run pack:check --prefix js
 
   # === RELEASE SCRIPT TESTS ===
   # `cargo test` only builds the library crate, so the inline `#[cfg(test)]`
@@ -585,7 +651,7 @@ jobs:
           toolchain: stable
 
       - name: Install rust-script
-        run: ./scripts/install-rust-script.sh
+        run: ./rust/scripts/install-rust-script.sh
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -601,7 +667,7 @@ jobs:
         # Every script carrying a `#[cfg(test)]` module is built as its own test
         # harness. Failures are collected rather than short-circuited so one
         # broken suite does not hide the state of the others.
-        run: bash scripts/test-scripts.sh
+        run: bash rust/scripts/test-scripts.sh
 
   # === CODE COVERAGE ===
   # Generate and upload code coverage using cargo-llvm-cov
@@ -642,7 +708,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            rust/target
           key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-coverage-
@@ -659,14 +725,14 @@ jobs:
           COVERAGE_BUDGET_SECONDS: 600
         run: >-
           bash scripts/run-with-budget-warning.sh "$COVERAGE_BUDGET_SECONDS" "Code coverage"
-          cargo llvm-cov --all-features --lcov --output-path lcov.info
+          cargo llvm-cov --manifest-path rust/Cargo.toml --all-features --lcov --output-path rust/lcov.info
 
       - name: Upload coverage to Codecov
         if: env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ env.CODECOV_TOKEN }}
-          files: lcov.info
+          files: rust/lcov.info
           disable_search: true
           fail_ci_if_error: true
 
@@ -698,7 +764,7 @@ jobs:
           toolchain: stable
 
       - name: Install rust-script
-        run: ./scripts/install-rust-script.sh
+        run: ./rust/scripts/install-rust-script.sh
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -706,26 +772,26 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            rust/target
           key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-build-
 
       - name: Build release
-        run: cargo build --release --verbose
+        run: cargo build --manifest-path rust/Cargo.toml --release --verbose
 
       - name: Check package
-        run: cargo package --list --allow-dirty
+        run: cargo package --manifest-path rust/Cargo.toml --list --allow-dirty
 
       - name: Check crate package size
-        run: rust-script scripts/check-crate-size.rs
+        run: rust-script rust/scripts/check-crate-size.rs
 
   # === AUTO RELEASE ===
   # Automatic release on push to main using changelog fragments
   # This job automatically bumps version based on fragments in changelog.d/
   auto-release:
     name: Auto Release
-    needs: [lint, test, build, release-preflight]
+    needs: [lint, test, javascript, build, release-preflight]
     outputs:
       docker_enabled: ${{ steps.dockerhub.outputs.enabled }}
       release_version: ${{ steps.release-metadata.outputs.version }}
@@ -738,6 +804,7 @@ jobs:
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       needs.release-preflight.result == 'success' &&
+      needs.javascript.result == 'success' &&
       needs.build.result == 'success'
     runs-on: ubuntu-latest
     # Covers the crate build, publish, smoke test, and a cold Docker build.
@@ -764,41 +831,41 @@ jobs:
           toolchain: stable
 
       - name: Install rust-script
-        run: ./scripts/install-rust-script.sh
+        run: ./rust/scripts/install-rust-script.sh
 
       - name: Configure git
-        run: rust-script scripts/git-config.rs
+        run: rust-script rust/scripts/git-config.rs
 
       - name: Determine bump type from changelog fragments
         id: bump_type
-        run: rust-script scripts/get-bump-type.rs
+        run: rust-script rust/scripts/get-bump-type.rs
 
       - name: Check if version already released or no fragments
         id: check
         env:
           HAS_FRAGMENTS: ${{ steps.bump_type.outputs.has_fragments }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: rust-script scripts/check-release-needed.rs
+        run: rust-script rust/scripts/check-release-needed.rs
 
       - name: Collect changelog and bump version
         id: version
         if: steps.check.outputs.should_release == 'true' && steps.check.outputs.skip_bump != 'true'
         run: |
-          rust-script scripts/version-and-commit.rs \
+          rust-script rust/scripts/version-and-commit.rs \
             --bump-type "${{ steps.bump_type.outputs.bump_type }}"
 
       - name: Get current version
         id: current_version
         if: steps.check.outputs.should_release == 'true'
-        run: rust-script scripts/get-version.rs
+        run: rust-script rust/scripts/get-version.rs
 
       - name: Build release
         if: steps.check.outputs.should_release == 'true'
-        run: cargo build --release
+        run: cargo build --manifest-path rust/Cargo.toml --release
 
       - name: Check crate package size
         if: steps.check.outputs.should_release == 'true' && steps.check.outputs.crate_published != 'true'
-        run: rust-script scripts/check-crate-size.rs
+        run: rust-script rust/scripts/check-crate-size.rs
 
       - name: Publish to Crates.io
         if: steps.check.outputs.should_release == 'true' && steps.check.outputs.crate_published != 'true'
@@ -806,7 +873,7 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}
           CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
-        run: rust-script scripts/publish-crate.rs
+        run: rust-script rust/scripts/publish-crate.rs
 
       - name: Wait for Crate availability on Crates.io
         if: |
@@ -814,7 +881,7 @@ jobs:
             steps.check.outputs.crate_published == 'true' ||
             steps.publish-crate.outputs.publish_result == 'success'
           )
-        run: rust-script scripts/wait-for-crate.rs --release-version "${{ steps.current_version.outputs.version }}"
+        run: rust-script rust/scripts/wait-for-crate.rs --release-version "${{ steps.current_version.outputs.version }}"
 
       - name: Smoke-test published crate
         if: |
@@ -822,7 +889,7 @@ jobs:
             steps.check.outputs.crate_published == 'true' ||
             steps.publish-crate.outputs.publish_result == 'success'
           )
-        run: rust-script scripts/smoke-test-published-crate.rs --release-version "${{ steps.current_version.outputs.version }}"
+        run: rust-script rust/scripts/smoke-test-published-crate.rs --release-version "${{ steps.current_version.outputs.version }}"
 
       - name: Configure Docker Hub publishing
         if: |
@@ -882,13 +949,13 @@ jobs:
           if [ -n "$DOCKER_HUB_URL" ]; then
             release_args+=(--docker-hub-url "$DOCKER_HUB_URL")
           fi
-          rust-script scripts/create-github-release.rs "${release_args[@]}"
+          rust-script rust/scripts/create-github-release.rs "${release_args[@]}"
 
   # === MANUAL INSTANT RELEASE ===
   # Manual release via workflow_dispatch - only after CI passes
   manual-release:
     name: Instant Release
-    needs: [lint, test, build, release-preflight]
+    needs: [lint, test, javascript, build, release-preflight]
     outputs:
       docker_enabled: ${{ steps.dockerhub.outputs.enabled }}
       release_version: ${{ steps.version.outputs.new_version }}
@@ -902,6 +969,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.release_mode == 'instant' &&
       needs.release-preflight.result == 'success' &&
+      needs.javascript.result == 'success' &&
       needs.build.result == 'success'
     runs-on: ubuntu-latest
     # Covers the crate build, publish, smoke test, and a cold Docker build.
@@ -928,28 +996,28 @@ jobs:
           toolchain: stable
 
       - name: Install rust-script
-        run: ./scripts/install-rust-script.sh
+        run: ./rust/scripts/install-rust-script.sh
 
       - name: Configure git
-        run: rust-script scripts/git-config.rs
+        run: rust-script rust/scripts/git-config.rs
 
       - name: Collect changelog fragments
-        run: rust-script scripts/collect-changelog.rs
+        run: rust-script rust/scripts/collect-changelog.rs
 
       - name: Version and commit
         id: version
         env:
           BUMP_TYPE: ${{ github.event.inputs.bump_type }}
           DESCRIPTION: ${{ github.event.inputs.description }}
-        run: rust-script scripts/version-and-commit.rs --bump-type "$BUMP_TYPE" --description "$DESCRIPTION"
+        run: rust-script rust/scripts/version-and-commit.rs --bump-type "$BUMP_TYPE" --description "$DESCRIPTION"
 
       - name: Build release
         if: steps.version.outputs.version_committed == 'true' || steps.version.outputs.already_released == 'true'
-        run: cargo build --release
+        run: cargo build --manifest-path rust/Cargo.toml --release
 
       - name: Check crate package size
         if: steps.version.outputs.version_committed == 'true' || steps.version.outputs.already_released == 'true'
-        run: rust-script scripts/check-crate-size.rs
+        run: rust-script rust/scripts/check-crate-size.rs
 
       - name: Publish to Crates.io
         if: steps.version.outputs.version_committed == 'true' || steps.version.outputs.already_released == 'true'
@@ -957,21 +1025,21 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}
           CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
-        run: rust-script scripts/publish-crate.rs
+        run: rust-script rust/scripts/publish-crate.rs
 
       - name: Wait for Crate availability on Crates.io
         if: |
           (steps.version.outputs.version_committed == 'true' ||
             steps.version.outputs.already_released == 'true') &&
           steps.publish-crate.outputs.publish_result == 'success'
-        run: rust-script scripts/wait-for-crate.rs --release-version "${{ steps.version.outputs.new_version }}"
+        run: rust-script rust/scripts/wait-for-crate.rs --release-version "${{ steps.version.outputs.new_version }}"
 
       - name: Smoke-test published crate
         if: |
           (steps.version.outputs.version_committed == 'true' ||
             steps.version.outputs.already_released == 'true') &&
           steps.publish-crate.outputs.publish_result == 'success'
-        run: rust-script scripts/smoke-test-published-crate.rs --release-version "${{ steps.version.outputs.new_version }}"
+        run: rust-script rust/scripts/smoke-test-published-crate.rs --release-version "${{ steps.version.outputs.new_version }}"
 
       - name: Configure Docker Hub publishing
         if: |
@@ -1015,7 +1083,55 @@ jobs:
           if [ -n "$DOCKER_HUB_URL" ]; then
             release_args+=(--docker-hub-url "$DOCKER_HUB_URL")
           fi
-          rust-script scripts/create-github-release.rs "${release_args[@]}"
+          rust-script rust/scripts/create-github-release.rs "${release_args[@]}"
+
+  # Publish the colocated npm package after the shared release commit has
+  # synchronized both manifests. npm trusted publishing uses the workflow's
+  # OIDC identity; NPM_TOKEN remains a first-publication bootstrap fallback.
+  javascript-release:
+    name: Publish JavaScript package
+    needs: [javascript, auto-release, manual-release, release-preflight]
+    if: |
+      !cancelled() &&
+      needs.release-preflight.result == 'success' &&
+      needs.javascript.result == 'success' &&
+      (needs.auto-release.result == 'success' || needs.manual-release.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-main-write
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: main
+
+      - name: Setup Node.js for npm trusted publishing
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+
+      - name: Remove deprecated npm auth config
+        run: node js/scripts/sanitize-npm-userconfig.mjs
+
+      - name: Update npm for OIDC trusted publishing
+        run: node js/scripts/setup-npm.mjs
+
+      - name: Install locked JavaScript dependencies
+        run: npm ci --ignore-scripts --prefix js
+
+      - name: Publish and verify npm package
+        id: publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node js/scripts/publish-to-npm.mjs
 
   # Build each architecture on a native runner. Publishing by digest lets both
   # builds run in parallel without racing to update a shared image tag.
@@ -1158,13 +1274,13 @@ jobs:
           toolchain: stable
 
       - name: Install rust-script
-        run: ./scripts/install-rust-script.sh
+        run: ./rust/scripts/install-rust-script.sh
 
       - name: Create changelog fragment
         env:
           BUMP_TYPE: ${{ github.event.inputs.bump_type }}
           DESCRIPTION: ${{ github.event.inputs.description }}
-        run: rust-script scripts/create-changelog-fragment.rs --bump-type "$BUMP_TYPE" --description "$DESCRIPTION"
+        run: rust-script rust/scripts/create-changelog-fragment.rs --bump-type "$BUMP_TYPE" --description "$DESCRIPTION"
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
@@ -1238,37 +1354,37 @@ jobs:
         # Defense in depth: same fail-closed flags as the lint job's gate.
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps --all-features
+        run: cargo doc --manifest-path rust/Cargo.toml --no-deps --all-features
 
       - name: Generate Pages root index
         run: |
           # rustdoc emits target/doc/<crate>/index.html but no root index.html,
           # which makes the GitHub Pages root URL return 404. Redirect the root
           # to the crate docs directory that rustdoc generated.
-          crate=$(cargo metadata --no-deps --format-version 1 \
+          crate=$(cargo metadata --manifest-path rust/Cargo.toml --no-deps --format-version 1 \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["name"].replace("-","_"))')
           printf '<!doctype html><meta http-equiv="refresh" content="0; url=%s/index.html">\n' "$crate" \
-            > target/doc/index.html
-          touch target/doc/.nojekyll
+            > rust/target/doc/index.html
+          touch rust/target/doc/.nojekyll
 
       - name: Add desktop download page
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
-          mkdir -p target/doc/download
+          mkdir -p rust/target/doc/download
           sed "s#__REPOSITORY__#$REPOSITORY#g" \
-            docs/download/index.html > target/doc/download/index.html
+            docs/download/index.html > rust/target/doc/download/index.html
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6
 
       - name: Verify site tree
-        run: find target/doc -maxdepth 2 -print
+        run: find rust/target/doc -maxdepth 2 -print
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: target/doc
+          path: rust/target/doc
           include-hidden-files: true
 
       - name: Deploy to GitHub Pages
@@ -1292,11 +1408,13 @@ jobs:
       - cargo-lock
       - lint
       - test
+      - javascript
       - script-tests
       - coverage
       - build
       - auto-release
       - manual-release
+      - javascript-release
       - docker-publish
       - docker-merge-manifest
       - changelog-pr
