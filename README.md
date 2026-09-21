@@ -163,7 +163,7 @@ See [NuGet trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trust
 The CLI runs the Maven verification lifecycle and opens Central Portal
 namespace management. Sign in, verify the namespace represented by the
 package group ID, and configure the deployment credentials in the CI system.
-See the [Central publishing guide](https://central.sonatype.org/publish/).
+See the [Central Portal publishing guide](https://central.sonatype.org/publish/publish-portal-guide/).
 
 ### Packagist
 
