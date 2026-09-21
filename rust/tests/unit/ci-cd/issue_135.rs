@@ -336,18 +336,32 @@ fn a_zero_or_malformed_poll_interval_is_a_usage_error() {
 #[cfg(not(windows))]
 fn the_timeout_annotation_reports_the_measured_overrun() {
     // A coarse 2s poll against a 1s budget: the budget is detected on the next
-    // poll, and the annotation must report the real elapsed time, not just the
-    // configured budget.
+    // poll (or later if a loaded runner cannot schedule the test immediately).
+    // The annotation must report the real elapsed time, not just the configured
+    // budget or the nominal poll interval.
     let output = run_budget_script_with_env(
         &[("BUDGET_POLL_SECONDS", "2")],
         &["1", "Coarse polls", "sleep", "60"],
     );
     assert_eq!(output.status.code(), Some(124));
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let measured = stdout
+        .split_once("ran for ")
+        .and_then(|(_, suffix)| suffix.split_once("s against its 1s budget"))
+        .and_then(|(seconds, _)| seconds.parse::<u64>().ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "the error annotation should report the measured elapsed time against \
+                 the configured budget, got: {stdout}"
+            )
+        });
     assert!(
-        stdout.contains("ran for 2s against its 1s budget"),
-        "the error annotation should report the measured elapsed time against \
-         the configured budget, got: {stdout}"
+        measured >= 2,
+        "a two-second poll cannot detect the overrun before two seconds, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("(detected at 2s poll granularity)"),
+        "the error annotation should explain why the overrun can exceed the budget, got: {stdout}"
     );
 }
 
