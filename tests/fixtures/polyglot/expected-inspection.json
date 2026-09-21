@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "repository": {
+    "root": "<ROOT>",
+    "github_owner": "acme",
+    "github_repository": "polyglot",
+    "release_workflow": "publish.yml"
+  },
+  "packages": [
+    {
+      "registry": "npm",
+      "name": "@acme/widgets",
+      "version": "1.2.3",
+      "manifest": "package.json",
+      "publishable": true
+    },
+    {
+      "registry": "crates-io",
+      "name": "acme-widgets",
+      "version": "1.2.3",
+      "manifest": "rust/Cargo.toml",
+      "publishable": true
+    },
+    {
+      "registry": "pypi",
+      "name": "acme-widgets",
+      "version": "1.2.3",
+      "manifest": "python/pyproject.toml",
+      "publishable": true
+    },
+    {
+      "registry": "go-modules",
+      "name": "github.com/acme/widgets",
+      "version": null,
+      "manifest": "go/go.mod",
+      "publishable": true
+    },
+    {
+      "registry": "nuget",
+      "name": "Acme.Widgets",
+      "version": "1.2.3",
+      "manifest": "dotnet/Widgets.csproj",
+      "publishable": true
+    },
+    {
+      "registry": "maven-central",
+      "name": "com.acme:widgets",
+      "version": "1.2.3",
+      "manifest": "java/pom.xml",
+      "publishable": true
+    },
+    {
+      "registry": "packagist",
+      "name": "acme/widgets",
+      "version": "1.2.3",
+      "manifest": "php/composer.json",
+      "publishable": true
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+name: Publish npm package
+on: workflow_dispatch
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - run: npm publish

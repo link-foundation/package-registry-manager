@@ -1,0 +1,4 @@
+[package]
+name = "acme-widgets"
+version = "1.2.3"
+edition = "2021"
