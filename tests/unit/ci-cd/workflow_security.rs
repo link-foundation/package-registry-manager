@@ -216,7 +216,11 @@ fn security_workflow_scans_rust_javascript_actions_and_pull_request_dependencies
     assert!(dependency_review.contains("if: github.event_name == 'pull_request'"));
     assert!(dependency_review.contains("timeout-minutes: 10"));
     assert!(dependency_review.contains("pull-requests: write"));
+    let graph_check = step_block(dependency_review, "Check dependency graph availability");
+    assert!(graph_check.contains("/dependency-graph/sbom"));
+    assert!(graph_check.contains("available=true"));
     assert!(dependency_review.contains("uses: actions/dependency-review-action@v5"));
+    assert!(dependency_review.contains("if: steps.dependency-graph.outputs.available == 'true'"));
     assert!(dependency_review.contains("fail-on-severity: high"));
     assert!(dependency_review.contains("comment-summary-in-pr: on-failure"));
 }
