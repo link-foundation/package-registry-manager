@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
-import path from 'node:path';
-import process from 'node:process';
-import { parseArgs } from 'node:util';
+import path from "node:path";
+import process from "node:process";
+import { parseArgs } from "node:util";
 
-import { inspectRepository } from './discovery.mjs';
-import { parseRegistry } from './model.mjs';
-import { buildPlans } from './plan.mjs';
-import { defaultBrowserProfile, executePlan } from './setup.mjs';
+import { inspectRepository } from "./discovery.mjs";
+import { parseRegistry } from "./model.mjs";
+import { buildPlans } from "./plan.mjs";
+import { defaultBrowserProfile, executePlan } from "./setup.mjs";
 
 const HELP = `Usage: package-registry-manager-js [global options] <command>
 
@@ -36,17 +36,17 @@ export async function main(args = process.argv.slice(2)) {
     allowPositionals: true,
     strict: true,
     options: {
-      repository: { type: 'string', default: '.' },
-      format: { type: 'string', default: 'text' },
-      verbose: { type: 'boolean', default: false },
-      registry: { type: 'string', multiple: true },
-      package: { type: 'string' },
-      execute: { type: 'boolean', default: false },
-      yes: { type: 'boolean', default: false },
-      'no-browser': { type: 'boolean', default: false },
-      'browser-channel': { type: 'string', default: 'chrome' },
-      'browser-profile': { type: 'string' },
-      help: { type: 'boolean', short: 'h', default: false },
+      repository: { type: "string", default: "." },
+      format: { type: "string", default: "text" },
+      verbose: { type: "boolean", default: false },
+      registry: { type: "string", multiple: true },
+      package: { type: "string" },
+      execute: { type: "boolean", default: false },
+      yes: { type: "boolean", default: false },
+      "no-browser": { type: "boolean", default: false },
+      "browser-channel": { type: "string", default: "chrome" },
+      "browser-profile": { type: "string" },
+      help: { type: "boolean", short: "h", default: false },
     },
   });
   if (values.help) {
@@ -54,36 +54,40 @@ export async function main(args = process.argv.slice(2)) {
     return;
   }
   if (positionals.length !== 1) {
-    throw new Error('expected exactly one command: inspect, plan, or setup');
+    throw new Error("expected exactly one command: inspect, plan, or setup");
   }
-  if (!['text', 'json'].includes(values.format)) {
+  if (!["text", "json"].includes(values.format)) {
     throw new Error("--format must be 'text' or 'json'");
   }
 
   const repository = path.resolve(values.repository);
   const inspection = await inspectRepository(repository);
   const command = positionals[0];
-  if (command === 'inspect') {
+  if (command === "inspect") {
     outputInspection(inspection, values.format);
     return;
   }
 
   const registries = (values.registry ?? []).map(parseRegistry);
-  if (command === 'plan') {
+  if (command === "plan") {
     const plans = buildPlans(inspection, registries);
-    if (plans.length === 0) throw new Error('no matching package manifests were found');
+    if (plans.length === 0) {
+      throw new Error("no matching package manifests were found");
+    }
     outputPlans(plans, values.format);
     return;
   }
-  if (command !== 'setup') {
+  if (command !== "setup") {
     throw new Error(`unknown command '${command}'`);
   }
   if (registries.length !== 1) {
-    throw new Error('setup requires exactly one --registry <registry>');
+    throw new Error("setup requires exactly one --registry <registry>");
   }
-  if (values.yes && !values.execute) throw new Error('--yes requires --execute');
-  if (values['no-browser'] && !values.execute) {
-    throw new Error('--no-browser requires --execute');
+  if (values.yes && !values.execute) {
+    throw new Error("--yes requires --execute");
+  }
+  if (values["no-browser"] && !values.execute) {
+    throw new Error("--no-browser requires --execute");
   }
 
   const plans = buildPlans(inspection, registries);
@@ -93,10 +97,10 @@ export async function main(args = process.argv.slice(2)) {
     repository,
     execute: values.execute,
     yes: values.yes,
-    noBrowser: values['no-browser'],
-    browserChannel: values['browser-channel'],
+    noBrowser: values["no-browser"],
+    browserChannel: values["browser-channel"],
     browserProfile: path.resolve(
-      values['browser-profile'] ?? defaultBrowserProfile(repository)
+      values["browser-profile"] ?? defaultBrowserProfile(repository),
     ),
     verbose: values.verbose,
   });
@@ -104,37 +108,47 @@ export async function main(args = process.argv.slice(2)) {
 
 function selectPlan(plans, packageName) {
   if (packageName) {
-    const plan = plans.find((candidate) => candidate.package.name === packageName);
-    if (!plan) throw new Error(`package '${packageName}' was not found for this registry`);
+    const plan = plans.find(
+      (candidate) => candidate.package.name === packageName,
+    );
+    if (!plan) {
+      throw new Error(
+        `package '${packageName}' was not found for this registry`,
+      );
+    }
     return plan;
   }
-  if (plans.length === 0) throw new Error('no matching package manifests were found');
+  if (plans.length === 0) {
+    throw new Error("no matching package manifests were found");
+  }
   if (plans.length > 1) {
-    throw new Error('multiple packages use this registry; select one with --package <name>');
+    throw new Error(
+      "multiple packages use this registry; select one with --package <name>",
+    );
   }
   return plans[0];
 }
 
 function outputInspection(inspection, format) {
-  if (format === 'json') {
+  if (format === "json") {
     process.stdout.write(`${JSON.stringify(inspection, null, 2)}\n`);
     return;
   }
   process.stdout.write(`Repository: ${inspection.repository.root}\n`);
   if (inspection.packages.length === 0) {
-    process.stdout.write('No supported package manifests found.\n');
+    process.stdout.write("No supported package manifests found.\n");
   }
   for (const packageInfo of inspection.packages) {
     process.stdout.write(
       `- ${packageInfo.registry}: ${packageInfo.name} (${packageInfo.manifest}, ${
-        packageInfo.publishable ? 'publishable' : 'not publishable'
-      })\n`
+        packageInfo.publishable ? "publishable" : "not publishable"
+      })\n`,
     );
   }
 }
 
 function outputPlans(plans, format) {
-  if (format === 'json') {
+  if (format === "json") {
     process.stdout.write(`${JSON.stringify(plans, null, 2)}\n`);
     return;
   }
@@ -144,10 +158,12 @@ function outputPlans(plans, format) {
       process.stdout.write(`  ${index + 1}. ${step.title}\n`);
       if (step.command) {
         process.stdout.write(
-          `     $ ${step.command.program} ${step.command.args.join(' ')}\n`
+          `     $ ${step.command.program} ${step.command.args.join(" ")}\n`,
         );
       }
-      if (step.url) process.stdout.write(`     ${step.url}\n`);
+      if (step.url) {
+        process.stdout.write(`     ${step.url}\n`);
+      }
     });
   }
 }

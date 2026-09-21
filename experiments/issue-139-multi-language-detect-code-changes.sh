@@ -16,7 +16,7 @@ git init -q .
 git config user.email a@b.c
 git config user.name t
 mkdir -p scripts rust/examples
-cp "$REPO_ROOT/scripts/detect-code-changes.rs" "$REPO_ROOT/scripts/rust-paths.rs" scripts/
+cp "$REPO_ROOT/rust/scripts/detect-code-changes.rs" "$REPO_ROOT/rust/scripts/rust-paths.rs" scripts/
 printf '[package]\nname = "demo"\nversion = "0.1.0"\n' > rust/Cargo.toml   # multi-language layout
 git add -A && git commit -qm base
 BASE=$(git rev-parse HEAD)

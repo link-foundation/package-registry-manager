@@ -95,16 +95,25 @@ if [ -n "${FRESH_MERGE_CHECKS:-}" ]; then
     echo "::endgroup::"
   done
 else
-  echo "::group::cargo fmt --all -- --check"
-  cargo fmt --all -- --check || status=1
+  echo "::group::cargo fmt --manifest-path rust/Cargo.toml --all -- --check"
+  cargo fmt --manifest-path rust/Cargo.toml --all -- --check || status=1
   echo "::endgroup::"
 
-  echo "::group::cargo clippy --all-targets --all-features"
-  cargo clippy --all-targets --all-features || status=1
+  echo "::group::cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features"
+  cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features || status=1
   echo "::endgroup::"
 
-  echo "::group::cargo test --all-features"
-  cargo test --all-features || status=1
+  echo "::group::cargo test --manifest-path rust/Cargo.toml --all-features"
+  cargo test --manifest-path rust/Cargo.toml --all-features || status=1
+  echo "::endgroup::"
+
+  echo "::group::npm ci"
+  npm ci --ignore-scripts --prefix js || status=1
+  echo "::endgroup::"
+
+  echo "::group::npm check and test"
+  npm run check --prefix js || status=1
+  npm test --prefix js || status=1
   echo "::endgroup::"
 fi
 

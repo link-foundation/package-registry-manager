@@ -45,7 +45,7 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
           REPO: ${{ github.repository }}
           WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: bash scripts/desktop-release-resolve.sh
+        run: bash rust/scripts/desktop-release-resolve.sh
 
   build:
     name: Build ${{ matrix.label }}
@@ -85,7 +85,7 @@ jobs:
           CSC_FOR_PULL_REQUEST: 'true'
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           MATRIX_LABEL: ${{ matrix.label }}
-        run: bash scripts/package-desktop.sh "$MATRIX_LABEL" desktop-dist
+        run: bash rust/scripts/package-desktop.sh "$MATRIX_LABEL" desktop-dist
       - name: Smoke test release assets
         env:
           OUTPUT_DIR: desktop-dist

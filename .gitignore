@@ -40,6 +40,7 @@ __pycache__/
 # Coverage reports
 *.lcov
 coverage/
+reports/
 tarpaulin-report.html
 
 # Benchmark results

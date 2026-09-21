@@ -17,7 +17,7 @@ cd js && npm ci && cd ..
 Build both CLIs:
 
 ```bash
-cargo build
+cargo build --manifest-path rust/Cargo.toml
 node js/src/cli.mjs --help
 ```
 
@@ -29,15 +29,15 @@ profile for development automation; use the CLI's dedicated profile.
 
 Start by adding the smallest fixture and test that reproduces the behavior.
 Shared manifests belong in `tests/fixtures/polyglot`; language-specific unit
-tests belong in `tests/unit/` or `js/test/`.
+tests belong in `rust/tests/unit/` or `js/test/`.
 
 Run the focused suite while developing, then run the complete local checks:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features
-cargo test --all-targets
-./scripts/test-scripts.sh
+cargo fmt --all --manifest-path rust/Cargo.toml -- --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features
+cargo test --manifest-path rust/Cargo.toml --all-targets
+./rust/scripts/test-scripts.sh
 
 cd js
 npm run check
@@ -53,10 +53,10 @@ lines and documentation below 2,500 lines; CI enforces these limits.
 
 ## Changelog Management
 
-Every user-facing change needs one Markdown fragment in `changelog.d/`:
+Every user-facing Rust change needs one Markdown fragment in `rust/changelog.d/`:
 
 ```text
-changelog.d/YYYYMMDD_HHMMSS_short_description.md
+rust/changelog.d/YYYYMMDD_HHMMSS_short_description.md
 ```
 
 Use `### Added`, `### Changed`, `### Fixed`, or `### Removed` and describe the
@@ -81,10 +81,12 @@ than replaces the deterministic prefill and plan tests.
 
 ## Release Pipeline
 
-The root Cargo package uses the established fragment-driven release workflow.
-The JavaScript package has its own lockfile and CI check; registry publication
-must use a reviewed trusted-publishing workflow. Package setup and package
-publication remain separate operations.
+The Rust package under `rust/` uses the established fragment-driven release
+workflow. That release synchronizes the JavaScript package version under `js/`,
+then the shared workflow publishes and verifies both registry artifacts.
+JavaScript has its own lockfile and CI check; registry publication must use a
+reviewed trusted-publishing workflow. Package setup and package publication
+remain separate operations.
 
 ## License
 

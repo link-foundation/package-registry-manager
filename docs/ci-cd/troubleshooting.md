@@ -111,8 +111,8 @@ fresh or cache-less jobs.
 Generate and commit the lockfile:
 
 ```bash
-cargo generate-lockfile
-git add Cargo.lock
+cargo generate-lockfile --manifest-path rust/Cargo.toml
+git add rust/Cargo.lock
 git commit -m "chore: commit Cargo.lock"
 ```
 
@@ -127,7 +127,7 @@ or remove the binary target.
 Run the guard locally:
 
 ```bash
-rust-script scripts/check-cargo-lock.rs
+rust-script rust/scripts/check-cargo-lock.rs
 ```
 
 ---
@@ -194,7 +194,7 @@ The "Publish to Crates.io" step fails with an error.
 - name: Publish to Crates.io
   env:
     CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
-  run: node scripts/publish-crate.mjs
+  run: rust-script rust/scripts/publish-crate.rs --rust-root rust
 ```
 
 #### "already uploaded" or "already exists"
@@ -235,14 +235,14 @@ the package.
 ### How This Template Prevents It
 
 #### 1. Pre-publish size guard
-`scripts/check-crate-size.rs` builds the `.crate` archive and fails the workflow
+`rust/scripts/check-crate-size.rs` builds the `.crate` archive and fails the workflow
 **before** publishing when the archive is over the limit. It runs in the `build`
 job (early PR feedback) and again right before the publish step in both the
 `auto-release` and `manual-release` jobs.
 
 Run it locally before pushing:
 ```bash
-rust-script scripts/check-crate-size.rs
+rust-script rust/scripts/check-crate-size.rs
 ```
 
 #### 2. Narrow `include` allowlist
@@ -261,9 +261,9 @@ include = [
 ### Solution When the Guard Fails
 1. Inspect what is being packaged:
    ```bash
-   cargo package --list --allow-dirty
+   cargo package --manifest-path rust/Cargo.toml --list --allow-dirty
    ```
-2. Tighten the `include` allowlist in `Cargo.toml` (or add an `exclude` list) to
+2. Tighten the `include` allowlist in `rust/Cargo.toml` (or add an `exclude` list) to
    drop large files such as docs, datasets, generated logs, and experiments.
 3. Re-run the size guard to confirm the archive is under 10 MiB.
 
@@ -332,7 +332,7 @@ under review:
   env:
     # Map organization secret to the expected variable name
     CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
-  run: rust-script scripts/publish-crate.rs
+  run: rust-script rust/scripts/publish-crate.rs
 ```
 
 ### Checking Secret Values
@@ -368,23 +368,19 @@ This template auto-detects the repository structure:
 If auto-detection fails, you can explicitly configure the Rust root:
 ```bash
 # Via environment variable
-RUST_ROOT=rust node scripts/publish-crate.mjs
+RUST_ROOT=rust rust-script rust/scripts/publish-crate.rs
 
 # Via CLI argument
-node scripts/publish-crate.mjs --rust-root rust
+rust-script rust/scripts/publish-crate.rs --rust-root rust
 ```
 
 ### Workflow Configuration
-For multi-language repos, ensure your workflow has the correct `working-directory`:
+For this multi-language repository, keep workflow commands at the root and use
+explicit paths so shared and package-local files are unambiguous:
 ```yaml
-defaults:
-  run:
-    working-directory: rust
-
 steps:
   - name: Publish to Crates.io
-    working-directory: .  # Override for scripts that handle paths themselves
-    run: node rust/scripts/publish-crate.mjs
+    run: rust-script rust/scripts/publish-crate.rs --rust-root rust
 ```
 
 ### Reference
@@ -413,9 +409,9 @@ Sometimes crates.io has issues. Check: https://status.crates.io/
 ### 5. Verify Package Locally
 Before pushing, verify your package builds and passes checks:
 ```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features
-cargo test --all-features
-cargo package --list
-rust-script scripts/check-crate-size.rs
+cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features
+cargo test --manifest-path rust/Cargo.toml --all-features
+cargo package --manifest-path rust/Cargo.toml --list
+rust-script rust/scripts/check-crate-size.rs
 ```

@@ -32,8 +32,8 @@ cover the maintained language ecosystems in the hive-mind CI/CD guidance.
 Build the Rust CLI from the repository:
 
 ```bash
-cargo build --release
-./target/release/package-registry-manager inspect --repository /path/to/repo
+cargo build --release --manifest-path rust/Cargo.toml
+./rust/target/release/package-registry-manager inspect --repository /path/to/repo
 ```
 
 Or run the JavaScript CLI with Node.js 20 or newer:
@@ -50,8 +50,8 @@ The JavaScript CLI accepts them in either position as well.
 Generate all setup plans without executing anything:
 
 ```bash
-cargo run -- plan --repository /path/to/repo
-cargo run -- plan --repository /path/to/repo --registry npm --format json
+cargo run --manifest-path rust/Cargo.toml -- plan --repository /path/to/repo
+cargo run --manifest-path rust/Cargo.toml -- plan --repository /path/to/repo --registry npm --format json
 
 node js/src/cli.mjs plan --repository /path/to/repo
 node js/src/cli.mjs plan --repository /path/to/repo --registry npm --format json
@@ -60,8 +60,8 @@ node js/src/cli.mjs plan --repository /path/to/repo --registry npm --format json
 Review npm setup as a dry run, then opt into validation and browser automation:
 
 ```bash
-cargo run -- setup --repository /path/to/repo --registry npm
-cargo run -- setup --repository /path/to/repo --registry npm --execute
+cargo run --manifest-path rust/Cargo.toml -- setup --repository /path/to/repo --registry npm
+cargo run --manifest-path rust/Cargo.toml -- setup --repository /path/to/repo --registry npm --execute
 
 node js/src/cli.mjs setup --repository /path/to/repo --registry npm
 node js/src/cli.mjs setup --repository /path/to/repo --registry npm --execute
@@ -200,10 +200,22 @@ invented: npm execution reports exactly which repository identity is absent.
 
 ## Architecture
 
-The Rust package remains at the repository root so the established Rust
-release pipeline continues to work. The Node package is isolated in `js/`.
+The independently publishable implementations follow the same polyglot layout
+as command-stream and the other maintained multi-language repositories:
+
+| Path | Purpose |
+| --- | --- |
+| `rust/` | Rust crate, tests, examples, changelog, and release helpers |
+| `js/` | npm package, tests, changelog, and JavaScript checks |
+| `tests/fixtures/` | Shared cross-language contract fixtures |
+| `.github/workflows/` | Repository-level CI, release, security, and policy gates |
+
 Both implementations expose discovery, plan, browser-script, and execution
 modules and validate the same polyglot fixture.
+
+The [template-alignment audit](docs/ci-cd/template-alignment.md) records which
+Rust and JavaScript CI/CD practices are adopted, adapted, or intentionally not
+applicable to this Node CLI and Rust crate.
 
 Rust uses [lino-arguments](https://github.com/link-foundation/lino-arguments)
 for CLI configuration. Both implementations use command-stream for argument-
@@ -226,9 +238,9 @@ repository files
 Run all local checks:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features
-cargo test --all-targets
+cargo fmt --all --manifest-path rust/Cargo.toml -- --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features
+cargo test --manifest-path rust/Cargo.toml --all-targets
 
 cd js
 npm ci

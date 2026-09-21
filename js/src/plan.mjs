@@ -10,14 +10,14 @@ function buildPlan(inspection, packageInfo) {
   const check = (id, title, description, commandSpec) => ({
     id,
     title,
-    kind: 'check',
+    kind: "check",
     description,
     command: commandSpec,
   });
   const browser = (id, title, description, url) => ({
     id,
     title,
-    kind: 'browser',
+    kind: "browser",
     description,
     url,
   });
@@ -25,19 +25,19 @@ function buildPlan(inspection, packageInfo) {
   let trustedPublisher;
 
   switch (packageInfo.registry) {
-    case 'npm':
+    case "npm":
       steps = [
         check(
-          'validate-package',
-          'Validate npm metadata',
-          'Read the package metadata with npm before changing registry settings.',
-          command('npm', ['pkg', 'get', 'name', 'version', 'repository'])
+          "validate-package",
+          "Validate npm metadata",
+          "Read the package metadata with npm before changing registry settings.",
+          command("npm", ["pkg", "get", "name", "version", "repository"]),
         ),
         browser(
-          'configure-trusted-publisher',
-          'Configure npm trusted publishing',
-          'Sign in in the isolated browser profile, review the prefilled GitHub Actions identity, and explicitly confirm submission.',
-          `https://www.npmjs.com/package/${urlPathSegment(packageInfo.name)}/access`
+          "configure-trusted-publisher",
+          "Configure npm trusted publishing",
+          "Sign in in the isolated browser profile, review the prefilled GitHub Actions identity, and explicitly confirm submission.",
+          `https://www.npmjs.com/package/${urlPathSegment(packageInfo.name)}/access`,
         ),
       ];
       if (
@@ -46,108 +46,108 @@ function buildPlan(inspection, packageInfo) {
         inspection.repository.release_workflow
       ) {
         trustedPublisher = {
-          provider: 'github-actions',
+          provider: "github-actions",
           organization: inspection.repository.github_owner,
           repository: inspection.repository.github_repository,
           workflow: inspection.repository.release_workflow,
         };
       }
       break;
-    case 'crates-io':
+    case "crates-io":
       steps = [
         check(
-          'validate-package',
-          'Validate the crate',
-          'Package the crate without uploading it.',
-          command('cargo', ['publish', '--dry-run'])
+          "validate-package",
+          "Validate the crate",
+          "Package the crate without uploading it.",
+          command("cargo", ["publish", "--dry-run"]),
         ),
         browser(
-          'review-account',
-          'Review crates.io account settings',
-          'Sign in with GitHub and review API-token or trusted-publishing settings. The tool never creates or prints a token.',
-          'https://crates.io/settings/tokens'
+          "review-account",
+          "Review crates.io account settings",
+          "Sign in with GitHub and review API-token or trusted-publishing settings. The tool never creates or prints a token.",
+          "https://crates.io/settings/tokens",
         ),
       ];
       break;
-    case 'pypi':
+    case "pypi":
       steps = [
         check(
-          'build-package',
-          'Build the Python distribution',
-          'Build source and wheel distributions locally.',
-          command('python', ['-m', 'build'])
+          "build-package",
+          "Build the Python distribution",
+          "Build source and wheel distributions locally.",
+          command("python", ["-m", "build"]),
         ),
         browser(
-          'configure-trusted-publisher',
-          'Configure a PyPI trusted publisher',
+          "configure-trusted-publisher",
+          "Configure a PyPI trusted publisher",
           "Sign in and add the repository's GitHub Actions workflow as a trusted publisher.",
-          `https://pypi.org/manage/project/${urlPathSegment(packageInfo.name)}/settings/publishing/`
+          `https://pypi.org/manage/project/${urlPathSegment(packageInfo.name)}/settings/publishing/`,
         ),
       ];
       break;
-    case 'go-modules':
+    case "go-modules":
       steps = [
         check(
-          'test-module',
-          'Test the Go module',
-          'Run all module tests before tagging a semantic version.',
-          command('go', ['test', './...'])
+          "test-module",
+          "Test the Go module",
+          "Run all module tests before tagging a semantic version.",
+          command("go", ["test", "./..."]),
         ),
         {
-          id: 'publish-tag',
-          title: 'Push a semantic-version tag',
-          kind: 'manual',
+          id: "publish-tag",
+          title: "Push a semantic-version tag",
+          kind: "manual",
           description:
-            'Go modules are published from repository tags; after pushing the tag, request it through proxy.golang.org.',
-          url: 'https://go.dev/ref/mod#publishing-a-module',
+            "Go modules are published from repository tags; after pushing the tag, request it through proxy.golang.org.",
+          url: "https://go.dev/ref/mod#publishing-a-module",
         },
       ];
       break;
-    case 'nuget':
+    case "nuget":
       steps = [
         check(
-          'pack-package',
-          'Build the NuGet package',
-          'Create the package locally without pushing it.',
-          command('dotnet', ['pack', '--configuration', 'Release'])
+          "pack-package",
+          "Build the NuGet package",
+          "Create the package locally without pushing it.",
+          command("dotnet", ["pack", "--configuration", "Release"]),
         ),
         browser(
-          'configure-trusted-publishing',
-          'Configure NuGet trusted publishing',
-          'Sign in and add a GitHub Actions federated credential for this package.',
-          'https://www.nuget.org/account/TrustedPublishing'
+          "configure-trusted-publishing",
+          "Configure NuGet trusted publishing",
+          "Sign in and add a GitHub Actions federated credential for this package.",
+          "https://www.nuget.org/account/TrustedPublishing",
         ),
       ];
       break;
-    case 'maven-central':
+    case "maven-central":
       steps = [
         check(
-          'verify-build',
-          'Verify the Maven build',
-          'Run the build lifecycle without deploying an artifact.',
-          command('mvn', ['--batch-mode', 'verify'])
+          "verify-build",
+          "Verify the Maven build",
+          "Run the build lifecycle without deploying an artifact.",
+          command("mvn", ["--batch-mode", "verify"]),
         ),
         browser(
-          'verify-namespace',
-          'Verify a Central namespace',
-          'Sign in to the Central Portal and verify the namespace used by the package coordinates.',
-          'https://central.sonatype.com/publishing/namespaces'
+          "verify-namespace",
+          "Verify a Central namespace",
+          "Sign in to the Central Portal and verify the namespace used by the package coordinates.",
+          "https://central.sonatype.com/publishing/namespaces",
         ),
       ];
       break;
-    case 'packagist':
+    case "packagist":
       steps = [
         check(
-          'validate-package',
-          'Validate Composer metadata',
-          'Strictly validate composer.json before submitting it.',
-          command('composer', ['validate', '--strict'])
+          "validate-package",
+          "Validate Composer metadata",
+          "Strictly validate composer.json before submitting it.",
+          command("composer", ["validate", "--strict"]),
         ),
         browser(
-          'submit-repository',
-          'Submit the repository to Packagist',
-          'Sign in and submit the public VCS repository URL. Packagist reads package versions from tags.',
-          'https://packagist.org/packages/submit'
+          "submit-repository",
+          "Submit the repository to Packagist",
+          "Sign in and submit the public VCS repository URL. Packagist reads package versions from tags.",
+          "https://packagist.org/packages/submit",
         ),
       ];
       break;
@@ -162,15 +162,17 @@ function buildPlan(inspection, packageInfo) {
     repository: structuredClone(inspection.repository),
     steps,
   };
-  if (trustedPublisher) plan.trusted_publisher = trustedPublisher;
+  if (trustedPublisher) {
+    plan.trusted_publisher = trustedPublisher;
+  }
   return plan;
 }
 
 export function packageDirectory(manifest) {
-  const separator = manifest.lastIndexOf('/');
-  return separator === -1 ? '.' : manifest.slice(0, separator);
+  const separator = manifest.lastIndexOf("/");
+  return separator === -1 ? "." : manifest.slice(0, separator);
 }
 
 function urlPathSegment(value) {
-  return encodeURIComponent(value).replaceAll('%40', '@');
+  return encodeURIComponent(value).replaceAll("%40", "@");
 }

@@ -1,27 +1,27 @@
-import { readFile, readdir, realpath } from 'node:fs/promises';
-import path from 'node:path';
+import { readFile, readdir, realpath } from "node:fs/promises";
+import path from "node:path";
 
-import { REGISTRIES } from './model.mjs';
+import { REGISTRIES } from "./model.mjs";
 
 const IGNORED_DIRECTORIES = new Set([
-  '.git',
-  '.package-registry-manager',
-  '.venv',
-  'node_modules',
-  'target',
-  'vendor',
+  ".git",
+  ".package-registry-manager",
+  ".venv",
+  "node_modules",
+  "target",
+  "vendor",
 ]);
 
 const MANIFEST_NAMES = new Set([
-  'package.json',
-  'Cargo.toml',
-  'pyproject.toml',
-  'setup.py',
-  'go.mod',
-  'pom.xml',
-  'build.gradle',
-  'build.gradle.kts',
-  'composer.json',
+  "package.json",
+  "Cargo.toml",
+  "pyproject.toml",
+  "setup.py",
+  "go.mod",
+  "pom.xml",
+  "build.gradle",
+  "build.gradle.kts",
+  "composer.json",
 ]);
 
 export async function inspectRepository(repository) {
@@ -31,14 +31,14 @@ export async function inspectRepository(repository) {
   manifests.sort();
   const preferredManifests = manifests.filter(
     (manifest) =>
-      path.basename(manifest) !== 'setup.py' ||
-      !manifests.includes(path.join(path.dirname(manifest), 'pyproject.toml'))
+      path.basename(manifest) !== "setup.py" ||
+      !manifests.includes(path.join(path.dirname(manifest), "pyproject.toml")),
   );
   const packages = (
     await Promise.all(
       preferredManifests.map(async (manifest) =>
-        parseManifest(manifest, relativePath(root, manifest))
-      )
+        parseManifest(manifest, relativePath(root, manifest)),
+      ),
     )
   )
     .filter(Boolean)
@@ -48,13 +48,13 @@ export async function inspectRepository(repository) {
       return (
         registryOrder ||
         [left.manifest, left.name]
-          .join('\0')
-          .localeCompare([right.manifest, right.name].join('\0'))
+          .join("\0")
+          .localeCompare([right.manifest, right.name].join("\0"))
       );
     });
   const { github_owner, github_repository } = await githubCoordinates(
     root,
-    preferredManifests
+    preferredManifests,
   );
 
   return {
@@ -78,7 +78,8 @@ async function collectManifests(directory, manifests) {
       await collectManifests(item, manifests);
     } else if (
       entry.isFile() &&
-      (MANIFEST_NAMES.has(entry.name) || /\.(?:csproj|fsproj|vbproj)$/.test(entry.name))
+      (MANIFEST_NAMES.has(entry.name) ||
+        /\.(?:csproj|fsproj|vbproj)$/.test(entry.name))
     ) {
       manifests.push(item);
     }
@@ -86,36 +87,36 @@ async function collectManifests(directory, manifests) {
 }
 
 async function parseManifest(manifestPath, manifest) {
-  const contents = await readFile(manifestPath, 'utf8');
+  const contents = await readFile(manifestPath, "utf8");
   const filename = path.basename(manifestPath);
   switch (filename) {
-    case 'package.json':
+    case "package.json":
       return parseNpm(contents, manifest);
-    case 'Cargo.toml':
+    case "Cargo.toml":
       return parseCargo(contents, manifest);
-    case 'pyproject.toml':
+    case "pyproject.toml":
       return parsePyproject(contents, manifest);
-    case 'setup.py':
+    case "setup.py":
       return packageInfo(
-        'pypi',
+        "pypi",
         capture(contents, /\bname\s*=\s*['"]([^'"]+)/) ??
-          'unknown-python-package',
+          "unknown-python-package",
         capture(contents, /\bversion\s*=\s*['"]([^'"]+)/),
-        manifest
+        manifest,
       );
-    case 'go.mod':
+    case "go.mod":
       return packageInfo(
-        'go-modules',
-        capture(contents, /^\s*module\s+(\S+)/m) ?? 'unknown-go-module',
+        "go-modules",
+        capture(contents, /^\s*module\s+(\S+)/m) ?? "unknown-go-module",
         null,
-        manifest
+        manifest,
       );
-    case 'pom.xml':
+    case "pom.xml":
       return parseMaven(contents, manifest);
-    case 'build.gradle':
-    case 'build.gradle.kts':
+    case "build.gradle":
+    case "build.gradle.kts":
       return parseGradle(contents, manifest);
-    case 'composer.json':
+    case "composer.json":
       return parseComposer(contents, manifest);
     default:
       if (/\.(?:csproj|fsproj|vbproj)$/.test(filename)) {
@@ -127,61 +128,69 @@ async function parseManifest(manifestPath, manifest) {
 
 function parseNpm(contents, manifest) {
   const metadata = parseJson(contents, manifest);
-  if (!metadata.name) return null;
+  if (!metadata.name) {
+    return null;
+  }
   const publishable = metadata.private !== true;
   return packageInfo(
-    'npm',
+    "npm",
     metadata.name,
     metadata.version ?? null,
     manifest,
     publishable,
-    publishable ? [] : ['package.json marks this package as private']
+    publishable ? [] : ["package.json marks this package as private"],
   );
 }
 
 function parseCargo(contents, manifest) {
-  const section = tomlSection(contents, 'package');
-  if (!section) return null;
-  const name = tomlString(section, 'name');
-  if (!name) return null;
+  const section = tomlSection(contents, "package");
+  if (!section) {
+    return null;
+  }
+  const name = tomlString(section, "name");
+  if (!name) {
+    return null;
+  }
   const publishable = !/^\s*publish\s*=\s*false\s*$/m.test(section);
   return packageInfo(
-    'crates-io',
+    "crates-io",
     name,
-    tomlString(section, 'version'),
+    tomlString(section, "version"),
     manifest,
     publishable,
-    publishable ? [] : ['Cargo.toml disables publishing']
+    publishable ? [] : ["Cargo.toml disables publishing"],
   );
 }
 
 function parsePyproject(contents, manifest) {
   const section =
-    tomlSection(contents, 'project') ?? tomlSection(contents, 'tool.poetry');
-  const name = section && tomlString(section, 'name');
-  if (!name) return null;
-  return packageInfo('pypi', name, tomlString(section, 'version'), manifest);
+    tomlSection(contents, "project") ?? tomlSection(contents, "tool.poetry");
+  const name = section && tomlString(section, "name");
+  if (!name) {
+    return null;
+  }
+  return packageInfo("pypi", name, tomlString(section, "version"), manifest);
 }
 
 function parseDotnet(contents, manifestPath, manifest) {
   return packageInfo(
-    'nuget',
-    xmlTag(contents, 'PackageId') ??
-      xmlTag(contents, 'AssemblyName') ??
+    "nuget",
+    xmlTag(contents, "PackageId") ??
+      xmlTag(contents, "AssemblyName") ??
       path.basename(manifestPath, path.extname(manifestPath)),
-    xmlTag(contents, 'PackageVersion') ?? xmlTag(contents, 'Version'),
-    manifest
+    xmlTag(contents, "PackageVersion") ?? xmlTag(contents, "Version"),
+    manifest,
   );
 }
 
 function parseMaven(contents, manifest) {
-  const artifact = xmlTag(contents, 'artifactId') ?? 'unknown-maven-artifact';
-  const group = xmlTag(contents, 'groupId');
+  const artifact = xmlTag(contents, "artifactId") ?? "unknown-maven-artifact";
+  const group = xmlTag(contents, "groupId");
   return packageInfo(
-    'maven-central',
+    "maven-central",
     group ? `${group}:${artifact}` : artifact,
-    xmlTag(contents, 'version'),
-    manifest
+    xmlTag(contents, "version"),
+    manifest,
   );
 }
 
@@ -190,24 +199,26 @@ function parseGradle(contents, manifest) {
   const artifact =
     capture(
       contents,
-      /^\s*(?:archivesBaseName|rootProject\.name)\s*=\s*['"]([^'"]+)/m
-    ) ?? 'gradle-project';
+      /^\s*(?:archivesBaseName|rootProject\.name)\s*=\s*['"]([^'"]+)/m,
+    ) ?? "gradle-project";
   return packageInfo(
-    'maven-central',
+    "maven-central",
     group ? `${group}:${artifact}` : artifact,
     capture(contents, /^\s*version\s*=\s*['"]([^'"]+)/m),
-    manifest
+    manifest,
   );
 }
 
 function parseComposer(contents, manifest) {
   const metadata = parseJson(contents, manifest);
-  if (!metadata.name) return null;
+  if (!metadata.name) {
+    return null;
+  }
   return packageInfo(
-    'packagist',
+    "packagist",
     metadata.name,
     metadata.version ?? null,
-    manifest
+    manifest,
   );
 }
 
@@ -217,10 +228,18 @@ function packageInfo(
   version,
   manifest,
   publishable = true,
-  problems = []
+  problems = [],
 ) {
-  const result = { registry, name, version: version ?? null, manifest, publishable };
-  if (problems.length > 0) result.problems = problems;
+  const result = {
+    registry,
+    name,
+    version: version ?? null,
+    manifest,
+    publishable,
+  };
+  if (problems.length > 0) {
+    result.problems = problems;
+  }
   return result;
 }
 
@@ -228,27 +247,29 @@ function parseJson(contents, manifest) {
   try {
     return JSON.parse(contents);
   } catch (error) {
-    throw new Error(`invalid JSON in ${manifest}: ${error.message}`, { cause: error });
+    throw new Error(`invalid JSON in ${manifest}: ${error.message}`, {
+      cause: error,
+    });
   }
 }
 
 function tomlSection(contents, name) {
-  const escaped = name.replaceAll('.', '\\.');
+  const escaped = name.replaceAll(".", "\\.");
   return capture(
     contents,
-    new RegExp(
-      `^\\[${escaped}\\]\\s*$([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))`,
-      'm'
-    )
+    new RegExp(`^\\[${escaped}\\]\\s*$([\\s\\S]*?)(?=^\\[|(?![\\s\\S]))`, "m"),
   );
 }
 
 function tomlString(section, key) {
-  return capture(section, new RegExp(`^\\s*${key}\\s*=\\s*['\"]([^'\"]+)`, 'm'));
+  return capture(section, new RegExp(`^\\s*${key}\\s*=\\s*['"]([^'"]+)`, "m"));
 }
 
 function xmlTag(contents, tag) {
-  return capture(contents, new RegExp(`<${tag}(?:\\s[^>]*)?>\\s*([^<]+?)\\s*</${tag}>`, 's'));
+  return capture(
+    contents,
+    new RegExp(`<${tag}(?:\\s[^>]*)?>\\s*([^<]+?)\\s*</${tag}>`, "s"),
+  );
 }
 
 function capture(contents, expression) {
@@ -256,57 +277,64 @@ function capture(contents, expression) {
 }
 
 function relativePath(root, item) {
-  return path.relative(root, item).split(path.sep).join('/');
+  return path.relative(root, item).split(path.sep).join("/");
 }
 
 async function githubCoordinates(root, manifests) {
   let contents;
   try {
-    contents = await readFile(path.join(root, '.git/config'), 'utf8');
+    contents = await readFile(path.join(root, ".git/config"), "utf8");
   } catch {
-    contents = '';
+    contents = "";
   }
   const remote = capture(contents, /^\s*url\s*=\s*(\S+)/m);
   const remoteCoordinates = parseGithubUrl(remote);
-  if (remoteCoordinates) return remoteCoordinates;
+  if (remoteCoordinates) {
+    return remoteCoordinates;
+  }
 
   for (const manifest of manifests) {
     const filename = path.basename(manifest);
-    contents = await readFile(manifest, 'utf8');
+    contents = await readFile(manifest, "utf8");
     let repository;
-    if (filename === 'package.json') {
+    if (filename === "package.json") {
       const metadata = parseJson(contents, relativePath(root, manifest));
       repository =
-        typeof metadata.repository === 'string'
+        typeof metadata.repository === "string"
           ? metadata.repository
           : metadata.repository?.url;
-    } else if (filename === 'Cargo.toml') {
-      const packageSection = tomlSection(contents, 'package');
-      repository = packageSection && tomlString(packageSection, 'repository');
+    } else if (filename === "Cargo.toml") {
+      const packageSection = tomlSection(contents, "package");
+      repository = packageSection && tomlString(packageSection, "repository");
     }
     const coordinates = parseGithubUrl(repository);
-    if (coordinates) return coordinates;
+    if (coordinates) {
+      return coordinates;
+    }
   }
   return { github_owner: null, github_repository: null };
 }
 
 function parseGithubUrl(remote) {
   const normalized = remote
-    ?.replace(/\.git$/, '')
-    .replace(/^git\+/, '')
-    .replace('git@github.com:', 'https://github.com/')
-    .replace('ssh://git@github.com/', 'https://github.com/');
-  if (!normalized?.startsWith('https://github.com/')) {
+    ?.replace(/\.git$/, "")
+    .replace(/^git\+/, "")
+    .replace("git@github.com:", "https://github.com/")
+    .replace("ssh://git@github.com/", "https://github.com/");
+  if (!normalized?.startsWith("https://github.com/")) {
     return null;
   }
   const [github_owner, github_repository] = normalized
-    .slice('https://github.com/'.length)
-    .split('/');
-  return { github_owner: github_owner ?? null, github_repository: github_repository ?? null };
+    .slice("https://github.com/".length)
+    .split("/");
+  return {
+    github_owner: github_owner ?? null,
+    github_repository: github_repository ?? null,
+  };
 }
 
 async function releaseWorkflow(root) {
-  const directory = path.join(root, '.github/workflows');
+  const directory = path.join(root, ".github/workflows");
   let entries;
   try {
     entries = await readdir(directory, { withFileTypes: true });
@@ -316,12 +344,19 @@ async function releaseWorkflow(root) {
   entries.sort((left, right) => left.name.localeCompare(right.name));
   let fallback = null;
   for (const entry of entries) {
-    if (!entry.isFile() || !/\.ya?ml$/.test(entry.name)) continue;
-    const contents = await readFile(path.join(directory, entry.name), 'utf8');
-    if (contents.includes('npm publish') || contents.includes('npm stage publish')) {
+    if (!entry.isFile() || !/\.ya?ml$/.test(entry.name)) {
+      continue;
+    }
+    const contents = await readFile(path.join(directory, entry.name), "utf8");
+    if (
+      contents.includes("npm publish") ||
+      contents.includes("npm stage publish")
+    ) {
       return entry.name;
     }
-    if (!fallback && entry.name.includes('release')) fallback = entry.name;
+    if (!fallback && entry.name.includes("release")) {
+      fallback = entry.name;
+    }
   }
   return fallback;
 }
