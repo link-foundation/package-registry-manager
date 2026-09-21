@@ -133,12 +133,18 @@ trap forward TERM INT
 
 SECONDS=0; warned=false
 while command_is_running; do
+  # Poll before evaluating the deadline. On a loaded runner the process-table
+  # probe itself can consume a one-second test budget; evaluating immediately
+  # then reports the configured limit rather than the elapsed polling interval.
+  # Real job budgets are much larger, but keeping the first check on the same
+  # cadence as every later check makes the timeout annotation deterministic.
+  relay_output; sleep "$poll_seconds"
+  command_is_running || break
   if [ "$warned" = false ] && [ "$SECONDS" -ge "$warn_seconds" ]; then
     warned=true
     echo "::warning title=${label} is approaching its execution budget::${label} has run for ${SECONDS}s of its ${budget_seconds}s budget."
   fi
   if [ "$SECONDS" -ge "$budget_seconds" ]; then terminate_over_budget "$@"; fi
-  relay_output; sleep "$poll_seconds"
 done
 wait "$command_pid" 2>/dev/null; wait_status=$?; relay_output
 if [ -f "$status_file" ]; then status="$(cat "$status_file")"; else status="$wait_status"; fi

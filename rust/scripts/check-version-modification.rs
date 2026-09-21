@@ -108,10 +108,23 @@ fn get_cargo_toml_path(rust_root: &str) -> String {
     }
 }
 
+fn manifest_paths(cargo_toml_path: &str) -> Vec<&str> {
+    if cargo_toml_path == "rust/Cargo.toml" {
+        // Include the former single-package location so Git can recognize a
+        // package-root migration as a rename instead of a new manifest whose
+        // unchanged version line appears to have been added manually.
+        vec!["Cargo.toml", cargo_toml_path]
+    } else {
+        vec![cargo_toml_path]
+    }
+}
+
 fn get_cargo_toml_diff(cargo_toml_path: &str) -> Result<String, String> {
     let base_ref = env::var("GITHUB_BASE_REF").unwrap_or_else(|_| "main".to_string());
     let comparison = format!("origin/{base_ref}...HEAD");
-    let diff_args = ["diff", comparison.as_str(), "--", cargo_toml_path];
+    let paths = manifest_paths(cargo_toml_path);
+    let mut diff_args = vec!["diff", "--find-renames", comparison.as_str(), "--"];
+    diff_args.extend(paths);
     match exec("git", &diff_args) {
         Ok(diff) => Ok(diff),
         Err(first_error) => {
@@ -174,11 +187,10 @@ fn main() {
         eprintln!("Error: Manual version change detected in Cargo.toml!\n");
         eprintln!("Versions are managed automatically by the CI/CD pipeline.");
         eprintln!("Please do not modify the version field directly.\n");
-        eprintln!("To trigger a release, add a changelog fragment to changelog.d/");
+        eprintln!("To trigger a release, add a changelog fragment to {rust_root}/changelog.d/");
         eprintln!("with the appropriate bump type (major, minor, or patch).\n");
-        eprintln!("See changelog.d/README.md for more information.\n");
-        eprintln!("If you need to undo your version change, run:");
-        eprintln!("  git checkout origin/main -- Cargo.toml");
+        eprintln!("See {rust_root}/changelog.d/README.md for more information.\n");
+        eprintln!("Restore the package version to the value on the base branch.");
         exit(1);
     }
 
@@ -195,5 +207,18 @@ mod tests {
         let error = exec("git", &["diff", "definitely-not-a-ref...HEAD"])
             .expect_err("an invalid revision must remain an error");
         assert!(error.contains("exited with"));
+    }
+
+    #[test]
+    fn a_polyglot_manifest_diff_includes_the_legacy_package_root() {
+        assert_eq!(
+            manifest_paths("rust/Cargo.toml"),
+            vec!["Cargo.toml", "rust/Cargo.toml"]
+        );
+        assert_eq!(manifest_paths("Cargo.toml"), vec!["Cargo.toml"]);
+        assert_eq!(
+            manifest_paths("backend/Cargo.toml"),
+            vec!["backend/Cargo.toml"]
+        );
     }
 }

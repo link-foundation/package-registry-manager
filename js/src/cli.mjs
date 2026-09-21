@@ -2,6 +2,7 @@
 
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 import { inspectRepository } from "./discovery.mjs";
@@ -168,7 +169,11 @@ function outputPlans(plans, format) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+export function isDirectExecution(moduleUrl, entryPath) {
+  return Boolean(entryPath) && moduleUrl === pathToFileURL(entryPath).href;
+}
+
+if (isDirectExecution(import.meta.url, process.argv[1])) {
   main().catch((error) => {
     process.stderr.write(`error: ${error.message}\n`);
     process.exitCode = 1;
