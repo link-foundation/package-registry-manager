@@ -57,3 +57,7 @@ doc/
 *.log
 logs/
 ci-logs/
+
+# JavaScript dependencies and generated browser profiles
+node_modules/
+.package-registry-manager/
