@@ -1,4 +1,8 @@
-import { npmName } from "./registry-state.mjs";
+import {
+  npmName,
+  registryEndpoint,
+  registryStateUrl,
+} from "./registry-state.mjs";
 
 /** Step conditions that only hold while a package is not yet published. */
 export const BOOTSTRAP_CONDITIONS = new Set([
@@ -147,7 +151,7 @@ function verifyReleaseSteps(context, url) {
 
 export function npmFlow(packageInfo, context) {
   const name = packageInfo.name;
-  const registry = "https://registry.npmjs.org";
+  const registry = registryEndpoint("npm");
   const trustList = command("npx", [
     "-y",
     "npm@latest",
@@ -172,7 +176,7 @@ export function npmFlow(packageInfo, context) {
         ]),
       },
     ),
-    checkRegistryStep("npm", `${registry}/${npmName(name)}/latest`),
+    checkRegistryStep("npm", registryStateUrl(packageInfo)),
     step(
       "check-sign-in",
       "Check the npm session",
@@ -338,9 +342,7 @@ export function npmFlow(packageInfo, context) {
       ),
     );
     if (context.verifyRelease) {
-      steps.push(
-        ...verifyReleaseSteps(context, `${registry}/${npmName(name)}/latest`),
-      );
+      steps.push(...verifyReleaseSteps(context, registryStateUrl(packageInfo)));
     }
   }
   steps.push(
@@ -358,7 +360,7 @@ export function npmFlow(packageInfo, context) {
 
 export function cratesFlow(packageInfo, context) {
   const name = packageInfo.name;
-  const api = `https://crates.io/api/v1/crates/${encodeURIComponent(name)}`;
+  const api = registryStateUrl(packageInfo);
   return [
     step(
       "validate-package",
@@ -440,10 +442,7 @@ export function pypiFlow(packageInfo, context) {
       "Build source and wheel distributions locally.",
       { command: command("python", ["-m", "build"]) },
     ),
-    checkRegistryStep(
-      "PyPI",
-      `https://pypi.org/pypi/${encodeURIComponent(name)}/json`,
-    ),
+    checkRegistryStep("PyPI", registryStateUrl(packageInfo)),
     step(
       "create-pending-publisher",
       "Create a PyPI pending publisher",
@@ -481,10 +480,7 @@ export function pypiFlow(packageInfo, context) {
       "Wait for the registry",
       "wait",
       "Poll PyPI until the project is visible.",
-      {
-        url: `https://pypi.org/pypi/${encodeURIComponent(name)}/json`,
-        when: "package-missing",
-      },
+      { url: registryStateUrl(packageInfo), when: "package-missing" },
     ),
     step(
       "configure-trusted-publisher",
@@ -501,13 +497,10 @@ export function pypiFlow(packageInfo, context) {
 }
 
 export function dockerHubFlow(packageInfo, context) {
-  const [namespace, repository] = packageInfo.name.split("/");
+  const [namespace] = packageInfo.name.split("/");
   const repo = repoArgs(context);
   return [
-    checkRegistryStep(
-      "Docker Hub",
-      `https://hub.docker.com/v2/namespaces/${encodeURIComponent(namespace)}/repositories/${encodeURIComponent(repository)}`,
-    ),
+    checkRegistryStep("Docker Hub", registryStateUrl(packageInfo)),
     step(
       "create-repository",
       "Create the Docker Hub repository",
