@@ -1,4 +1,4 @@
-//! Interactive commands whose web-authentication URLs open in the managed browser.
+//! Interactive commands whose web-authentication URLs open in a browser.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -16,7 +16,7 @@ use crate::model::CommandSpec;
 /// Preloaded into npm so it treats piped stdout as a terminal.
 ///
 /// npm only offers web authentication (`Authenticate your account at:`) on a TTY; the tool
-/// pipes stdout to find those URLs and open them in its own browser.
+/// pipes stdout to find those URLs and open them in a browser.
 pub const TTY_SHIM: &str = r#"for (const stream of [process.stdin, process.stdout]) {
   if (!stream.isTTY) {
     Object.defineProperty(stream, "isTTY", { value: true, configurable: true });
@@ -24,16 +24,20 @@ pub const TTY_SHIM: &str = r#"for (const stream of [process.stdin, process.stdou
 }
 "#;
 
-/// Finds web-authentication URLs in streamed npm output.
+/// Finds web-authentication URLs in streamed npm output, and npm's legacy
+/// `Username:` prompt, which npm prints without a trailing newline when a web
+/// login is not completed in time.
 #[derive(Debug)]
 pub struct AuthUrlScanner {
     pending: String,
     expect_url: bool,
+    legacy_login: bool,
     seen: BTreeSet<String>,
     prompt: Regex,
     inline: Regex,
     ansi: Regex,
     url: Regex,
+    legacy: Regex,
 }
 
 impl Default for AuthUrlScanner {
@@ -50,11 +54,26 @@ impl AuthUrlScanner {
         Self {
             pending: String::new(),
             expect_url: false,
+            legacy_login: false,
             seen: BTreeSet::new(),
             prompt: compile(r"(?i)^(?:Login at|Authenticate your account at):?$"),
             inline: compile(r"(?i)(?:Login at|Authenticate your account at):?\s+(https?://\S+)"),
             ansi: compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]"),
             url: compile(r"^https?://\S+$"),
+            legacy: compile(r"(?i)^Username:"),
+        }
+    }
+
+    /// Whether npm printed its legacy `Username:` prompt.
+    #[must_use]
+    pub const fn legacy_login(&self) -> bool {
+        self.legacy_login
+    }
+
+    fn detect_legacy(&mut self, raw: &str) {
+        let cleaned = self.ansi.replace_all(raw, "");
+        if self.legacy.is_match(cleaned.trim()) {
+            self.legacy_login = true;
         }
     }
 
@@ -69,12 +88,15 @@ impl AuthUrlScanner {
         self.pending = lines.pop().unwrap_or_default();
         let mut found = Vec::new();
         for raw in lines {
+            self.detect_legacy(&raw);
             if let Some(url) = self.scan_line(&raw) {
                 if self.seen.insert(url.clone()) {
                     found.push(url);
                 }
             }
         }
+        let pending = self.pending.clone();
+        self.detect_legacy(&pending);
         found
     }
 
@@ -124,6 +146,8 @@ pub struct CommandOutput {
     pub code: i32,
     /// Everything the command wrote to stdout.
     pub stdout: String,
+    /// The command was stopped at npm's legacy `Username:` prompt.
+    pub legacy_login: bool,
 }
 
 /// Resolve a program on `PATH`, including Windows `PATHEXT` launchers such as
@@ -151,13 +175,15 @@ pub fn resolve_program(program: &str) -> OsString {
 ///
 /// Stdout is mirrored and captured. stdin stays a real terminal so masked
 /// prompts (`cargo login`, `gh secret set`) keep working. Web-authentication
-/// URLs are sent to `urls`.
+/// URLs are sent to `urls`. With `stop_on_legacy_login` the command is killed
+/// at npm's legacy `Username:` prompt and the output has `legacy_login` set.
 pub async fn run_interactive(
     command: &CommandSpec,
     cwd: &Path,
     env: &BTreeMap<String, String>,
     mirror: bool,
     urls: Option<UnboundedSender<String>>,
+    stop_on_legacy_login: bool,
 ) -> Result<CommandOutput> {
     let mut child = tokio::process::Command::new(resolve_program(&command.program))
         .args(&command.args)
@@ -184,10 +210,15 @@ pub async fn run_interactive(
             terminal.write_all(chunk)?;
             terminal.flush()?;
         }
+        let found = scanner.push(&String::from_utf8_lossy(chunk));
         if let Some(sender) = &urls {
-            for url in scanner.push(&String::from_utf8_lossy(chunk)) {
+            for url in found {
                 let _ = sender.send(url);
             }
+        }
+        if stop_on_legacy_login && scanner.legacy_login() {
+            child.start_kill()?;
+            break;
         }
     }
     if let Some(sender) = &urls {
@@ -199,5 +230,6 @@ pub async fn run_interactive(
     Ok(CommandOutput {
         code: status.code().unwrap_or(1),
         stdout: String::from_utf8_lossy(&captured).into_owned(),
+        legacy_login: stop_on_legacy_login && scanner.legacy_login(),
     })
 }

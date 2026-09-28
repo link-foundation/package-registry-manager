@@ -1,6 +1,55 @@
-use anyhow::Result;
+use std::process::Stdio;
 
-use crate::model::TrustedPublisherPrefill;
+use anyhow::{bail, Context, Result};
+use regex::Regex;
+
+use crate::model::{CommandSpec, TrustedPublisherPrefill};
+
+/// The exact argument vector that opens an http(s) URL in the default browser.
+///
+/// `os` is a value of [`std::env::consts::OS`]: `open` runs on macOS, the URL
+/// protocol handler on Windows, which avoids `cmd` quoting rules, and
+/// `xdg-open` elsewhere.
+pub fn user_browser_command(url: &str, os: &str) -> Result<CommandSpec> {
+    let web = Regex::new(r"(?i)^https?://\S+$").expect("static pattern must compile");
+    if !web.is_match(url) {
+        bail!("refusing to open a non-web URL: {url}");
+    }
+    let (program, mut args) = match os {
+        "macos" => ("open", Vec::new()),
+        "windows" => ("rundll32", vec!["url.dll,FileProtocolHandler".to_owned()]),
+        _ => ("xdg-open", Vec::new()),
+    };
+    args.push(url.to_owned());
+    Ok(CommandSpec {
+        program: program.to_owned(),
+        args,
+    })
+}
+
+/// Open a URL in the user's own default browser, where they are usually
+/// already signed in. Nothing is automated.
+///
+/// Returns once the opener started; it is not awaited because `xdg-open` can
+/// wait for a newly started browser to exit.
+pub fn open_in_user_browser(url: &str) -> Result<()> {
+    let command = user_browser_command(url, std::env::consts::OS)?;
+    let mut opener = std::process::Command::new(&command.program);
+    opener
+        .args(&command.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // Keep the browser running when the terminal interrupts the tool.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut opener, 0);
+    let mut child = opener
+        .spawn()
+        .with_context(|| format!("{}: cannot start", command.program))?;
+    // Reap the opener in the background so it does not linger as a zombie.
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
 
 /// Build a self-contained script that fills a trusted-publisher form (npm,
 /// crates.io, or a `PyPI` pending publisher).
