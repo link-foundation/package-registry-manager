@@ -1,3 +1,4 @@
+mod npm_bootstrap;
 mod pipeline_template;
 mod registry_manager;
 

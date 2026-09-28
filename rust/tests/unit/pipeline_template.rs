@@ -2,10 +2,12 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use package_registry_manager::{build_plans_for, inspect_repository, Registry};
+use package_registry_manager::{
+    build_plans_for, inspect_repository, Inspection, PlanMode, Registry, SetupPlan,
+};
 use tempfile::TempDir;
 
-fn fixture() -> (TempDir, PathBuf) {
+pub fn fixture() -> (TempDir, PathBuf) {
     let temporary = TempDir::new().expect("create temporary repository");
     let root = temporary.path().join("pipeline-template");
     copy_tree(
@@ -64,4 +66,145 @@ fn plans_no_actionable_steps_for_unpublishable_packages() {
             .map(|publisher| publisher.workflow.as_str()),
         Some("release.yml")
     );
+}
+
+#[test]
+fn detects_docker_hub_and_ghcr_images_from_the_dockerfile_and_release_workflow() {
+    let (_temporary, root) = fixture();
+    let inspection = inspect_repository(&root).expect("inspect fixture");
+    let mut actual = serde_json::to_value(&inspection).expect("serialize inspection");
+    actual["repository"]["root"] = serde_json::Value::String("<ROOT>".to_owned());
+    let expected: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("expected-inspection.json"))
+            .expect("read shared expected inspection"),
+    )
+    .expect("parse shared expected inspection");
+    assert_eq!(actual, expected, "Rust must honor the shared contract");
+    let containers = inspection
+        .packages
+        .iter()
+        .filter(|package| matches!(package.registry, Registry::DockerHub | Registry::Ghcr))
+        .map(|package| {
+            (
+                package.registry,
+                package.name.as_str(),
+                package.manifest.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        containers,
+        [
+            (Registry::DockerHub, "acme/pipeline-app", "Dockerfile"),
+            (Registry::Ghcr, "acme/pipeline-app", "Dockerfile"),
+        ]
+    );
+}
+
+fn argv(plan: &SetupPlan, id: &str) -> Vec<String> {
+    let command = plan
+        .steps
+        .iter()
+        .find(|step| step.id == id)
+        .and_then(|step| step.command.as_ref())
+        .unwrap_or_else(|| panic!("{id} has a command"));
+    std::iter::once(command.program.clone())
+        .chain(command.args.iter().cloned())
+        .collect()
+}
+
+fn only_plan(inspection: &Inspection, registry: Registry) -> SetupPlan {
+    let mut plans = build_plans_for(inspection, &BTreeSet::from([registry]));
+    assert_eq!(plans.len(), 1);
+    plans.remove(0)
+}
+
+#[test]
+fn plans_docker_hub_repository_token_variables_and_secret() {
+    let (_temporary, root) = fixture();
+    let mut inspection = inspect_repository(&root).expect("inspect fixture");
+    let plan = only_plan(&inspection, Registry::DockerHub);
+    assert_eq!(
+        plan.steps
+            .iter()
+            .map(|step| step.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "check-registry",
+            "create-repository",
+            "create-access-token",
+            "check-github-cli",
+            "set-image-variable",
+            "set-username-variable",
+            "set-token-secret",
+        ]
+    );
+    let words = |text: &str| text.split(' ').map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(
+        argv(&plan, "set-image-variable"),
+        words("gh variable set DOCKERHUB_IMAGE --body acme/pipeline-app --repo acme/pipeline-app")
+    );
+    assert_eq!(
+        argv(&plan, "set-username-variable"),
+        words("gh variable set DOCKERHUB_USERNAME --body acme --repo acme/pipeline-app")
+    );
+    assert_eq!(
+        argv(&plan, "set-token-secret"),
+        words("gh secret set DOCKERHUB_TOKEN --repo acme/pipeline-app"),
+        "the token is read by gh from the terminal, never passed as an argument"
+    );
+    assert_eq!(
+        plan.steps
+            .iter()
+            .find(|step| step.id == "create-repository")
+            .and_then(|step| step.url.as_deref()),
+        Some("https://hub.docker.com/repository/create?namespace=acme")
+    );
+
+    for package in &mut inspection.packages {
+        if package.registry == Registry::DockerHub {
+            package.exists_on_registry = Some(true);
+        }
+    }
+    let attach = only_plan(&inspection, Registry::DockerHub);
+    assert_eq!(attach.mode, Some(PlanMode::Attach));
+    assert!(attach
+        .steps
+        .iter()
+        .all(|step| step.id != "create-repository"));
+}
+
+#[test]
+fn checks_ghcr_packages_write_and_links_the_package_after_the_first_push() {
+    let (_temporary, root) = fixture();
+    let plan = only_plan(
+        &inspect_repository(&root).expect("inspect fixture"),
+        Registry::Ghcr,
+    );
+    assert!(plan.package.warnings.is_empty());
+    assert_eq!(
+        plan.steps
+            .iter()
+            .map(|step| step.id.as_str())
+            .collect::<Vec<_>>(),
+        ["link-package"]
+    );
+    assert_eq!(
+        plan.steps[0].url.as_deref(),
+        Some("https://github.com/users/acme/packages/container/package/pipeline-app")
+    );
+
+    let workflow = root.join(".github/workflows/release.yml");
+    let original = fs::read_to_string(&workflow).expect("read workflow");
+    fs::write(
+        &workflow,
+        original.replace("packages: write", "packages: read"),
+    )
+    .expect("write workflow");
+    let without_permission = only_plan(
+        &inspect_repository(&root).expect("inspect fixture"),
+        Registry::Ghcr,
+    );
+    assert!(without_permission.package.warnings[0].contains("packages: write"));
+    assert_eq!(without_permission.steps[0].id, "grant-packages-write");
 }

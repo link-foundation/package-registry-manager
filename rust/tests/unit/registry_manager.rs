@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use package_registry_manager::browser::npm_prefill_script;
 use package_registry_manager::{build_plans, inspect_repository, Registry};
+use regex::Regex;
 use tempfile::TempDir;
 
 fn fixture() -> (TempDir, PathBuf) {
@@ -46,7 +47,7 @@ fn discovers_every_maintained_registry_and_repository_metadata() {
         .collect::<BTreeSet<_>>();
 
     assert_eq!(registries, BTreeSet::from(Registry::ALL));
-    assert_eq!(inspection.packages.len(), 7);
+    assert_eq!(inspection.packages.len(), 9);
     assert_eq!(inspection.repository.github_owner.as_deref(), Some("acme"));
     assert_eq!(
         inspection.repository.github_repository.as_deref(),
@@ -100,16 +101,33 @@ fn npm_plan_prefills_trusted_publisher_from_repository() {
 }
 
 #[test]
-fn setup_plan_never_contains_a_publish_command() {
+fn publishes_only_to_bootstrap_a_missing_package_after_confirmation() {
     let (_temporary, root) = fixture();
     let inspection = inspect_repository(&root).expect("inspect fixture");
+    let publish = Regex::new(r"^(npm|cargo) publish\b|^twine upload\b").expect("pattern");
     for plan in build_plans(&inspection) {
-        for command in plan.steps.iter().filter_map(|step| step.command.as_ref()) {
+        for step in &plan.steps {
+            let Some(command) = &step.command else {
+                continue;
+            };
             let rendered = format!("{} {}", command.program, command.args.join(" "));
-            assert!(
-                rendered != "npm publish" && rendered != "cargo publish",
-                "setup must not upload an artifact: {rendered}"
-            );
+            if publish.is_match(&rendered) && !rendered.contains("--dry-run") {
+                assert_eq!(step.id, "first-publish", "{rendered}");
+                assert_eq!(step.when.as_deref(), Some("package-missing"), "{rendered}");
+                assert!(step.confirm, "{rendered}");
+            }
         }
+    }
+    let mut complete = inspection;
+    for package in &mut complete.packages {
+        package.exists_on_registry = Some(true);
+        package.trusted_publishing = Some(true);
+    }
+    for plan in build_plans(&complete) {
+        assert!(
+            plan.steps.iter().all(|step| step.id != "first-publish"),
+            "{}",
+            plan.registry
+        );
     }
 }
