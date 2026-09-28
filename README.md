@@ -155,8 +155,8 @@ A bootstrap run:
    the printed login URL in the dedicated browser profile, where the
    maintainer signs in and completes 2FA.
 3. Checks out the default branch into a temporary worktree, runs
-   `npm pack --ignore-scripts`, and shows the tarball's name, version, and
-   file count.
+   `npm pack --ignore-scripts`, and lists every file with the packed and
+   unpacked size.
 4. After confirmation, publishes that tarball once with
    `npm publish --auth-type=web`. npm asks for 2FA in the browser.
 5. Waits until the registry serves the version.
