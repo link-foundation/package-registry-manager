@@ -95,3 +95,17 @@ test("plan reports registry state in JSON", async () => {
   assert.equal(dockerHub.mode, "bootstrap");
   assert.ok(dockerHub.steps.some((step) => step.id === "create-repository"));
 });
+
+test("rejects an unknown --browser mode", async () => {
+  await assert.rejects(
+    execute(
+      process.execPath,
+      [cli, "--repository", fixture, "--browser", "chromium", "plan"],
+      { env: registryEnv },
+    ),
+    (error) => {
+      assert.match(error.stderr, /--browser must be 'default' or 'automated'/);
+      return true;
+    },
+  );
+});

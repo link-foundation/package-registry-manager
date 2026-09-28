@@ -178,7 +178,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
             "sign-in",
             "Sign in to npm in the browser",
             StepKind::Command,
-            "Start a web login; the tool opens the printed URL in its browser, where you sign in and approve 2FA. No token is created or read by the tool.",
+            "Start a web login; the tool opens the printed URL in your default browser, where you are usually already signed in and only approve. No token is created or read by the tool.",
         )
         .command("npm", &["login", "--auth-type=web", "--browser=false"])
         .when("signed-out"),

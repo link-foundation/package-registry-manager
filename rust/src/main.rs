@@ -9,7 +9,9 @@ use clap::{Subcommand, ValueEnum};
 use lino_arguments::Parser;
 use package_registry_manager::plan::{build_plans_with, PlanOptions};
 use package_registry_manager::registry_state::{Endpoints, RegistryClient};
-use package_registry_manager::setup::{default_browser_profile, execute_plan, ExecuteOptions};
+use package_registry_manager::setup::{
+    default_browser_profile, execute_plan, BrowserMode, ExecuteOptions,
+};
 use package_registry_manager::{inspect_repository, Inspection, PlanMode, Registry, SetupPlan};
 
 #[derive(Parser, Debug)]
@@ -83,7 +85,13 @@ enum Commands {
         #[arg(long, default_value = "chrome")]
         browser_channel: String,
 
-        /// Dedicated profile; never point this at a normal browser profile.
+        /// Open sign-in and approval pages in your default browser, or in the
+        /// automated profile. Forms are always filled in the automated profile.
+        #[arg(long, value_enum, default_value_t = BrowserMode::Default)]
+        browser: BrowserMode,
+
+        /// Dedicated automation profile, used to fill forms (default: per-user
+        /// state directory); never point this at a normal browser profile.
         #[arg(long)]
         browser_profile: Option<PathBuf>,
     },
@@ -132,6 +140,7 @@ async fn main() -> Result<()> {
             verify_release,
             yes,
             no_browser,
+            browser,
             browser_channel,
             browser_profile,
         } => {
@@ -142,12 +151,17 @@ async fn main() -> Result<()> {
             let plans = build_plans_with(&inspection, &BTreeSet::from([registry]), &options);
             let plan = select_plan(&plans, package.as_deref())?;
             output_plans(std::slice::from_ref(plan), args.format)?;
-            let profile =
-                browser_profile.unwrap_or_else(|| default_browser_profile(&args.repository));
+            // Only a run that may start the automated browser needs the profile.
+            let profile = match browser_profile {
+                Some(profile) => std::path::absolute(profile)?,
+                None if execute => default_browser_profile()?,
+                None => PathBuf::new(),
+            };
             execute_plan(
                 plan,
                 &ExecuteOptions {
                     repository: &args.repository,
+                    browser,
                     browser_profile: &profile,
                     browser_channel: &browser_channel,
                     execute,

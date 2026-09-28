@@ -12,20 +12,21 @@ import {
   runInteractive,
   writeTtyShim,
 } from "./auth-urls.mjs";
-import { npmPrefillScript } from "./browser.mjs";
+import { npmPrefillScript, openInUserBrowser } from "./browser.mjs";
 import { CLEANUP_CONDITIONS } from "./flows.mjs";
 import { packageDirectory } from "./plan.mjs";
+import { ensureProfileIgnored, protectLegacyProfile } from "./profile.mjs";
 import { getJson, probePackage } from "./registry-state.mjs";
+
+export { defaultBrowserProfile } from "./profile.mjs";
 
 const PREFILLED_FORMS = new Set([
   "configure-trusted-publisher",
   "create-pending-publisher",
 ]);
 const INTERACTIVE_CHECKS = new Set(["check-trust", "verify-trusted-publisher"]);
-
-export function defaultBrowserProfile(repository) {
-  return path.join(repository, ".package-registry-manager", "browser-profile");
-}
+/** Where `--browser` opens URLs that need no automation. */
+export const BROWSER_MODES = ["default", "automated"];
 
 /**
  * Runs a setup plan. Without `options.execute` it only reports a dry run.
@@ -49,6 +50,13 @@ export async function executePlan(plan, options) {
       "Dry run only. Re-run with --execute to run these steps and open the registry.",
     );
     return;
+  }
+  if (options.browserProfile) {
+    await protectLegacyProfile(
+      options.repository,
+      options.browserProfile,
+      options,
+    );
   }
   const session = new SetupSession(plan, options);
   try {
@@ -287,12 +295,10 @@ class SetupSession {
   }
 
   async browser(step) {
-    await this.open(step.url);
-    if (
-      PREFILLED_FORMS.has(step.id) &&
-      this.plan.trusted_publisher &&
-      this.connection
-    ) {
+    // Only a form the tool fills needs the automated profile.
+    const fill = PREFILLED_FORMS.has(step.id) && this.plan.trusted_publisher;
+    await this.open(step.url, Boolean(fill));
+    if (fill && this.connection) {
       await this.prefill();
     }
     await prompt("Finish this step in the browser, then press Enter...");
@@ -328,12 +334,24 @@ class SetupSession {
     }
   }
 
-  async open(url) {
+  async open(url, automate = false) {
     if (this.options.noBrowser) {
       console.log(`Open ${url}`);
       return;
     }
+    if (!automate && this.options.browser !== "automated") {
+      console.log(`Opening ${url} in your default browser`);
+      try {
+        await openInUserBrowser(url);
+      } catch (error) {
+        console.error(
+          `warning: could not open your default browser (${error.message}); open the URL yourself`,
+        );
+      }
+      return;
+    }
     if (!this.connection) {
+      await ensureProfileIgnored(this.options.browserProfile, this.options);
       this.connection = await launchRealBrowser({
         engine: "playwright",
         channel: this.options.browserChannel,
@@ -384,7 +402,8 @@ class SetupSession {
   async runProcess(step, mirror) {
     const { command, cwd } = this.prepare(step);
     let env = process.env;
-    if (["npm", "npx"].includes(command.program)) {
+    const npm = ["npm", "npx"].includes(command.program);
+    if (npm) {
       this.shim ??= await writeTtyShim();
       env = {
         ...process.env,
@@ -394,16 +413,24 @@ class SetupSession {
         ),
       };
     }
-    return runInteractive(command, {
+    const result = await runInteractive(command, {
       cwd,
       env,
       mirror,
+      stopOnLegacyLogin: npm,
       onUrl: (url) => {
         this.open(url).catch((error) =>
           console.error(`warning: could not open ${url}: ${error.message}`),
         );
       },
     });
+    if (result.legacyLogin) {
+      process.stdout.write("\n");
+      throw new Error(
+        "the browser login was not completed in time, so npm fell back to its legacy username prompt; re-run the command to get a fresh login link",
+      );
+    }
+    return result;
   }
 
   expand(command) {

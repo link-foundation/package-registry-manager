@@ -24,9 +24,11 @@ cover the maintained language ecosystems in the hive-mind CI/CD guidance.
 - Uses each ecosystem's official CLI for local validation, with exact argument
   arrays through
   [command-stream](https://github.com/link-foundation/command-stream).
-- Opens a real installed browser with a dedicated profile through
-  [browser-commander](https://github.com/link-foundation/browser-commander), so
-  the maintainer authenticates directly with the registry.
+- Opens sign-in and approval URLs in the maintainer's default browser, where
+  they are usually already signed in, so the maintainer authenticates directly
+  with the registry. Forms are filled in a real installed browser with a
+  dedicated profile through
+  [browser-commander](https://github.com/link-foundation/browser-commander).
 - Prefills npm trusted-publisher fields from the GitHub remote and release
   workflow, then requires explicit confirmation before submitting.
 - Publishes only the very first version of a package that does not exist yet,
@@ -95,11 +97,35 @@ tool's own web login, so credentials, cookies, and tokens never pass through
 the CLI and are never logged. The session the CLI opened is signed out and the
 temporary worktree removed when the run ends, even after a failure.
 
-Do not pass a normal browser profile to `--browser-profile`. Chrome 136 and
-newer intentionally restrict automation of the default profile. The default is
-an isolated, reusable profile under
-`.package-registry-manager/browser-profile`, which lets the user sign in
-without exposing credentials to the CLI.
+Web-auth URLs printed by the registry CLIs (`npm login --auth-type=web`, the
+`npm publish` 2FA link, and `npm trust`) need no automation, because the tool
+waits for completion. `--browser default`, the default, opens them in the
+user's default browser (`open` on macOS, `xdg-open` on Linux, the URL handler
+on Windows), where the maintainer is usually already signed in and only
+approves. `--browser automated` opens them in the automation profile instead.
+If the web login is not completed and npm falls back to its legacy `Username:`
+prompt, the run stops and asks to re-run for a fresh login link.
+
+The automation profile is only needed to fill a form, such as the npm
+trusted-publisher fallback. Do not pass a normal browser profile to
+`--browser-profile`; Chrome 136 and newer intentionally restrict automation of
+the default profile. The default is an isolated, reusable profile in the
+per-user state directory, outside any repository:
+
+| OS | Default `--browser-profile` |
+|----|-----------------------------|
+| macOS | `~/Library/Application Support/package-registry-manager/browser-profile` |
+| Linux | `$XDG_STATE_HOME/package-registry-manager/browser-profile`, or `~/.local/state/package-registry-manager/browser-profile` |
+| Windows | `%LOCALAPPDATA%\package-registry-manager\browser-profile` |
+
+The profile holds registry session cookies, so it must never be committed.
+When `--browser-profile` points inside a Git work tree, the CLI writes a
+`.gitignore` containing `*` before the browser starts (into
+`.package-registry-manager/` for `.package-registry-manager/browser-profile`,
+otherwise into the profile) and refuses to continue if `git check-ignore`
+still reports the profile as not ignored. A profile left in
+`.package-registry-manager/browser-profile` by an earlier release is protected
+the same way, with a warning to delete it.
 
 Use `--no-browser` with `--execute` on a machine without a graphical browser.
 The CLI runs the validation step and prints the official setup URL for opening
@@ -152,8 +178,8 @@ A bootstrap run:
 
 1. Validates `package.json` and checks the npm session with `npm whoami`.
 2. Signs in with `npm login --auth-type=web` only when needed. The CLI opens
-   the printed login URL in the dedicated browser profile, where the
-   maintainer signs in and completes 2FA.
+   the printed login URL in the default browser, where the maintainer is
+   usually already signed in and approves, completing 2FA if asked.
 3. Checks out the default branch into a temporary worktree, runs
    `npm pack --ignore-scripts`, and lists every file with the packed and
    unpacked size.
@@ -264,8 +290,9 @@ The CLIs intentionally use the same options and JSON schema:
 | `--verify-release` | Also dispatch and watch the release workflow and confirm provenance |
 | `--yes` | Pre-confirm publishing, secret changes, and form submission; requires `--execute` |
 | `--no-browser` | Print the setup URL after validation; requires `--execute` |
+| `--browser <default\|automated>` | Open sign-in and approval URLs in the default browser (default) or the automation profile |
 | `--browser-channel <name>` | Choose installed Chrome, Chromium, Edge, or Brave |
-| `--browser-profile <path>` | Choose a dedicated automation profile |
+| `--browser-profile <path>` | Choose the dedicated automation profile used to fill forms (default: per-user state directory) |
 
 Registry aliases such as `cargo`, `python`, `go`, `dotnet`, `maven`, and
 `composer`, `docker`, and `ghcr-io` are accepted. Canonical JSON values are
@@ -315,7 +342,8 @@ repository files
     -> public registry lookup (exists? trusted publishing?)
     -> bootstrap / attach / complete setup plans
     -> exact-argv commands (opt in)
-    -> web login in a dedicated browser profile (opt in)
+    -> web login in the default browser (opt in)
+    -> form filling in a dedicated browser profile (fallback)
     -> confirmed first publish, trust attachment, and secret changes
     -> sign-out and temporary worktree cleanup
 ```

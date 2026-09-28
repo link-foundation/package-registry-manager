@@ -1,5 +1,5 @@
-// Stand-in for npm, npx, git, and gh in the end-to-end bootstrap tests of both
-// implementations. It records every argument vector and keeps just enough state
+// Stand-in for npm, npx, git, gh, and the default-browser openers (open,
+// xdg-open) in the end-to-end bootstrap tests of both implementations. It records every argument vector and keeps just enough state
 // (session, trusted publisher) for a resumed run to behave like the real tools.
 const fs = require("node:fs");
 const path = require("node:path");
@@ -25,6 +25,12 @@ if (tool === "npm") {
   if (args[0] === "login") {
     console.log("Login at:");
     console.log("https://www.npmjs.com/login?next=/login/cli/fake");
+    if (process.env.FAKE_LEGACY_LOGIN) {
+      // npm's fallback when the web login fails: a prompt without a newline.
+      process.stdout.write("Username: ");
+      setTimeout(() => process.exit(1), 60000);
+      return;
+    }
     set("session", true);
   }
   if (args[0] === "logout") set("session", false);

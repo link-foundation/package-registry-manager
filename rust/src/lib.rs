@@ -7,6 +7,7 @@ pub mod discovery;
 pub mod flows;
 pub mod model;
 pub mod plan;
+pub mod profile;
 pub mod registry_state;
 pub mod setup;
 pub mod workflows;

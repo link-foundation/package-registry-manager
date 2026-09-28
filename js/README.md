@@ -3,8 +3,8 @@
 Node.js implementation of
 [package-registry-manager](https://github.com/link-foundation/package-registry-manager).
 It discovers package manifests, emits registry setup plans, validates packages
-with exact argument vectors, and guides authenticated setup in a dedicated
-visible browser.
+with exact argument vectors, and guides authenticated setup in the default
+browser, filling forms in a dedicated visible browser profile.
 
 ```bash
 npm install package-registry-manager

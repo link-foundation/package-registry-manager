@@ -15,19 +15,33 @@ use tokio::sync::mpsc::unbounded_channel;
 use crate::auth_urls::{
     node_options_with_shim, resolve_program, run_interactive, write_tty_shim, CommandOutput,
 };
-use crate::browser::npm_prefill_script;
+use crate::browser::{npm_prefill_script, open_in_user_browser};
 use crate::flows::CLEANUP_CONDITIONS;
 use crate::model::{CommandSpec, PlanMode, SetupPlan, SetupStep, StepKind};
 use crate::plan::package_directory;
+use crate::profile::{ensure_profile_ignored, protect_legacy_profile};
 use crate::registry_state::{npm_trusted, truthy, Endpoints, Lookup, RegistryClient};
 
 const PREFILLED_FORMS: [&str; 2] = ["configure-trusted-publisher", "create-pending-publisher"];
 const INTERACTIVE_CHECKS: [&str; 2] = ["check-trust", "verify-trusted-publisher"];
 
+/// Where `--browser` opens URLs that need no automation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum BrowserMode {
+    /// The user's default browser, where they are usually already signed in.
+    #[default]
+    Default,
+    /// The dedicated automation profile, as for form filling.
+    Automated,
+}
+
 /// Options for [`execute_plan`].
 #[allow(clippy::struct_excessive_bools)] // These booleans mirror independent CLI switches.
 pub struct ExecuteOptions<'a> {
     pub repository: &'a Path,
+    /// Where sign-in and approval URLs open.
+    pub browser: BrowserMode,
+    /// Dedicated automation profile, used to fill forms.
     pub browser_profile: &'a Path,
     pub browser_channel: &'a str,
     pub execute: bool,
@@ -65,6 +79,7 @@ pub async fn execute_plan(plan: &SetupPlan, options: &ExecuteOptions<'_>) -> Res
         println!("Dry run only. Re-run with --execute to run these steps and open the registry.");
         return Ok(());
     }
+    protect_legacy_profile(options.repository, options.browser_profile, options.verbose).await?;
     let mut session = Session::new(plan, options);
     let result = session.run().await;
     session.cleanup().await;
@@ -371,11 +386,11 @@ impl<'a> Session<'a> {
     }
 
     async fn browser_step(&mut self, step: &SetupStep) -> Result<()> {
-        self.open(step.url.as_deref().unwrap_or_default()).await?;
-        if PREFILLED_FORMS.contains(&step.id.as_str())
-            && self.plan.trusted_publisher.is_some()
-            && self.browser.is_some()
-        {
+        let fill =
+            PREFILLED_FORMS.contains(&step.id.as_str()) && self.plan.trusted_publisher.is_some();
+        self.open(step.url.as_deref().unwrap_or_default(), fill)
+            .await?;
+        if fill && self.browser.is_some() {
             self.prefill().await?;
         }
         prompt("Finish this step in the browser, then press Enter...")?;
@@ -413,12 +428,24 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
-    async fn open(&mut self, url: &str) -> Result<()> {
+    /// Open a URL in the default browser, or in the automation profile when
+    /// `automate` is set (form filling) or `--browser automated` was chosen.
+    async fn open(&mut self, url: &str, automate: bool) -> Result<()> {
         if self.options.no_browser {
             println!("Open {url}");
             return Ok(());
         }
+        if !automate && self.options.browser == BrowserMode::Default {
+            println!("Opening {url} in your default browser");
+            if let Err(error) = open_in_user_browser(url) {
+                eprintln!(
+                    "warning: could not open your default browser ({error:#}); open the URL yourself"
+                );
+            }
+            return Ok(());
+        }
         if self.browser.is_none() {
+            ensure_profile_ignored(self.options.browser_profile, self.options.verbose).await?;
             self.browser = Some(
                 launch_real_browser(
                     RealBrowserOptions::chromiumoxide()
@@ -473,13 +500,15 @@ impl<'a> Session<'a> {
         Ok(CommandOutput {
             code: result.code,
             stdout: result.stdout,
+            legacy_login: false,
         })
     }
 
     async fn run_process(&mut self, step: &SetupStep, mirror: bool) -> Result<CommandOutput> {
         let (command, cwd) = self.prepare(step)?;
         let mut env = BTreeMap::new();
-        if matches!(command.program.as_str(), "npm" | "npx") {
+        let npm = matches!(command.program.as_str(), "npm" | "npx");
+        if npm {
             if self.shim.is_none() {
                 self.shim = Some(write_tty_shim()?);
             }
@@ -493,16 +522,24 @@ impl<'a> Session<'a> {
         }
         let (sender, mut receiver) = unbounded_channel();
         let (result, ()) = tokio::join!(
-            run_interactive(&command, &cwd, &env, mirror, Some(sender)),
+            run_interactive(&command, &cwd, &env, mirror, Some(sender), npm),
             async {
                 while let Some(url) = receiver.recv().await {
-                    if let Err(error) = self.open(&url).await {
+                    if let Err(error) = self.open(&url, false).await {
                         eprintln!("warning: could not open {url}: {error:#}");
                     }
                 }
             }
         );
-        result
+        let result = result?;
+        if result.legacy_login {
+            println!();
+            bail!(
+                "the browser login was not completed in time, so npm fell back to its legacy \
+                 username prompt; re-run the command to get a fresh login link"
+            );
+        }
+        Ok(result)
     }
 
     fn expand(&self, command: &CommandSpec) -> CommandSpec {
@@ -580,8 +617,4 @@ fn prompt(message: &str) -> Result<String> {
     Ok(answer)
 }
 
-/// The dedicated browser profile used for registry sign-in.
-#[must_use]
-pub fn default_browser_profile(repository: &Path) -> PathBuf {
-    repository.join(".package-registry-manager/browser-profile")
-}
+pub use crate::profile::default_browser_profile;

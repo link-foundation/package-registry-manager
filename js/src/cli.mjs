@@ -9,7 +9,7 @@ import { inspectRepository } from "./discovery.mjs";
 import { parseRegistry } from "./model.mjs";
 import { buildPlans } from "./plan.mjs";
 import { probeRegistryState } from "./registry-state.mjs";
-import { defaultBrowserProfile, executePlan } from "./setup.mjs";
+import { BROWSER_MODES, defaultBrowserProfile, executePlan } from "./setup.mjs";
 
 const HELP = `Usage: package-registry-manager-js [global options] <command>
 
@@ -35,8 +35,12 @@ Setup options:
   --yes                           Confirm publishing, secret changes, and
                                   form submission in advance
   --no-browser                    Print the setup URL instead
+  --browser <default|automated>   Open sign-in and approval pages in your
+                                  default browser, or in the automated
+                                  profile too (default: default)
   --browser-channel <channel>     Installed browser channel (default: chrome)
-  --browser-profile <path>        Dedicated automation profile
+  --browser-profile <path>        Dedicated automation profile, used to fill
+                                  forms (default: per-user state directory)
 `;
 
 export async function main(args = process.argv.slice(2)) {
@@ -56,6 +60,7 @@ export async function main(args = process.argv.slice(2)) {
       execute: { type: "boolean", default: false },
       yes: { type: "boolean", default: false },
       "no-browser": { type: "boolean", default: false },
+      browser: { type: "string", default: "default" },
       "browser-channel": { type: "string", default: "chrome" },
       "browser-profile": { type: "string" },
       help: { type: "boolean", short: "h", default: false },
@@ -70,6 +75,9 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (!["text", "json"].includes(values.format)) {
     throw new Error("--format must be 'text' or 'json'");
+  }
+  if (!BROWSER_MODES.includes(values.browser)) {
+    throw new Error("--browser must be 'default' or 'automated'");
   }
 
   const repository = path.resolve(values.repository);
@@ -117,9 +125,10 @@ export async function main(args = process.argv.slice(2)) {
     execute: values.execute,
     yes: values.yes,
     noBrowser: values["no-browser"],
+    browser: values.browser,
     browserChannel: values["browser-channel"],
     browserProfile: path.resolve(
-      values["browser-profile"] ?? defaultBrowserProfile(repository),
+      values["browser-profile"] ?? defaultBrowserProfile(),
     ),
     verbose: values.verbose,
     verifyRelease: values["verify-release"],
