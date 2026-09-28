@@ -17,7 +17,16 @@ const ENDPOINTS = {
 /** Returns the registry API base URL, honoring test overrides. */
 export function registryEndpoint(registry, env = process.env) {
   const [variable, fallback] = ENDPOINTS[registry];
-  return (env[variable] || fallback).replace(/\/+$/, "");
+  return trimTrailingSlashes(env[variable] || fallback);
+}
+
+// A loop instead of /\/+$/, which backtracks quadratically on long runs of "/".
+function trimTrailingSlashes(value) {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
 }
 
 /** Returns the public URL that answers whether a package exists. */

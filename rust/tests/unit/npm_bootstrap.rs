@@ -206,3 +206,19 @@ fn never_reads_writes_or_requests_an_npm_token() {
         }
     }
 }
+
+#[test]
+fn trims_trailing_slashes_from_endpoint_overrides() {
+    let variable = "PACKAGE_REGISTRY_MANAGER_NPM_REGISTRY";
+    let base = |value: &str| {
+        Endpoints::default()
+            .with(variable, value)
+            .base(Registry::Npm)
+    };
+    assert_eq!(
+        base("http://mirror.test/npm///").as_deref(),
+        Some("http://mirror.test/npm")
+    );
+    let hostile = format!("{}x", "/".repeat(100_000));
+    assert_eq!(base(&hostile), Some(hostile.clone()));
+}

@@ -13,12 +13,13 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 
 import { authUrlScanner, nodeOptionsWithShim } from "../src/auth-urls.mjs";
 import { inspectRepository } from "../src/discovery.mjs";
 import { buildPlans } from "../src/plan.mjs";
-import { probePackage } from "../src/registry-state.mjs";
+import { probePackage, registryEndpoint } from "../src/registry-state.mjs";
 import { executePlan } from "../src/setup.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -390,3 +391,15 @@ test(
     );
   },
 );
+
+test("trims trailing slashes from endpoint overrides in linear time", () => {
+  const variable = "PACKAGE_REGISTRY_MANAGER_NPM_REGISTRY";
+  assert.equal(
+    registryEndpoint("npm", { [variable]: "http://mirror.test/npm///" }),
+    "http://mirror.test/npm",
+  );
+  const hostile = `${"/".repeat(100_000)}x`;
+  const started = performance.now();
+  assert.equal(registryEndpoint("npm", { [variable]: hostile }), hostile);
+  assert.ok(performance.now() - started < 1000);
+});
