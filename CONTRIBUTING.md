@@ -21,9 +21,11 @@ cargo build --manifest-path rust/Cargo.toml
 node js/src/cli.mjs --help
 ```
 
-The browser path requires an installed Chrome-family browser. Automated tests
-do not require a registry account or browser. Never use a personal default
-profile for development automation; use the CLI's dedicated profile.
+Form filling requires an installed Chrome-family browser; sign-in URLs open in
+the default browser. Automated tests do not require a registry account or
+browser. Never use a personal default profile for development automation; use
+the CLI's dedicated profile, which lives in the per-user state directory and
+must never be placed where Git can commit it.
 
 ## Development Workflow
 
