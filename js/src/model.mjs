@@ -6,6 +6,8 @@ export const REGISTRIES = Object.freeze([
   "nuget",
   "maven-central",
   "packagist",
+  "docker-hub",
+  "ghcr",
 ]);
 
 const REGISTRY_ALIASES = new Map([
@@ -27,6 +29,13 @@ const REGISTRY_ALIASES = new Map([
   ["composer", "packagist"],
   ["php", "packagist"],
   ["packagist", "packagist"],
+  ["docker", "docker-hub"],
+  ["dockerhub", "docker-hub"],
+  ["docker-hub", "docker-hub"],
+  ["docker-io", "docker-hub"],
+  ["ghcr", "ghcr"],
+  ["ghcr-io", "ghcr"],
+  ["github-container-registry", "ghcr"],
 ]);
 
 export function parseRegistry(value) {

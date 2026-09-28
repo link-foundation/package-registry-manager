@@ -1,7 +1,13 @@
 import { readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 
+import { CONTAINER_FILES, containerPackages } from "./containers.mjs";
 import { REGISTRIES } from "./model.mjs";
+import {
+  publishingWorkflow,
+  readWorkflows,
+  releaseWorkflow,
+} from "./workflows.mjs";
 
 const IGNORED_DIRECTORIES = new Set([
   ".git",
@@ -27,13 +33,16 @@ const MANIFEST_NAMES = new Set([
 export async function inspectRepository(repository) {
   const root = await realpath(repository);
   const manifests = [];
-  await collectManifests(root, manifests);
+  const dockerfiles = [];
+  await collectManifests(root, manifests, dockerfiles);
   manifests.sort();
   const preferredManifests = manifests.filter(
     (manifest) =>
       path.basename(manifest) !== "setup.py" ||
       !manifests.includes(path.join(path.dirname(manifest), "pyproject.toml")),
   );
+  const coordinates = await githubCoordinates(root, preferredManifests);
+  const workflows = await readWorkflows(root);
   const packages = (
     await Promise.all(
       preferredManifests.map(async (manifest) =>
@@ -42,6 +51,14 @@ export async function inspectRepository(repository) {
     )
   )
     .filter(Boolean)
+    .map((item) => withWorkflow(item, workflows))
+    .concat(
+      containerPackages(
+        dockerfiles.map((item) => relativePath(root, item)),
+        workflows,
+        coordinates,
+      ),
+    )
     .sort((left, right) => {
       const registryOrder =
         REGISTRIES.indexOf(left.registry) - REGISTRIES.indexOf(right.registry);
@@ -52,30 +69,34 @@ export async function inspectRepository(repository) {
           .localeCompare([right.manifest, right.name].join("\0"))
       );
     });
-  const { github_owner, github_repository } = await githubCoordinates(
-    root,
-    preferredManifests,
-  );
 
   return {
     schema_version: 1,
     repository: {
       root,
-      github_owner,
-      github_repository,
-      release_workflow: await releaseWorkflow(root),
+      ...coordinates,
+      release_workflow: releaseWorkflow(workflows),
     },
     packages,
   };
 }
 
-async function collectManifests(directory, manifests) {
+function withWorkflow(item, workflows) {
+  const workflow = item.publishable
+    ? publishingWorkflow(workflows, item.registry)
+    : null;
+  return workflow ? { ...item, workflow: workflow.name } : item;
+}
+
+async function collectManifests(directory, manifests, dockerfiles) {
   const entries = await readdir(directory, { withFileTypes: true });
   entries.sort((left, right) => left.name.localeCompare(right.name));
   for (const entry of entries) {
     const item = path.join(directory, entry.name);
     if (entry.isDirectory() && !IGNORED_DIRECTORIES.has(entry.name)) {
-      await collectManifests(item, manifests);
+      await collectManifests(item, manifests, dockerfiles);
+    } else if (entry.isFile() && CONTAINER_FILES.has(entry.name)) {
+      dockerfiles.push(item);
     } else if (
       entry.isFile() &&
       (MANIFEST_NAMES.has(entry.name) ||
@@ -331,32 +352,4 @@ function parseGithubUrl(remote) {
     github_owner: github_owner ?? null,
     github_repository: github_repository ?? null,
   };
-}
-
-async function releaseWorkflow(root) {
-  const directory = path.join(root, ".github/workflows");
-  let entries;
-  try {
-    entries = await readdir(directory, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-  entries.sort((left, right) => left.name.localeCompare(right.name));
-  let fallback = null;
-  for (const entry of entries) {
-    if (!entry.isFile() || !/\.ya?ml$/.test(entry.name)) {
-      continue;
-    }
-    const contents = await readFile(path.join(directory, entry.name), "utf8");
-    if (
-      contents.includes("npm publish") ||
-      contents.includes("npm stage publish")
-    ) {
-      return entry.name;
-    }
-    if (!fallback && entry.name.includes("release")) {
-      fallback = entry.name;
-    }
-  }
-  return fallback;
 }
