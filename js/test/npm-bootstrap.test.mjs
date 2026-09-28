@@ -268,7 +268,7 @@ const FAKE_TOOL = path.resolve(
 async function installFakeTools(directory) {
   const bin = path.join(directory, "bin");
   await mkdir(bin, { recursive: true });
-  for (const tool of ["npm", "npx", "git", "gh"]) {
+  for (const tool of ["npm", "npx", "git", "gh", "open", "xdg-open"]) {
     const file = path.join(bin, tool);
     await writeFile(
       file,
@@ -279,7 +279,7 @@ async function installFakeTools(directory) {
   return bin;
 }
 
-async function runWithFakeTools(plan, registry) {
+async function runWithFakeTools(plan, registry, overrides = {}) {
   const lines = [];
   const originalLog = console.log;
   const originalPath = process.env.PATH;
@@ -302,6 +302,7 @@ async function runWithFakeTools(plan, registry) {
           json: async () => found,
         };
       },
+      ...overrides,
     });
   } finally {
     console.log = originalLog;
@@ -389,6 +390,85 @@ test(
     assert.ok(
       again.includes("npx -y npm@latest trust list pipeline-app --json"),
     );
+  },
+);
+
+async function readLog(state) {
+  const file = path.join(state, "log.jsonl");
+  const text = await readFile(file, "utf8").catch(() => "");
+  return text
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+test(
+  "opens npm web-authentication URLs in the default browser",
+  { skip: process.platform === "win32" && "fake tools are POSIX scripts" },
+  async () => {
+    const state = await mkdtemp(path.join(temporary, "state-"));
+    process.env.FAKE_STATE = state;
+    await installFakeTools(state);
+    const plan = await npmPlan({
+      exists_on_registry: false,
+      trusted_publishing: false,
+    });
+    plan.steps = plan.steps.filter((step) =>
+      ["check-sign-in", "sign-in"].includes(step.id),
+    );
+    const profile = path.join(state, "unused-profile");
+    const { lines, log } = await runWithFakeTools(plan, () => ({}), {
+      noBrowser: false,
+      browser: "default",
+      browserProfile: profile,
+    });
+    assert.ok(
+      lines.includes(
+        "Opening https://www.npmjs.com/login?next=/login/cli/fake in your default browser",
+      ),
+    );
+    // The opener is detached, so wait for it to record its arguments.
+    const opener = (entry) => ["open", "xdg-open"].includes(entry.argv[0]);
+    let opened = log.find(opener);
+    for (let attempt = 0; attempt < 200 && !opened; attempt += 1) {
+      opened = (await readLog(state)).find(opener);
+      if (!opened) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    assert.deepEqual(opened.argv.slice(1), [
+      "https://www.npmjs.com/login?next=/login/cli/fake",
+    ]);
+    await assert.rejects(stat(profile), "the automation profile is not used");
+  },
+);
+
+test(
+  "stops npm's legacy username prompt with a clear message",
+  { skip: process.platform === "win32" && "fake tools are POSIX scripts" },
+  async () => {
+    const state = await mkdtemp(path.join(temporary, "state-"));
+    process.env.FAKE_STATE = state;
+    process.env.FAKE_LEGACY_LOGIN = "1";
+    await installFakeTools(state);
+    const plan = await npmPlan({
+      exists_on_registry: false,
+      trusted_publishing: false,
+    });
+    plan.steps = plan.steps.filter((step) =>
+      ["check-sign-in", "sign-in"].includes(step.id),
+    );
+    const started = Date.now();
+    try {
+      await assert.rejects(
+        runWithFakeTools(plan, () => ({})),
+        /browser login was not completed .* re-run the command to get a fresh login link/,
+      );
+    } finally {
+      delete process.env.FAKE_LEGACY_LOGIN;
+    }
+    assert.ok(Date.now() - started < 20_000, "the prompt is not awaited");
   },
 );
 

@@ -1,3 +1,46 @@
+import { spawn } from "node:child_process";
+
+/**
+ * The exact argument vector that opens an http(s) URL in the user's default
+ * browser: `open` on macOS, `xdg-open` on Linux and other Unix systems, and
+ * the URL protocol handler on Windows, which avoids `cmd` quoting rules.
+ */
+export function userBrowserCommand(url, platform = process.platform) {
+  if (!/^https?:\/\/\S+$/i.test(url)) {
+    throw new Error(`refusing to open a non-web URL: ${url}`);
+  }
+  if (platform === "darwin") {
+    return { program: "open", args: [url] };
+  }
+  if (platform === "win32") {
+    return { program: "rundll32", args: ["url.dll,FileProtocolHandler", url] };
+  }
+  return { program: "xdg-open", args: [url] };
+}
+
+/**
+ * Opens a URL in the user's own default browser, where they are usually
+ * already signed in. Nothing is automated. Resolves once the opener started;
+ * it is not awaited because `xdg-open` can wait for a new browser to exit.
+ */
+export function openInUserBrowser(url, platform = process.platform) {
+  const command = userBrowserCommand(url, platform);
+  return new Promise((resolve, reject) => {
+    const child = spawn(command.program, command.args, {
+      detached: true,
+      stdio: "ignore",
+      shell: false,
+    });
+    child.once("error", (error) =>
+      reject(new Error(`${command.program}: ${error.message}`)),
+    );
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
 export function npmPrefillScript(prefill, submit = false) {
   return `(() => {
   const config = ${JSON.stringify(prefill)};

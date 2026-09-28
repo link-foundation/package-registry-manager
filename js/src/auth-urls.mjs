@@ -6,7 +6,7 @@ import path from "node:path";
 /**
  * Preloaded into npm so it treats piped stdout as a terminal. npm only offers
  * web authentication (`Authenticate your account at:`) on a TTY; the tool
- * pipes stdout to find those URLs and open them in its own browser.
+ * pipes stdout to find those URLs and open them in a browser.
  */
 export const TTY_SHIM = `for (const stream of [process.stdin, process.stdout]) {
   if (!stream.isTTY) {
@@ -18,14 +18,29 @@ export const TTY_SHIM = `for (const stream of [process.stdin, process.stdout]) {
 const PROMPTS = [/^Login at:?$/i, /^Authenticate your account at:?$/i];
 const INLINE =
   /(?:Login at|Authenticate your account at):?\s+(https?:\/\/\S+)/i;
+// npm falls back to this prompt when a web login is not completed in time.
+const LEGACY_LOGIN = /^Username:/i;
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 
-/** Returns a line scanner that reports web-authentication URLs printed by npm. */
-export function authUrlScanner(onUrl) {
+const clean = (raw) => raw.replace(ANSI, "").trim();
+
+/**
+ * Returns a line scanner that reports web-authentication URLs printed by npm
+ * and, once, npm's legacy `Username:` prompt, which is printed without a
+ * trailing newline.
+ */
+export function authUrlScanner(onUrl, onLegacyLogin) {
   let pending = "";
   let expectUrl = false;
+  let legacy = false;
   const seen = new Set();
+  const detectLegacy = (line) => {
+    if (onLegacyLogin && !legacy && LEGACY_LOGIN.test(line)) {
+      legacy = true;
+      onLegacyLogin();
+    }
+  };
   const report = (url) => {
     if (!seen.has(url)) {
       seen.add(url);
@@ -33,7 +48,8 @@ export function authUrlScanner(onUrl) {
     }
   };
   const scanLine = (raw) => {
-    const line = raw.replace(ANSI, "").trim();
+    const line = clean(raw);
+    detectLegacy(line);
     const inline = INLINE.exec(line);
     if (inline) {
       report(inline[1]);
@@ -52,6 +68,7 @@ export function authUrlScanner(onUrl) {
     const lines = pending.split(/\r?\n/);
     pending = lines.pop();
     lines.forEach(scanLine);
+    detectLegacy(clean(pending));
   };
 }
 
@@ -72,7 +89,9 @@ export async function writeTtyShim() {
 /**
  * Runs an exact argument vector with the terminal's stdin and stderr, while
  * mirroring and capturing stdout. stdin stays a real terminal so masked
- * prompts (cargo login, gh secret set) keep working.
+ * prompts (cargo login, gh secret set) keep working. With
+ * `options.stopOnLegacyLogin` the command is stopped at npm's legacy
+ * `Username:` prompt and the result has `legacyLogin: true`.
  */
 export function runInteractive(command, options) {
   return new Promise((resolve, reject) => {
@@ -82,7 +101,17 @@ export function runInteractive(command, options) {
       stdio: ["inherit", "pipe", "inherit"],
       shell: false,
     });
-    const scan = options.onUrl ? authUrlScanner(options.onUrl) : null;
+    let legacyLogin = false;
+    const stop = options.stopOnLegacyLogin
+      ? () => {
+          legacyLogin = true;
+          child.kill();
+        }
+      : undefined;
+    const scan =
+      options.onUrl || stop
+        ? authUrlScanner(options.onUrl ?? (() => {}), stop)
+        : null;
     let stdout = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -95,7 +124,7 @@ export function runInteractive(command, options) {
     child.on("error", reject);
     child.on("close", (code) => {
       scan?.("\n");
-      resolve({ code: code ?? 1, stdout });
+      resolve({ code: code ?? 1, stdout, legacyLogin });
     });
   });
 }

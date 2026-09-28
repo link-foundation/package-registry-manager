@@ -27,7 +27,7 @@
     "provenance": true
   },
   "scripts": {
-    "syntax": "node --check src/cli.mjs && node --check src/index.mjs && node --check src/browser.mjs && node --check src/auth-urls.mjs && node --check src/containers.mjs && node --check src/flows.mjs && node --check src/registry-state.mjs && node --check src/workflows.mjs && node --check scripts/publish-to-npm.mjs && node --check scripts/setup-npm.mjs && node --check scripts/sanitize-npm-userconfig.mjs",
+    "syntax": "node --check src/cli.mjs && node --check src/index.mjs && node --check src/browser.mjs && node --check src/profile.mjs && node --check src/setup.mjs && node --check src/auth-urls.mjs && node --check src/containers.mjs && node --check src/flows.mjs && node --check src/registry-state.mjs && node --check src/workflows.mjs && node --check scripts/publish-to-npm.mjs && node --check scripts/setup-npm.mjs && node --check scripts/sanitize-npm-userconfig.mjs",
     "lint": "eslint src test scripts --max-warnings 0",
     "lint:fix": "eslint src test scripts --fix --max-warnings 0",
     "format": "prettier --write .",
