@@ -136,8 +136,19 @@ fn select_plan<'a>(plans: &'a [SetupPlan], package: Option<&str>) -> Result<&'a 
             .find(|plan| plan.package.name == package)
             .with_context(|| format!("package '{package}' was not found for this registry"));
     }
-    match plans {
-        [] => bail!("no matching package manifests were found"),
+    if plans.is_empty() {
+        bail!("no matching package manifests were found");
+    }
+    let publishable: Vec<&SetupPlan> = plans
+        .iter()
+        .filter(|plan| plan.package.publishable)
+        .collect();
+    let candidates: Vec<&SetupPlan> = if publishable.is_empty() {
+        plans.iter().collect()
+    } else {
+        publishable
+    };
+    match candidates.as_slice() {
         [plan] => Ok(plan),
         _ => bail!("multiple packages use this registry; select one with --package <name>"),
     }
@@ -180,6 +191,9 @@ fn output_plans(plans: &[SetupPlan], format: OutputFormat) -> Result<()> {
             let mut output = String::new();
             for plan in plans {
                 writeln!(output, "{}: {}", plan.registry, plan.package.name)?;
+                if let Some(reason) = &plan.skipped_reason {
+                    writeln!(output, "  skipped: {reason}")?;
+                }
                 for (index, step) in plan.steps.iter().enumerate() {
                     writeln!(output, "  {}. {}", index + 1, step.title)?;
                     if let Some(command) = &step.command {

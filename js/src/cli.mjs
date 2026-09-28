@@ -122,12 +122,14 @@ function selectPlan(plans, packageName) {
   if (plans.length === 0) {
     throw new Error("no matching package manifests were found");
   }
-  if (plans.length > 1) {
+  const publishable = plans.filter((plan) => plan.package.publishable);
+  const candidates = publishable.length > 0 ? publishable : plans;
+  if (candidates.length > 1) {
     throw new Error(
       "multiple packages use this registry; select one with --package <name>",
     );
   }
-  return plans[0];
+  return candidates[0];
 }
 
 function outputInspection(inspection, format) {
@@ -155,6 +157,9 @@ function outputPlans(plans, format) {
   }
   for (const plan of plans) {
     process.stdout.write(`${plan.registry}: ${plan.package.name}\n`);
+    if (plan.skipped_reason) {
+      process.stdout.write(`  skipped: ${plan.skipped_reason}\n`);
+    }
     plan.steps.forEach((step, index) => {
       process.stdout.write(`  ${index + 1}. ${step.title}\n`);
       if (step.command) {

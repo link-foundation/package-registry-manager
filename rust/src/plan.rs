@@ -23,7 +23,17 @@ pub fn build_plans_for(inspection: &Inspection, selected: &BTreeSet<Registry>) -
 }
 
 fn build_plan(inspection: &Inspection, package: &Package) -> SetupPlan {
-    let directory = package_directory(&package.manifest);
+    if !package.publishable {
+        return SetupPlan {
+            schema_version: 1,
+            registry: package.registry,
+            package: package.clone(),
+            repository: inspection.repository.clone(),
+            steps: Vec::new(),
+            trusted_publisher: None,
+            skipped_reason: Some(skipped_reason(package)),
+        };
+    }
     let command = |program: &str, args: &[&str]| CommandSpec {
         program: program.to_owned(),
         args: args.iter().map(|value| (*value).to_owned()).collect(),
@@ -191,19 +201,24 @@ fn build_plan(inspection: &Inspection, package: &Package) -> SetupPlan {
         ),
     };
 
-    let mut package = package.clone();
-    if directory != "." {
-        for step in &mut package.problems {
-            *step = format!("{step} (manifest directory: {directory})");
-        }
-    }
     SetupPlan {
         schema_version: 1,
         registry: package.registry,
-        package,
+        package: package.clone(),
         repository: inspection.repository.clone(),
         steps,
         trusted_publisher,
+        skipped_reason: None,
+    }
+}
+
+/// Explain why a package that must not be published has no setup steps.
+#[must_use]
+pub fn skipped_reason(package: &Package) -> String {
+    if package.problems.is_empty() {
+        "the manifest marks this package as not publishable".to_owned()
+    } else {
+        package.problems.join("; ")
     }
 }
 

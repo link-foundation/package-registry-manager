@@ -6,6 +6,16 @@ export function buildPlans(inspection, selected = []) {
 }
 
 function buildPlan(inspection, packageInfo) {
+  if (!packageInfo.publishable) {
+    return {
+      schema_version: 1,
+      registry: packageInfo.registry,
+      package: structuredClone(packageInfo),
+      repository: structuredClone(inspection.repository),
+      steps: [],
+      skipped_reason: skippedReason(packageInfo),
+    };
+  }
   const command = (program, args) => ({ program, args });
   const check = (id, title, description, commandSpec) => ({
     id,
@@ -166,6 +176,13 @@ function buildPlan(inspection, packageInfo) {
     plan.trusted_publisher = trustedPublisher;
   }
   return plan;
+}
+
+export function skippedReason(packageInfo) {
+  const problems = packageInfo.problems ?? [];
+  return problems.length > 0
+    ? problems.join("; ")
+    : "the manifest marks this package as not publishable";
 }
 
 export function packageDirectory(manifest) {

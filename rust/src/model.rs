@@ -154,4 +154,7 @@ pub struct SetupPlan {
     pub steps: Vec<SetupStep>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trusted_publisher: Option<TrustedPublisherPrefill>,
+    /// Why no steps were planned, for packages whose manifest forbids publishing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_reason: Option<String>,
 }
