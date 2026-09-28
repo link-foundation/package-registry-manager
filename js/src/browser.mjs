@@ -23,16 +23,19 @@ export function npmPrefillScript(prefill, submit = false) {
       control.placeholder, control.closest('label')?.textContent].filter(Boolean).join(' '));
   };
   const values = [
+    [['project'], config.project],
     [['organization', 'owner'], config.organization],
     [['repository', 'repo'], config.repository],
     [['workflow'], config.workflow],
     [['environment'], config.environment || ''],
   ];
   const filled = [];
+  const used = new Set();
   for (const [labels, value] of values) {
     if (!value) continue;
-    const control = controls.find(candidate => labels.some(label => textFor(candidate).includes(label)));
-    if (control) { setValue(control, value); filled.push(labels[0]); }
+    const control = controls.find(candidate => !used.has(candidate)
+      && labels.some(label => textFor(candidate).includes(label)));
+    if (control) { setValue(control, value); used.add(control); filled.push(labels[0]); }
   }
   const provider = Array.from(document.querySelectorAll('button, label, [role="radio"]'))
     .find(element => normalized(element.textContent).includes('github'));

@@ -12,7 +12,8 @@
       "name": "@acme/widgets",
       "version": "1.2.3",
       "manifest": "package.json",
-      "publishable": true
+      "publishable": true,
+      "workflow": "publish.yml"
     },
     {
       "registry": "crates-io",
@@ -55,6 +56,22 @@
       "version": "1.2.3",
       "manifest": "php/composer.json",
       "publishable": true
+    },
+    {
+      "registry": "docker-hub",
+      "name": "acme/widgets",
+      "version": null,
+      "manifest": "Dockerfile",
+      "publishable": true,
+      "workflow": "container.yml"
+    },
+    {
+      "registry": "ghcr",
+      "name": "acme/polyglot",
+      "version": null,
+      "manifest": "Dockerfile",
+      "publishable": true,
+      "workflow": "container.yml"
     }
   ]
 }

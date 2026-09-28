@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { inspectRepository } from "./discovery.mjs";
 import { parseRegistry } from "./model.mjs";
 import { buildPlans } from "./plan.mjs";
+import { probeRegistryState } from "./registry-state.mjs";
 import { defaultBrowserProfile, executePlan } from "./setup.mjs";
 
 const HELP = `Usage: package-registry-manager-js [global options] <command>
@@ -15,17 +16,24 @@ const HELP = `Usage: package-registry-manager-js [global options] <command>
 Commands:
   inspect                         Discover supported package manifests
   plan [--registry <registry>]    Print ordered setup plans
-  setup --registry <registry>     Validate and open registry setup
+  setup --registry <registry>     Bootstrap or attach trusted publishing
 
 Global options:
   --repository <path>             Repository to inspect (default: .)
   --format <text|json>            Output format (default: text)
+  --offline                       Do not look up packages on registries
   --verbose                       Print command details and output
+
+Plan and setup options:
+  --verify-release                Also watch the release workflow and confirm
+                                  that the next version has provenance
 
 Setup options:
   --package <name>                Select one of multiple packages
-  --execute                       Run checks and open a visible browser
-  --yes                           Confirm npm form submission
+  --dry-run                       Print the flow without running it (default)
+  --execute                       Run the flow and open a visible browser
+  --yes                           Confirm publishing, secret changes, and
+                                  form submission in advance
   --no-browser                    Print the setup URL instead
   --browser-channel <channel>     Installed browser channel (default: chrome)
   --browser-profile <path>        Dedicated automation profile
@@ -40,6 +48,9 @@ export async function main(args = process.argv.slice(2)) {
       repository: { type: "string", default: "." },
       format: { type: "string", default: "text" },
       verbose: { type: "boolean", default: false },
+      offline: { type: "boolean", default: false },
+      "verify-release": { type: "boolean", default: false },
+      "dry-run": { type: "boolean", default: false },
       registry: { type: "string", multiple: true },
       package: { type: "string" },
       execute: { type: "boolean", default: false },
@@ -62,7 +73,10 @@ export async function main(args = process.argv.slice(2)) {
   }
 
   const repository = path.resolve(values.repository);
-  const inspection = await inspectRepository(repository);
+  const discovered = await inspectRepository(repository);
+  const inspection = values.offline
+    ? discovered
+    : await probeRegistryState(discovered, { verbose: values.verbose });
   const command = positionals[0];
   if (command === "inspect") {
     outputInspection(inspection, values.format);
@@ -70,8 +84,9 @@ export async function main(args = process.argv.slice(2)) {
   }
 
   const registries = (values.registry ?? []).map(parseRegistry);
+  const planOptions = { verifyRelease: values["verify-release"] };
   if (command === "plan") {
-    const plans = buildPlans(inspection, registries);
+    const plans = buildPlans(inspection, registries, planOptions);
     if (plans.length === 0) {
       throw new Error("no matching package manifests were found");
     }
@@ -84,6 +99,9 @@ export async function main(args = process.argv.slice(2)) {
   if (registries.length !== 1) {
     throw new Error("setup requires exactly one --registry <registry>");
   }
+  if (values["dry-run"] && values.execute) {
+    throw new Error("--dry-run and --execute are mutually exclusive");
+  }
   if (values.yes && !values.execute) {
     throw new Error("--yes requires --execute");
   }
@@ -91,7 +109,7 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error("--no-browser requires --execute");
   }
 
-  const plans = buildPlans(inspection, registries);
+  const plans = buildPlans(inspection, registries, planOptions);
   const plan = selectPlan(plans, values.package);
   outputPlans([plan], values.format);
   await executePlan(plan, {
@@ -104,6 +122,7 @@ export async function main(args = process.argv.slice(2)) {
       values["browser-profile"] ?? defaultBrowserProfile(repository),
     ),
     verbose: values.verbose,
+    verifyRelease: values["verify-release"],
   });
 }
 
@@ -122,12 +141,14 @@ function selectPlan(plans, packageName) {
   if (plans.length === 0) {
     throw new Error("no matching package manifests were found");
   }
-  if (plans.length > 1) {
+  const publishable = plans.filter((plan) => plan.package.publishable);
+  const candidates = publishable.length > 0 ? publishable : plans;
+  if (candidates.length > 1) {
     throw new Error(
       "multiple packages use this registry; select one with --package <name>",
     );
   }
-  return plans[0];
+  return candidates[0];
 }
 
 function outputInspection(inspection, format) {
@@ -140,11 +161,24 @@ function outputInspection(inspection, format) {
     process.stdout.write("No supported package manifests found.\n");
   }
   for (const packageInfo of inspection.packages) {
+    const details = [
+      packageInfo.manifest,
+      packageInfo.publishable ? "publishable" : "not publishable",
+    ];
+    if (packageInfo.exists_on_registry !== undefined) {
+      details.push(
+        packageInfo.exists_on_registry ? "published" : "not published yet",
+      );
+    }
+    if (packageInfo.trusted_publishing) {
+      details.push("trusted publishing");
+    }
     process.stdout.write(
-      `- ${packageInfo.registry}: ${packageInfo.name} (${packageInfo.manifest}, ${
-        packageInfo.publishable ? "publishable" : "not publishable"
-      })\n`,
+      `- ${packageInfo.registry}: ${packageInfo.name} (${details.join(", ")})\n`,
     );
+    for (const warning of packageInfo.warnings ?? []) {
+      process.stdout.write(`  warning: ${warning}\n`);
+    }
   }
 }
 
@@ -154,12 +188,21 @@ function outputPlans(plans, format) {
     return;
   }
   for (const plan of plans) {
-    process.stdout.write(`${plan.registry}: ${plan.package.name}\n`);
+    const mode = plan.mode ? ` (${plan.mode})` : "";
+    process.stdout.write(`${plan.registry}: ${plan.package.name}${mode}\n`);
+    if (plan.mode === "complete") {
+      process.stdout.write("  trusted publishing is already in use\n");
+    }
+    if (plan.skipped_reason) {
+      process.stdout.write(`  skipped: ${plan.skipped_reason}\n`);
+    }
     plan.steps.forEach((step, index) => {
-      process.stdout.write(`  ${index + 1}. ${step.title}\n`);
+      const when = step.when ? ` [when ${step.when}]` : "";
+      process.stdout.write(`  ${index + 1}. ${step.title}${when}\n`);
       if (step.command) {
+        const cwd = step.cwd && step.cwd !== "." ? `(in ${step.cwd}) ` : "";
         process.stdout.write(
-          `     $ ${step.command.program} ${step.command.args.join(" ")}\n`,
+          `     $ ${cwd}${step.command.program} ${step.command.args.join(" ")}\n`,
         );
       }
       if (step.url) {

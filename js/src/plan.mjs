@@ -1,11 +1,38 @@
-export function buildPlans(inspection, selected = []) {
+import {
+  BOOTSTRAP_CONDITIONS,
+  cratesFlow,
+  dockerHubFlow,
+  ghcrFlow,
+  npmFlow,
+  pypiFlow,
+} from "./flows.mjs";
+
+const FLOWS = new Map([
+  ["npm", npmFlow],
+  ["crates-io", cratesFlow],
+  ["pypi", pypiFlow],
+  ["docker-hub", dockerHubFlow],
+  ["ghcr", ghcrFlow],
+]);
+
+/**
+ * Builds one setup plan per package. `options.verifyRelease` appends the
+ * release-verification steps to flows that support them.
+ */
+export function buildPlans(inspection, selected = [], options = {}) {
   const registries = new Set(selected);
   return inspection.packages
     .filter((item) => registries.size === 0 || registries.has(item.registry))
-    .map((item) => buildPlan(inspection, item));
+    .map((item) => buildPlan(inspection, item, options));
 }
 
-function buildPlan(inspection, packageInfo) {
+function buildPlan(inspection, packageInfo, options) {
+  if (!packageInfo.publishable) {
+    return {
+      ...basePlan(inspection, packageInfo, []),
+      skipped_reason: skippedReason(packageInfo),
+    };
+  }
   const command = (program, args) => ({ program, args });
   const check = (id, title, description, commandSpec) => ({
     id,
@@ -22,69 +49,14 @@ function buildPlan(inspection, packageInfo) {
     url,
   });
   let steps;
-  let trustedPublisher;
 
   switch (packageInfo.registry) {
     case "npm":
-      steps = [
-        check(
-          "validate-package",
-          "Validate npm metadata",
-          "Read the package metadata with npm before changing registry settings.",
-          command("npm", ["pkg", "get", "name", "version", "repository"]),
-        ),
-        browser(
-          "configure-trusted-publisher",
-          "Configure npm trusted publishing",
-          "Sign in in the isolated browser profile, review the prefilled GitHub Actions identity, and explicitly confirm submission.",
-          `https://www.npmjs.com/package/${urlPathSegment(packageInfo.name)}/access`,
-        ),
-      ];
-      if (
-        inspection.repository.github_owner &&
-        inspection.repository.github_repository &&
-        inspection.repository.release_workflow
-      ) {
-        trustedPublisher = {
-          provider: "github-actions",
-          organization: inspection.repository.github_owner,
-          repository: inspection.repository.github_repository,
-          workflow: inspection.repository.release_workflow,
-        };
-      }
-      break;
     case "crates-io":
-      steps = [
-        check(
-          "validate-package",
-          "Validate the crate",
-          "Package the crate without uploading it.",
-          command("cargo", ["publish", "--dry-run"]),
-        ),
-        browser(
-          "review-account",
-          "Review crates.io account settings",
-          "Sign in with GitHub and review API-token or trusted-publishing settings. The tool never creates or prints a token.",
-          "https://crates.io/settings/tokens",
-        ),
-      ];
-      break;
     case "pypi":
-      steps = [
-        check(
-          "build-package",
-          "Build the Python distribution",
-          "Build source and wheel distributions locally.",
-          command("python", ["-m", "build"]),
-        ),
-        browser(
-          "configure-trusted-publisher",
-          "Configure a PyPI trusted publisher",
-          "Sign in and add the repository's GitHub Actions workflow as a trusted publisher.",
-          `https://pypi.org/manage/project/${urlPathSegment(packageInfo.name)}/settings/publishing/`,
-        ),
-      ];
-      break;
+    case "docker-hub":
+    case "ghcr":
+      return flowPlan(inspection, packageInfo, options);
     case "go-modules":
       steps = [
         check(
@@ -155,24 +127,85 @@ function buildPlan(inspection, packageInfo) {
       throw new Error(`no setup plan for registry ${packageInfo.registry}`);
   }
 
-  const plan = {
+  return basePlan(inspection, packageInfo, steps);
+}
+
+function basePlan(inspection, packageInfo, steps) {
+  return {
     schema_version: 1,
     registry: packageInfo.registry,
     package: structuredClone(packageInfo),
     repository: structuredClone(inspection.repository),
     steps,
   };
-  if (trustedPublisher) {
-    plan.trusted_publisher = trustedPublisher;
+}
+
+function flowPlan(inspection, packageInfo, options) {
+  const { github_owner, github_repository } = inspection.repository;
+  const slug =
+    github_owner && github_repository
+      ? `${github_owner}/${github_repository}`
+      : null;
+  const workflow =
+    packageInfo.workflow ?? inspection.repository.release_workflow;
+  const context = {
+    directory: packageDirectory(packageInfo.manifest),
+    slug,
+    workflow,
+    verifyRelease: Boolean(options.verifyRelease),
+  };
+  const mode = planMode(packageInfo);
+  let steps = FLOWS.get(packageInfo.registry)(packageInfo, context);
+  if (mode === "complete") {
+    steps = [];
+  } else if (mode === "attach") {
+    steps = steps.filter((item) => !BOOTSTRAP_CONDITIONS.has(item.when));
+  }
+  const plan = basePlan(inspection, packageInfo, steps);
+  if (mode) {
+    plan.mode = mode;
+  }
+  if (
+    slug &&
+    workflow &&
+    ["npm", "crates-io", "pypi"].includes(packageInfo.registry)
+  ) {
+    plan.trusted_publisher = {
+      provider: "github-actions",
+      organization: github_owner,
+      repository: github_repository,
+      workflow,
+    };
+    if (packageInfo.registry === "pypi") {
+      plan.trusted_publisher.project = packageInfo.name;
+    }
   }
   return plan;
+}
+
+/**
+ * Chooses `bootstrap` for a package missing from its registry, `attach` for
+ * one without trusted publishing, and `complete` when nothing is left to do.
+ * Unknown registry state leaves the mode unset.
+ */
+export function planMode(packageInfo) {
+  if (packageInfo.exists_on_registry === false) {
+    return "bootstrap";
+  }
+  if (packageInfo.exists_on_registry !== true) {
+    return null;
+  }
+  return packageInfo.trusted_publishing === true ? "complete" : "attach";
+}
+
+export function skippedReason(packageInfo) {
+  const problems = packageInfo.problems ?? [];
+  return problems.length > 0
+    ? problems.join("; ")
+    : "the manifest marks this package as not publishable";
 }
 
 export function packageDirectory(manifest) {
   const separator = manifest.lastIndexOf("/");
   return separator === -1 ? "." : manifest.slice(0, separator);
-}
-
-function urlPathSegment(value) {
-  return encodeURIComponent(value).replaceAll("%40", "@");
 }

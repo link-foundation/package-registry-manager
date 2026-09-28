@@ -39,7 +39,7 @@ test("discovers each maintained package registry", async () => {
     [...new Set(inspection.packages.map((item) => item.registry))].sort(),
     [...REGISTRIES].sort(),
   );
-  assert.equal(inspection.packages.length, 7);
+  assert.equal(inspection.packages.length, 9);
   assert.equal(inspection.repository.github_owner, "acme");
   assert.equal(inspection.repository.github_repository, "polyglot");
   assert.equal(inspection.repository.release_workflow, "publish.yml");
@@ -66,7 +66,7 @@ test("prefills npm trusted-publisher identity", async () => {
     workflow: "publish.yml",
   });
   assert.equal(
-    npm.steps.find((step) => step.kind === "browser").url,
+    npm.steps.find((step) => step.id === "configure-trusted-publisher").url,
     "https://www.npmjs.com/package/@acme%2Fwidgets/access",
   );
   const repeatedAt = structuredClone(inspection);
@@ -75,7 +75,7 @@ test("prefills npm trusted-publisher identity", async () => {
   assert.equal(
     buildPlans(repeatedAt)
       .find((plan) => plan.registry === "npm")
-      .steps.at(-1).url,
+      .steps.find((step) => step.id === "configure-trusted-publisher").url,
     "https://www.npmjs.com/package/@acme%2F@widgets/access",
   );
   const script = npmPrefillScript(npm.trusted_publisher);
@@ -83,7 +83,7 @@ test("prefills npm trusted-publisher identity", async () => {
   assert.doesNotThrow(() => new Function(`return ${script}`));
 });
 
-test("never plans an artifact upload", async () => {
+test("publishes only to bootstrap a missing package, after confirmation", async () => {
   const inspection = await inspectRepository(repository);
   for (const plan of buildPlans(inspection)) {
     for (const step of plan.steps) {
@@ -91,8 +91,26 @@ test("never plans an artifact upload", async () => {
         continue;
       }
       const rendered = `${step.command.program} ${step.command.args.join(" ")}`;
-      assert.notEqual(rendered, "npm publish");
-      assert.notEqual(rendered, "cargo publish");
+      if (
+        /^(npm|cargo) publish\b|^twine upload\b/.test(rendered) &&
+        !rendered.includes("--dry-run")
+      ) {
+        assert.equal(step.id, "first-publish", rendered);
+        assert.equal(step.when, "package-missing", rendered);
+        assert.equal(step.confirm, true, rendered);
+      }
     }
+  }
+  const complete = structuredClone(inspection);
+  for (const item of complete.packages) {
+    item.exists_on_registry = true;
+    item.trusted_publishing = true;
+  }
+  for (const plan of buildPlans(complete)) {
+    assert.equal(
+      plan.steps.some((step) => step.id === "first-publish"),
+      false,
+      plan.registry,
+    );
   }
 });

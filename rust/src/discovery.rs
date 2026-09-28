@@ -6,7 +6,9 @@ use regex::Regex;
 use serde_json::Value as JsonValue;
 use toml::Value as TomlValue;
 
+use crate::containers::{container_packages, CONTAINER_FILES};
 use crate::model::{Inspection, Package, Registry, RepositoryInfo};
+use crate::workflows::{publishing_workflow, read_workflows, release_workflow, Workflow};
 
 const IGNORED_DIRECTORIES: &[&str] = &[
     ".git",
@@ -23,17 +25,31 @@ pub fn inspect_repository(root: &Path) -> Result<Inspection> {
         .canonicalize()
         .with_context(|| format!("repository does not exist: {}", root.display()))?;
     let mut manifests = Vec::new();
-    collect_manifests(&root, &mut manifests)?;
+    let mut dockerfiles = Vec::new();
+    collect_manifests(&root, &mut manifests, &mut dockerfiles)?;
     manifests.sort();
     manifests.retain(|path| {
         path.file_name().and_then(|name| name.to_str()) != Some("setup.py")
             || !path.with_file_name("pyproject.toml").is_file()
     });
 
+    let (github_owner, github_repository) = github_coordinates(&root, &manifests)?;
+    let workflows = read_workflows(&root)?;
     let mut packages = manifests
         .iter()
         .filter_map(|path| parse_manifest(path, &root).transpose())
+        .map(|item| item.map(|item| with_workflow(item, &workflows)))
         .collect::<Result<Vec<_>>>()?;
+    let dockerfiles = dockerfiles
+        .iter()
+        .map(|path| relative_path(path, &root))
+        .collect::<Vec<_>>();
+    packages.extend(container_packages(
+        &dockerfiles,
+        &workflows,
+        github_owner.as_deref(),
+        github_repository.as_deref(),
+    ));
     packages.sort_by(|left, right| {
         (left.registry, &left.manifest, &left.name).cmp(&(
             right.registry,
@@ -41,21 +57,31 @@ pub fn inspect_repository(root: &Path) -> Result<Inspection> {
             &right.name,
         ))
     });
-
-    let (github_owner, github_repository) = github_coordinates(&root, &manifests)?;
     Ok(Inspection {
         schema_version: 1,
         repository: RepositoryInfo {
             root: root.to_string_lossy().into_owned(),
             github_owner,
             github_repository,
-            release_workflow: release_workflow(&root)?,
+            release_workflow: release_workflow(&workflows),
         },
         packages,
     })
 }
 
-fn collect_manifests(directory: &Path, manifests: &mut Vec<PathBuf>) -> Result<()> {
+fn with_workflow(mut item: Package, workflows: &[Workflow]) -> Package {
+    if item.publishable {
+        item.workflow =
+            publishing_workflow(workflows, item.registry).map(|workflow| workflow.name.clone());
+    }
+    item
+}
+
+fn collect_manifests(
+    directory: &Path,
+    manifests: &mut Vec<PathBuf>,
+    dockerfiles: &mut Vec<PathBuf>,
+) -> Result<()> {
     let mut entries = fs::read_dir(directory)
         .with_context(|| format!("cannot read {}", directory.display()))?
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -65,8 +91,10 @@ fn collect_manifests(directory: &Path, manifests: &mut Vec<PathBuf>) -> Result<(
         let path = entry.path();
         if path.is_dir() {
             if !IGNORED_DIRECTORIES.contains(&entry.file_name().to_string_lossy().as_ref()) {
-                collect_manifests(&path, manifests)?;
+                collect_manifests(&path, manifests, dockerfiles)?;
             }
+        } else if CONTAINER_FILES.contains(&entry.file_name().to_string_lossy().as_ref()) {
+            dockerfiles.push(path);
         } else if is_manifest(&path) {
             manifests.push(path);
         }
@@ -130,21 +158,20 @@ fn parse_npm(contents: &str, manifest: String) -> Result<Option<Package>> {
     let Some(name) = value.get("name").and_then(JsonValue::as_str) else {
         return Ok(None);
     };
-    let publishable = !value
+    let package = Package::new(
+        Registry::Npm,
+        name.to_owned(),
+        json_string(&value, "version"),
+        manifest,
+    );
+    let private = value
         .get("private")
         .and_then(JsonValue::as_bool)
         .unwrap_or(false);
-    Ok(Some(Package {
-        registry: Registry::Npm,
-        name: name.to_owned(),
-        version: json_string(&value, "version"),
-        manifest,
-        publishable,
-        problems: if publishable {
-            Vec::new()
-        } else {
-            vec!["package.json marks this package as private".to_owned()]
-        },
+    Ok(Some(if private {
+        package.unpublishable("package.json marks this package as private")
+    } else {
+        package
     }))
 }
 
@@ -157,22 +184,22 @@ fn parse_cargo(contents: &str, manifest: String) -> Result<Option<Package>> {
     let Some(name) = package.get("name").and_then(TomlValue::as_str) else {
         return Ok(None);
     };
-    let publishable = !matches!(package.get("publish"), Some(TomlValue::Boolean(false)));
-    Ok(Some(Package {
-        registry: Registry::CratesIo,
-        name: name.to_owned(),
-        version: package
+    let item = Package::new(
+        Registry::CratesIo,
+        name.to_owned(),
+        package
             .get("version")
             .and_then(TomlValue::as_str)
             .map(str::to_owned),
         manifest,
-        publishable,
-        problems: if publishable {
-            Vec::new()
+    );
+    Ok(Some(
+        if matches!(package.get("publish"), Some(TomlValue::Boolean(false))) {
+            item.unpublishable("Cargo.toml disables publishing")
         } else {
-            vec!["Cargo.toml disables publishing".to_owned()]
+            item
         },
-    }))
+    ))
 }
 
 fn parse_pyproject(contents: &str, manifest: String) -> Result<Option<Package>> {
@@ -187,29 +214,25 @@ fn parse_pyproject(contents: &str, manifest: String) -> Result<Option<Package>> 
     let Some(name) = metadata.get("name").and_then(TomlValue::as_str) else {
         return Ok(None);
     };
-    Ok(Some(Package {
-        registry: Registry::PyPi,
-        name: name.to_owned(),
-        version: metadata
+    Ok(Some(Package::new(
+        Registry::PyPi,
+        name.to_owned(),
+        metadata
             .get("version")
             .and_then(TomlValue::as_str)
             .map(str::to_owned),
         manifest,
-        publishable: true,
-        problems: Vec::new(),
-    }))
+    )))
 }
 
 fn parse_setup_py(contents: &str, manifest: String) -> Package {
-    Package {
-        registry: Registry::PyPi,
-        name: regex_capture(contents, r#"(?m)\bname\s*=\s*['\"]([^'\"]+)"#)
+    Package::new(
+        Registry::PyPi,
+        regex_capture(contents, r#"(?m)\bname\s*=\s*['\"]([^'\"]+)"#)
             .unwrap_or_else(|| "unknown-python-package".to_owned()),
-        version: regex_capture(contents, r#"(?m)\bversion\s*=\s*['\"]([^'\"]+)"#),
+        regex_capture(contents, r#"(?m)\bversion\s*=\s*['\"]([^'\"]+)"#),
         manifest,
-        publishable: true,
-        problems: Vec::new(),
-    }
+    )
 }
 
 fn parse_go(contents: &str, manifest: String) -> Package {
@@ -218,14 +241,7 @@ fn parse_go(contents: &str, manifest: String) -> Package {
         .find_map(|line| line.trim().strip_prefix("module "))
         .map_or("unknown-go-module", str::trim)
         .to_owned();
-    Package {
-        registry: Registry::GoModules,
-        name,
-        version: None,
-        manifest,
-        publishable: true,
-        problems: Vec::new(),
-    }
+    Package::new(Registry::GoModules, name, None, manifest)
 }
 
 fn parse_dotnet(contents: &str, path: &Path, manifest: String) -> Package {
@@ -234,30 +250,26 @@ fn parse_dotnet(contents: &str, path: &Path, manifest: String) -> Package {
         .and_then(|stem| stem.to_str())
         .unwrap_or("unknown-dotnet-package")
         .to_owned();
-    Package {
-        registry: Registry::NuGet,
-        name: xml_tag(contents, "PackageId")
+    Package::new(
+        Registry::NuGet,
+        xml_tag(contents, "PackageId")
             .or_else(|| xml_tag(contents, "AssemblyName"))
             .unwrap_or(fallback),
-        version: xml_tag(contents, "PackageVersion").or_else(|| xml_tag(contents, "Version")),
+        xml_tag(contents, "PackageVersion").or_else(|| xml_tag(contents, "Version")),
         manifest,
-        publishable: true,
-        problems: Vec::new(),
-    }
+    )
 }
 
 fn parse_maven(contents: &str, manifest: String) -> Package {
     let artifact =
         xml_tag(contents, "artifactId").unwrap_or_else(|| "unknown-maven-artifact".to_owned());
     let group = xml_tag(contents, "groupId");
-    Package {
-        registry: Registry::MavenCentral,
-        name: group.map_or_else(|| artifact.clone(), |group| format!("{group}:{artifact}")),
-        version: xml_tag(contents, "version"),
+    Package::new(
+        Registry::MavenCentral,
+        group.map_or_else(|| artifact.clone(), |group| format!("{group}:{artifact}")),
+        xml_tag(contents, "version"),
         manifest,
-        publishable: true,
-        problems: Vec::new(),
-    }
+    )
 }
 
 fn parse_gradle(contents: &str, manifest: String) -> Package {
@@ -267,14 +279,12 @@ fn parse_gradle(contents: &str, manifest: String) -> Package {
         r#"(?m)^\s*(?:archivesBaseName|rootProject\.name)\s*=\s*['\"]([^'\"]+)"#,
     )
     .unwrap_or_else(|| "gradle-project".to_owned());
-    Package {
-        registry: Registry::MavenCentral,
-        name: group.map_or_else(|| artifact.clone(), |group| format!("{group}:{artifact}")),
-        version: regex_capture(contents, r#"(?m)^\s*version\s*=\s*['\"]([^'\"]+)"#),
+    Package::new(
+        Registry::MavenCentral,
+        group.map_or_else(|| artifact.clone(), |group| format!("{group}:{artifact}")),
+        regex_capture(contents, r#"(?m)^\s*version\s*=\s*['\"]([^'\"]+)"#),
         manifest,
-        publishable: true,
-        problems: Vec::new(),
-    }
+    )
 }
 
 fn parse_composer(contents: &str, manifest: String) -> Result<Option<Package>> {
@@ -283,14 +293,12 @@ fn parse_composer(contents: &str, manifest: String) -> Result<Option<Package>> {
     let Some(name) = value.get("name").and_then(JsonValue::as_str) else {
         return Ok(None);
     };
-    Ok(Some(Package {
-        registry: Registry::Packagist,
-        name: name.to_owned(),
-        version: json_string(&value, "version"),
+    Ok(Some(Package::new(
+        Registry::Packagist,
+        name.to_owned(),
+        json_string(&value, "version"),
         manifest,
-        publishable: true,
-        problems: Vec::new(),
-    }))
+    )))
 }
 
 fn json_string(value: &JsonValue, key: &str) -> Option<String> {
@@ -384,32 +392,4 @@ fn parse_github_url(remote: &str) -> Option<(Option<String>, Option<String>)> {
         parts.next().map(str::to_owned),
         parts.next().map(str::to_owned),
     ))
-}
-
-fn release_workflow(root: &Path) -> Result<Option<String>> {
-    let directory = root.join(".github/workflows");
-    let Ok(entries) = fs::read_dir(directory) else {
-        return Ok(None);
-    };
-    let mut candidates = entries.collect::<std::io::Result<Vec<_>>>()?;
-    candidates.sort_by_key(std::fs::DirEntry::file_name);
-    let mut fallback = None;
-    for entry in candidates {
-        let path = entry.path();
-        if !matches!(
-            path.extension().and_then(|value| value.to_str()),
-            Some("yml" | "yaml")
-        ) {
-            continue;
-        }
-        let filename = entry.file_name().to_string_lossy().into_owned();
-        let contents = fs::read_to_string(path)?;
-        if contents.contains("npm publish") || contents.contains("npm stage publish") {
-            return Ok(Some(filename));
-        }
-        if fallback.is_none() && filename.contains("release") {
-            fallback = Some(filename);
-        }
-    }
-    Ok(fallback)
 }

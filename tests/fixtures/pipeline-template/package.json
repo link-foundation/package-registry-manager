@@ -1,0 +1,8 @@
+{
+  "name": "pipeline-app",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/acme/pipeline-app.git"
+  }
+}

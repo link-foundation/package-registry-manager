@@ -19,6 +19,7 @@ export default [
         Buffer: "readonly",
         fetch: "readonly",
         URL: "readonly",
+        AbortSignal: "readonly",
         structuredClone: "readonly",
         setTimeout: "readonly",
         clearTimeout: "readonly",

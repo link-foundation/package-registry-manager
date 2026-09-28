@@ -22,10 +22,14 @@ pub enum Registry {
     MavenCentral,
     #[serde(rename = "packagist")]
     Packagist,
+    #[serde(rename = "docker-hub")]
+    DockerHub,
+    #[serde(rename = "ghcr")]
+    Ghcr,
 }
 
 impl Registry {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Npm,
         Self::CratesIo,
         Self::PyPi,
@@ -33,6 +37,8 @@ impl Registry {
         Self::NuGet,
         Self::MavenCentral,
         Self::Packagist,
+        Self::DockerHub,
+        Self::Ghcr,
     ];
 
     #[must_use]
@@ -45,6 +51,8 @@ impl Registry {
             Self::NuGet => "NuGet",
             Self::MavenCentral => "Maven Central",
             Self::Packagist => "Packagist",
+            Self::DockerHub => "Docker Hub",
+            Self::Ghcr => "GitHub Container Registry",
         }
     }
 }
@@ -59,6 +67,8 @@ impl fmt::Display for Registry {
             Self::NuGet => "nuget",
             Self::MavenCentral => "maven-central",
             Self::Packagist => "packagist",
+            Self::DockerHub => "docker-hub",
+            Self::Ghcr => "ghcr",
         })
     }
 }
@@ -76,13 +86,16 @@ impl FromStr for Registry {
             "dotnet" | "nuget" => Ok(Self::NuGet),
             "java" | "maven" | "maven-central" => Ok(Self::MavenCentral),
             "composer" | "php" | "packagist" => Ok(Self::Packagist),
+            "docker" | "dockerhub" | "docker-hub" | "docker-io" => Ok(Self::DockerHub),
+            "ghcr" | "ghcr-io" | "github-container-registry" => Ok(Self::Ghcr),
             _ => bail!(
-                "unsupported registry '{value}'; expected npm, crates-io, pypi, go-modules, nuget, maven-central, or packagist"
+                "unsupported registry '{value}'; expected npm, crates-io, pypi, go-modules, nuget, maven-central, packagist, docker-hub, or ghcr"
             ),
         }
     }
 }
 
+/// A package discovered in a repository, with its registry state when probed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Package {
     pub registry: Registry,
@@ -92,6 +105,50 @@ pub struct Package {
     pub publishable: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<String>,
+    /// Non-fatal findings, such as a GHCR workflow without `packages: write`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    /// The GitHub Actions workflow file that publishes this package.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
+    /// Whether the registry already has the package; unset when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exists_on_registry: Option<bool>,
+    /// Whether the latest release came through trusted publishing; unset when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_publishing: Option<bool>,
+}
+
+impl Package {
+    /// Create a publishable package with no problems and unknown registry state.
+    #[must_use]
+    pub const fn new(
+        registry: Registry,
+        name: String,
+        version: Option<String>,
+        manifest: String,
+    ) -> Self {
+        Self {
+            registry,
+            name,
+            version,
+            manifest,
+            publishable: true,
+            problems: Vec::new(),
+            warnings: Vec::new(),
+            workflow: None,
+            exists_on_registry: None,
+            trusted_publishing: None,
+        }
+    }
+
+    /// Mark the package as not publishable for the given reason.
+    #[must_use]
+    pub fn unpublishable(mut self, problem: impl Into<String>) -> Self {
+        self.publishable = false;
+        self.problems.push(problem.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +170,8 @@ pub struct Inspection {
 #[serde(rename_all = "kebab-case")]
 pub enum StepKind {
     Check,
+    Command,
+    Wait,
     Browser,
     Manual,
 }
@@ -133,6 +192,93 @@ pub struct SetupStep {
     pub command: Option<CommandSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Condition that must hold for the step to run, such as `package-missing`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    /// Working directory; `{worktree}` is the temporary release checkout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Ask before running, because the step publishes or changes secrets.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub confirm: bool,
+}
+
+impl SetupStep {
+    /// Create a step with no command, URL, condition, or working directory.
+    #[must_use]
+    pub fn new(id: &str, title: &str, kind: StepKind, description: impl Into<String>) -> Self {
+        Self {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            kind,
+            description: description.into(),
+            command: None,
+            url: None,
+            when: None,
+            cwd: None,
+            confirm: false,
+        }
+    }
+
+    /// Attach an exact argument vector.
+    #[must_use]
+    pub fn command(mut self, program: &str, args: &[&str]) -> Self {
+        self.command = Some(CommandSpec {
+            program: program.to_owned(),
+            args: args.iter().map(|value| (*value).to_owned()).collect(),
+        });
+        self
+    }
+
+    /// Attach a URL.
+    #[must_use]
+    pub fn url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
+        self
+    }
+
+    /// Run the step only while the condition holds.
+    #[must_use]
+    pub fn when(mut self, condition: &str) -> Self {
+        self.when = Some(condition.to_owned());
+        self
+    }
+
+    /// Run the step in the given directory.
+    #[must_use]
+    pub fn cwd(mut self, cwd: impl Into<String>) -> Self {
+        self.cwd = Some(cwd.into());
+        self
+    }
+
+    /// Ask for confirmation before running the step.
+    #[must_use]
+    pub const fn confirmed(mut self) -> Self {
+        self.confirm = true;
+        self
+    }
+}
+
+/// What a setup plan does for a package, given its registry state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlanMode {
+    /// The package is missing: publish it once, then attach trusted publishing.
+    Bootstrap,
+    /// The package exists without trusted publishing: attach it.
+    Attach,
+    /// Trusted publishing is already in use: nothing to do.
+    Complete,
+}
+
+impl fmt::Display for PlanMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Bootstrap => "bootstrap",
+            Self::Attach => "attach",
+            Self::Complete => "complete",
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +289,9 @@ pub struct TrustedPublisherPrefill {
     pub workflow: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
+    /// `PyPI` project name for pending publishers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,6 +301,12 @@ pub struct SetupPlan {
     pub package: Package,
     pub repository: RepositoryInfo,
     pub steps: Vec<SetupStep>,
+    /// Bootstrap, attach, or complete; unset when the registry state is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<PlanMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trusted_publisher: Option<TrustedPublisherPrefill>,
+    /// Why no steps were planned, for packages whose manifest forbids publishing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_reason: Option<String>,
 }
