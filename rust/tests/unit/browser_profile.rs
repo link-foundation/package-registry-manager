@@ -1,9 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
 
-use package_registry_manager::auth_urls::{run_interactive, AuthUrlScanner};
+use package_registry_manager::auth_urls::AuthUrlScanner;
 use package_registry_manager::browser::user_browser_command;
 use package_registry_manager::model::CommandSpec;
 use package_registry_manager::profile::{
@@ -192,6 +191,9 @@ fn detects_the_legacy_username_prompt_without_a_newline() {
 #[cfg(unix)]
 #[tokio::test]
 async fn stops_npm_at_its_legacy_username_prompt() {
+    use package_registry_manager::auth_urls::run_interactive;
+    use std::time::{Duration, Instant};
+
     let temporary = tempfile::tempdir().expect("temporary directory");
     let command = CommandSpec {
         program: "sh".to_owned(),
