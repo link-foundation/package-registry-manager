@@ -5,6 +5,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
+import { parseBrowserOptions } from "./browser-options.mjs";
 import { inspectRepository } from "./discovery.mjs";
 import { parseRegistry } from "./model.mjs";
 import { buildPlans } from "./plan.mjs";
@@ -39,9 +40,27 @@ Setup options:
   --browser <default|automated>   Open sign-in and approval pages in your
                                   default browser, or in the automated
                                   profile too (default: default)
-  --browser-channel <channel>     Installed browser channel (default: chrome)
+  --browser-channel <channel>     Installed browser channel: chrome, chromium,
+                                  brave, msedge, msedge-beta, msedge-dev, or
+                                  msedge-canary (default: chrome)
+  --browser-executable <path>     Installed browser executable to launch
+                                  instead of the channel's
   --browser-profile <path>        Dedicated automation profile, used to fill
                                   forms (default: per-user state directory)
+  --browser-import <browser>[:<profile>]
+                                  Copy cookies, history, and other data from
+                                  your chrome, edge, brave, or firefox profile
+                                  into the automated profile first
+  --browser-attach <mode>         Fill forms in your own browser instead:
+                                  snapshot[:<profile>] launches a temporary
+                                  copy of your profile, extension drives your
+                                  running browser through the Browser
+                                  Commander extension
+  --browser-pref <key=value>      Browser preference for the automated
+                                  profile, such as intl.accept_languages=en;
+                                  may be repeated
+  --browser-restriction <name>    Launch restriction or preset, such as
+                                  no-extensions; may be repeated
 `;
 
 export async function main(args = process.argv.slice(2)) {
@@ -64,6 +83,11 @@ export async function main(args = process.argv.slice(2)) {
       browser: { type: "string", default: "default" },
       "browser-channel": { type: "string", default: "chrome" },
       "browser-profile": { type: "string" },
+      "browser-executable": { type: "string" },
+      "browser-import": { type: "string" },
+      "browser-attach": { type: "string" },
+      "browser-pref": { type: "string", multiple: true },
+      "browser-restriction": { type: "string", multiple: true },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -80,6 +104,15 @@ export async function main(args = process.argv.slice(2)) {
   if (!BROWSER_MODES.includes(values.browser)) {
     throw new Error("--browser must be 'default' or 'automated'");
   }
+  const browserOptions = parseBrowserOptions({
+    channel: values["browser-channel"],
+    executable: values["browser-executable"],
+    importFrom: values["browser-import"],
+    attach: values["browser-attach"],
+    preferences: values["browser-pref"],
+    restrictions: values["browser-restriction"],
+    profileGiven: values["browser-profile"] !== undefined,
+  });
 
   const repository = path.resolve(values.repository);
   const discovered = await inspectRepository(repository);
@@ -109,7 +142,7 @@ export async function main(args = process.argv.slice(2)) {
   const planOptions = {
     verifyRelease: values["verify-release"],
     environment,
-    browser: browserSummary(command, values),
+    browser: browserSummary(command, values, browserOptions),
   };
   if (command === "plan") {
     const plans = buildPlans(inspection, registries, planOptions);
@@ -141,7 +174,7 @@ export async function main(args = process.argv.slice(2)) {
     yes: values.yes,
     noBrowser: values["no-browser"],
     browser: values.browser,
-    browserChannel: values["browser-channel"],
+    browserOptions,
     browserProfile: path.resolve(
       values["browser-profile"] ?? defaultBrowserProfile(),
     ),
@@ -150,17 +183,22 @@ export async function main(args = process.argv.slice(2)) {
   });
 }
 
-function browserSummary(command, values) {
+function browserSummary(command, values, browserOptions) {
   if (command === "setup" && values["no-browser"]) {
     return { mode: "none" };
   }
+  if (command !== "setup") {
+    return { mode: "default", channel: values["browser-channel"] };
+  }
   return {
-    mode: command === "setup" ? values.browser : "default",
-    channel: values["browser-channel"],
+    mode: values.browser,
+    channel: browserOptions.channel,
     profile:
-      command === "setup" && values.browser === "automated"
+      values.browser === "automated" && !browserOptions.attach
         ? path.resolve(values["browser-profile"] ?? defaultBrowserProfile())
         : undefined,
+    import: browserOptions.import ?? undefined,
+    attach: browserOptions.attach ?? undefined,
   };
 }
 

@@ -1,5 +1,6 @@
 import { exec } from "command-stream";
 
+import { automatedDescription } from "./browser-options.mjs";
 import { getJson, registryEndpoint } from "./registry-state.mjs";
 
 /** The Node.js versions npm 11 runs on. */
@@ -297,14 +298,14 @@ export function planPrerequisites(plan, environment, browser = {}) {
   return items;
 }
 
-function browserDescription({ mode = "default", channel = "chrome", profile }) {
+function browserDescription({ mode = "default", ...browser }) {
   if (mode === "none") {
     return "none; URLs are printed (--no-browser)";
   }
   if (mode === "automated") {
-    return `the automated ${channel} profile${profile ? ` at ${profile}` : ""}`;
+    return automatedDescription(browser);
   }
-  return `your default browser; forms open in the automated ${channel} profile`;
+  return `your default browser; forms open in ${automatedDescription({ ...browser, profile: undefined })}`;
 }
 
 /** Renders prerequisites as indented text lines. */

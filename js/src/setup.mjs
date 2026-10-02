@@ -4,7 +4,6 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 
-import { launchRealBrowser } from "browser-commander";
 import { exec } from "command-stream";
 
 import {
@@ -13,11 +12,12 @@ import {
   runInteractive,
   writeTtyShim,
 } from "./auth-urls.mjs";
+import { connectAutomation } from "./automation.mjs";
 import { npmPrefillScript, openInUserBrowser } from "./browser.mjs";
 import { CLEANUP_CONDITIONS } from "./flows.mjs";
 import { packageDirectory } from "./plan.mjs";
 import { twoFactorMode } from "./prerequisites.mjs";
-import { ensureProfileIgnored, protectLegacyProfile } from "./profile.mjs";
+import { protectLegacyProfile } from "./profile.mjs";
 import { getJson, probePackage } from "./registry-state.mjs";
 
 export { defaultBrowserProfile } from "./profile.mjs";
@@ -83,7 +83,7 @@ class SetupSession {
     }
     this.values = {};
     this.deferred = [];
-    this.connection = null;
+    this.automation = null;
     this.temporary = null;
     this.shim = null;
   }
@@ -111,8 +111,8 @@ class SetupSession {
         }
       }
     }
-    if (this.connection) {
-      await this.connection.browser.close();
+    if (this.automation) {
+      await this.automation.close();
     }
     for (const directory of [this.temporary, this.shim?.directory]) {
       if (directory) {
@@ -442,7 +442,7 @@ class SetupSession {
     // Only a form the tool fills needs the automated profile.
     const fill = PREFILLED_FORMS.has(step.id) && this.plan.trusted_publisher;
     await this.open(step.url, Boolean(fill));
-    if (fill && this.connection) {
+    if (fill && this.automation) {
       await this.prefill();
     }
     await this.prompt("Finish this step in the browser, then press Enter...");
@@ -453,7 +453,7 @@ class SetupSession {
 
   async prefill() {
     await this.prompt("Press Enter when the form is visible...");
-    const page = this.connection.page;
+    const page = this.automation;
     const script = npmPrefillScript(this.plan.trusted_publisher, false);
     let result = await page.evaluate(script);
     if (result.filled?.length === 0) {
@@ -496,17 +496,12 @@ class SetupSession {
       }
       return;
     }
-    if (!this.connection) {
-      await ensureProfileIgnored(this.options.browserProfile, this.options);
-      this.connection = await launchRealBrowser({
-        engine: "playwright",
-        channel: this.options.browserChannel,
-        userDataDir: this.options.browserProfile,
-        headless: false,
-        verbose: this.options.verbose,
-      });
-    }
-    await this.connection.page.goto(url);
+    this.automation ??= await connectAutomation({
+      browser: this.options.browserOptions,
+      profile: this.options.browserProfile,
+      verbose: this.options.verbose,
+    });
+    await this.automation.goto(url);
   }
 
   cwd(step) {
