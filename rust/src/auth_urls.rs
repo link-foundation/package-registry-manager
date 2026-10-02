@@ -179,7 +179,9 @@ pub fn resolve_program(program: &str) -> OsString {
 /// Run an exact argument vector with the terminal's stdin and stderr.
 ///
 /// Stdout is mirrored and captured. stdin stays a real terminal so masked
-/// prompts (`cargo login`, `gh secret set`) keep working. Web-authentication
+/// prompts (`cargo login`, `gh secret set`) keep working. This is the one
+/// subprocess not run through command-stream, whose argument-vector runner
+/// only pipes or closes stdin. Web-authentication
 /// URLs are sent to `urls`. With `stop_on_legacy_login` the command is killed
 /// at npm's legacy `Username:` prompt and the output has `legacy_login` set.
 pub async fn run_interactive(

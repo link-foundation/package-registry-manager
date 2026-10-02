@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn } from "command-stream";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

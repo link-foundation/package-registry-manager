@@ -2,9 +2,9 @@
 //! inside a Git work tree is kept out of commits.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 use anyhow::{bail, Context, Result};
+use command_stream::StreamingRunner;
 
 use crate::auth_urls::resolve_program;
 
@@ -59,17 +59,14 @@ pub fn legacy_browser_profile(repository: &Path) -> PathBuf {
 }
 
 async fn git(profile: &Path, args: &[&str]) -> Option<(bool, String)> {
-    let output = tokio::process::Command::new(resolve_program("git"))
-        .args(args)
-        .current_dir(profile)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
+    let output = StreamingRunner::from_argv(resolve_program("git"), args)
+        .cwd(profile)
+        .collect()
         .await
         .ok()?;
     Some((
-        output.status.success(),
-        String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        output.code == 0,
+        output.stdout.to_string().trim().to_owned(),
     ))
 }
 
