@@ -46,7 +46,7 @@ cargo build --release --manifest-path rust/Cargo.toml
 ./rust/target/release/package-registry-manager inspect --repository /path/to/repo
 ```
 
-Or run the JavaScript CLI with Node.js 20 or newer:
+Or run the JavaScript CLI with Node.js 22 or newer:
 
 ```bash
 cd js
