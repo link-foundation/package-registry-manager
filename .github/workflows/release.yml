@@ -659,8 +659,12 @@ jobs:
         run: npm ci --ignore-scripts --prefix js
 
       - name: Smoke-test the JavaScript launch
-        working-directory: js
-        run: xvfb-run -a node --test --test-timeout=180000 test/browser-parity.test.mjs
+        shell: bash
+        env:
+          JAVASCRIPT_SMOKE_BUDGET_SECONDS: 300
+        run: >-
+          bash scripts/run-with-budget-warning.sh "$JAVASCRIPT_SMOKE_BUDGET_SECONDS" "JavaScript browser smoke test"
+          xvfb-run -a node --test --test-timeout=180000 js/test/browser-parity.test.mjs
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-10-01
@@ -679,7 +683,11 @@ jobs:
             ${{ runner.os }}-cargo-test-
 
       - name: Smoke-test the Rust launch
+        shell: bash
+        env:
+          RUST_SMOKE_BUDGET_SECONDS: 900
         run: >-
+          bash scripts/run-with-budget-warning.sh "$RUST_SMOKE_BUDGET_SECONDS" "Rust browser smoke test"
           xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration
           browser_parity -- --nocapture
 
@@ -1480,6 +1488,7 @@ jobs:
       - lint
       - test
       - javascript
+      - browser-smoke
       - script-tests
       - coverage
       - build
