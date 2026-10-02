@@ -548,7 +548,7 @@ impl<'a> Session<'a> {
         }
         if !automate && self.options.browser == BrowserMode::Default {
             println!("Opening {url} in your default browser");
-            if let Err(error) = open_in_user_browser(url) {
+            if let Err(error) = open_in_user_browser(url).await {
                 eprintln!(
                     "warning: could not open your default browser ({error:#}); open the URL yourself"
                 );
