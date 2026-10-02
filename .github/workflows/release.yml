@@ -612,6 +612,77 @@ jobs:
         if: matrix.os == 'ubuntu-24.04' && matrix.node == 24
         run: npm run pack:check --prefix js
 
+  # === BROWSER PARITY SMOKE TEST ===
+  # Launches the automated profile in installed Google Chrome, exactly as
+  # `setup` does in both implementations, and asserts that pages see
+  # `navigator.webdriver === false` and that the command line carries no switch
+  # a browser started by hand would not (Browser Commander's measureParity).
+  browser-smoke:
+    name: Browser Parity Smoke Test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-browser-smoke
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    needs: [detect-changes, cargo-lock]
+    if: |
+      !cancelled() && (
+        needs.cargo-lock.result == 'success' && (
+          github.event_name == 'workflow_dispatch' ||
+          needs.detect-changes.outputs.any-code-changed == 'true' ||
+          needs.detect-changes.outputs.workflow-changed == 'true'
+        )
+      )
+    env:
+      PRM_BROWSER_SMOKE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Prepare a virtual display and Chrome's sandbox
+        # Ubuntu 24.04 blocks the unprivileged user namespaces Chrome's
+        # sandbox needs; the reference launch keeps the sandbox, so the
+        # candidate must too.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
+          google-chrome --version
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --prefix js
+
+      - name: Smoke-test the JavaScript launch
+        working-directory: js
+        run: xvfb-run -a node --test --test-timeout=180000 test/browser-parity.test.mjs
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-10-01
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      - name: Smoke-test the Rust launch
+        run: >-
+          xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration
+          browser_parity -- --nocapture
+
   # === RELEASE SCRIPT TESTS ===
   # `cargo test` only builds the library crate, so the inline `#[cfg(test)]`
   # suites in scripts/*.rs — including the regression guard on
