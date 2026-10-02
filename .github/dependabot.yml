@@ -1,0 +1,32 @@
+# Keep the link-foundation libraries current. For a 0.x version a caret never
+# reaches the next minor release, so without these updates the requirement
+# would silently freeze (issue #12). scripts/check-upstream-dependencies.mjs
+# fails CI when one is behind; these rules open the pull request that fixes it.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /js
+    schedule:
+      interval: daily
+    allow:
+      - dependency-name: browser-commander
+      - dependency-name: command-stream
+    groups:
+      link-foundation:
+        patterns: ['*']
+    commit-message:
+      prefix: 'chore(deps)'
+
+  - package-ecosystem: cargo
+    directory: /rust
+    schedule:
+      interval: daily
+    allow:
+      - dependency-name: browser-commander
+      - dependency-name: command-stream
+      - dependency-name: lino-arguments
+    groups:
+      link-foundation:
+        patterns: ['*']
+    commit-message:
+      prefix: 'chore(deps)'

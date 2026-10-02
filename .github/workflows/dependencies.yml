@@ -1,0 +1,66 @@
+name: Upstream Dependencies
+
+# Fails when a link-foundation dependency (browser-commander, command-stream,
+# lino-arguments) falls behind its latest release on npm or crates.io. For a
+# 0.x version a caret never reaches the next minor release, so without this
+# check the requirement would silently freeze (issue #12). Dependabot
+# (.github/dependabot.yml) opens the pull request that bumps it.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+# Least-privilege default; jobs escalate individually when needed.
+permissions:
+  contents: read
+
+# Provide Git config to actions/checkout itself; checkout runs git init before
+# any workflow step can configure Git.
+env:
+  GIT_CONFIG_COUNT: '1'
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
+jobs:
+  upstream-dependencies:
+    name: Check Upstream Dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: check-${{ github.workflow }}-${{ github.ref }}-upstream-dependencies
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Test the dependency check
+        run: node --test scripts/check-upstream-dependencies.test.mjs
+
+      - name: Require the latest link-foundation releases
+        run: node scripts/check-upstream-dependencies.mjs
+
+  pipeline-status:
+    name: Pipeline Status
+    needs:
+      - upstream-dependencies
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Check aggregate pipeline status
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          IS_MAIN: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+          RUN_SHA: ${{ github.sha }}
+          BRANCH_REF: ${{ github.ref_name }}
+        run: bash scripts/check-pipeline-status.sh
