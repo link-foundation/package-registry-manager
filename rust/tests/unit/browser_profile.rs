@@ -6,7 +6,6 @@ use browser_commander::browser::open_in_user_browser::build_open_command;
 use browser_commander::utilities::subprocess::CommandError;
 use package_registry_manager::auth_urls::AuthUrlScanner;
 use package_registry_manager::browser::{open_in_user_browser, opener_platform, opener_succeeded};
-use package_registry_manager::model::CommandSpec;
 use package_registry_manager::profile::{
     default_browser_profile, default_browser_profile_for, ensure_profile_ignored,
     legacy_browser_profile, protect_legacy_profile,
@@ -214,6 +213,7 @@ fn detects_the_legacy_username_prompt_without_a_newline() {
 #[tokio::test]
 async fn stops_npm_at_its_legacy_username_prompt() {
     use package_registry_manager::auth_urls::run_interactive;
+    use package_registry_manager::model::CommandSpec;
     use std::time::{Duration, Instant};
 
     let temporary = tempfile::tempdir().expect("temporary directory");

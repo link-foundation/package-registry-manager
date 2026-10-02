@@ -30,7 +30,7 @@ fn keeps_a_fresh_dedicated_profile_by_default() {
     assert!(!options.verbose);
     assert_eq!(options.user_data_dir, Some(profile()));
     assert_eq!(options.executable_path, None);
-    assert!(options.restrictions.is_empty());
+    assert_eq!(options.restrictions, [] as [String; 0]);
     assert_eq!(options.preferences, json!({}));
     assert_eq!(options.migrate_from, None);
     assert!(snapshot_options(&browser).is_none());

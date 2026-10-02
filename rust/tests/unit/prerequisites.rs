@@ -133,8 +133,14 @@ fn lists_manual_prerequisites_before_an_npm_plan() {
     );
     let mut empty = plan.clone();
     empty.steps.clear();
-    assert!(plan_prerequisites(&empty, Some(&environment), &browser).is_empty());
-    assert!(plan_prerequisites(&plan, None, &browser).is_empty());
+    assert_eq!(
+        plan_prerequisites(&empty, Some(&environment), &browser),
+        [] as [package_registry_manager::model::Prerequisite; 0]
+    );
+    assert_eq!(
+        plan_prerequisites(&plan, None, &browser),
+        [] as [package_registry_manager::model::Prerequisite; 0]
+    );
 }
 
 #[test]

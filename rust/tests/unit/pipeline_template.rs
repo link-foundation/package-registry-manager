@@ -46,7 +46,10 @@ fn plans_no_actionable_steps_for_unpublishable_packages() {
         .find(|plan| plan.package.name == "universal-example-app")
         .expect("private plan");
     assert!(!private.package.publishable);
-    assert!(private.steps.is_empty());
+    assert_eq!(
+        private.steps,
+        [] as [package_registry_manager::SetupStep; 0]
+    );
     assert!(private.trusted_publisher.is_none());
     assert_eq!(
         private.skipped_reason.as_deref(),
@@ -58,7 +61,7 @@ fn plans_no_actionable_steps_for_unpublishable_packages() {
         .find(|plan| plan.package.name == "pipeline-app")
         .expect("public plan");
     assert!(public.skipped_reason.is_none());
-    assert!(!public.steps.is_empty());
+    assert_ne!(public.steps, [] as [package_registry_manager::SetupStep; 0]);
     assert_eq!(
         public
             .trusted_publisher
@@ -181,7 +184,7 @@ fn checks_ghcr_packages_write_and_links_the_package_after_the_first_push() {
         &inspect_repository(&root).expect("inspect fixture"),
         Registry::Ghcr,
     );
-    assert!(plan.package.warnings.is_empty());
+    assert_eq!(plan.package.warnings, [] as [String; 0]);
     assert_eq!(
         plan.steps
             .iter()

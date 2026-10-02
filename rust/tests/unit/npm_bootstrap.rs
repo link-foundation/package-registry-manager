@@ -132,7 +132,7 @@ fn plans_only_trusted_publisher_attachment_for_an_existing_package() {
 fn plans_nothing_once_trusted_publishing_is_in_use() {
     let plan = npm_plan(registry_state(true, true), false);
     assert_eq!(plan.mode, Some(PlanMode::Complete));
-    assert!(plan.steps.is_empty());
+    assert_eq!(plan.steps, [] as [package_registry_manager::SetupStep; 0]);
 }
 
 #[test]
