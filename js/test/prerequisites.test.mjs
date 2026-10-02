@@ -99,3 +99,42 @@ test("lists manual prerequisites before an npm plan", () => {
   assert.deepEqual(planPrerequisites({ ...plan, steps: [] }, environment), []);
   assert.deepEqual(planPrerequisites(plan, undefined), []);
 });
+
+test("describes where browser pages open", () => {
+  const plan = {
+    registry: "npm",
+    steps: [{ id: "audit", command: { program: "gh", args: [] } }],
+  };
+  const environment = {
+    offline: false,
+    twoFactor: { state: "unknown" },
+    github: { state: "missing" },
+  };
+  const describe = (browser) =>
+    renderPrerequisites(planPrerequisites(plan, environment, browser)).at(-1);
+  assert.equal(
+    describe({ mode: "default", channel: "chrome" }),
+    "    - Browser: your default browser; forms open in the automated chrome profile; needs signed in to the registry, or ready to sign in",
+  );
+  assert.equal(
+    describe({
+      mode: "default",
+      channel: "msedge",
+      attach: { mode: "snapshot", profile: "Work" },
+    }),
+    "    - Browser: your default browser; forms open in a temporary snapshot of your edge profile Work; needs signed in to the registry, or ready to sign in",
+  );
+  assert.equal(
+    describe({
+      mode: "automated",
+      channel: "brave",
+      profile: "/state/browser-profile",
+      import: { browser: "chrome", profile: "Default" },
+    }),
+    "    - Browser: the automated brave profile at /state/browser-profile with data imported from chrome:Default; needs signed in to the registry, or ready to sign in",
+  );
+  assert.equal(
+    describe({ mode: "automated", attach: { mode: "extension" } }),
+    "    - Browser: your own browser through the Browser Commander extension; needs signed in to the registry, or ready to sign in",
+  );
+});

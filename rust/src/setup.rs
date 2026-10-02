@@ -4,9 +4,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use browser_commander::browser::real_browser::{
-    launch_real_browser, RealBrowserLaunchResult, RealBrowserOptions,
-};
 use command_stream::StreamingRunner;
 use regex::Regex;
 use serde_json::Value;
@@ -15,13 +12,15 @@ use tokio::sync::mpsc::unbounded_channel;
 use crate::auth_urls::{
     node_options_with_shim, resolve_program, run_interactive, write_tty_shim, CommandOutput,
 };
+use crate::automation::Automation;
 use crate::browser::{npm_prefill_script, open_in_user_browser};
+use crate::browser_options::BrowserOptions;
 use crate::flows::CLEANUP_CONDITIONS;
 use crate::model::{CommandSpec, PlanMode, SetupPlan, SetupStep, StepKind};
 use crate::npm_package::{report_pack_warnings, verify_bins, PUBLISH_REJECTED};
 use crate::plan::package_directory;
 use crate::prerequisites::two_factor_mode;
-use crate::profile::{ensure_profile_ignored, protect_legacy_profile};
+use crate::profile::protect_legacy_profile;
 use crate::registry_state::{npm_trusted, truthy, Endpoints, Lookup, RegistryClient};
 
 const PREFILLED_FORMS: [&str; 2] = ["configure-trusted-publisher", "create-pending-publisher"];
@@ -45,7 +44,8 @@ pub struct ExecuteOptions<'a> {
     pub browser: BrowserMode,
     /// Dedicated automation profile, used to fill forms.
     pub browser_profile: &'a Path,
-    pub browser_channel: &'a str,
+    /// How the automated browser launches or attaches.
+    pub browser_options: &'a BrowserOptions,
     pub execute: bool,
     pub yes: bool,
     pub no_browser: bool,
@@ -95,7 +95,7 @@ struct Session<'a> {
     conditions: BTreeSet<&'static str>,
     values: BTreeMap<String, String>,
     deferred: Vec<&'a SetupStep>,
-    browser: Option<RealBrowserLaunchResult>,
+    browser: Option<Automation>,
     temporary: Option<tempfile::TempDir>,
     shim: Option<(tempfile::TempDir, PathBuf)>,
 }
@@ -164,7 +164,9 @@ impl<'a> Session<'a> {
                 }
             }
         }
-        self.browser = None;
+        if let Some(browser) = self.browser.take() {
+            browser.close().await;
+        }
         self.temporary = None;
         self.shim = None;
     }
@@ -517,10 +519,10 @@ impl<'a> Session<'a> {
         };
         prompt("Press Enter when the form is visible...")?;
         let script = npm_prefill_script(prefill, false)?;
-        let mut result = browser.page.evaluate(&script).await?;
+        let mut result = browser.evaluate(&script).await?;
         if result["filled"].as_array().is_some_and(Vec::is_empty) {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            result = browser.page.evaluate(&script).await?;
+            result = browser.evaluate(&script).await?;
         }
         println!("Prefill result: {result}");
         let submit = self.options.yes
@@ -529,7 +531,6 @@ impl<'a> Session<'a> {
             )?);
         if submit {
             let submission = browser
-                .page
                 .evaluate(&npm_prefill_script(prefill, true)?)
                 .await?;
             if submission["submitted"] != Value::Bool(true) {
@@ -556,22 +557,17 @@ impl<'a> Session<'a> {
             return Ok(());
         }
         if self.browser.is_none() {
-            ensure_profile_ignored(self.options.browser_profile, self.options.verbose).await?;
-            // Boxed: the launch future is large, and every step awaits it.
             self.browser = Some(
-                Box::pin(launch_real_browser(
-                    RealBrowserOptions::chromiumoxide()
-                        .channel(self.options.browser_channel)
-                        .user_data_dir(self.options.browser_profile)
-                        .headless(false)
-                        .verbose(self.options.verbose),
-                ))
-                .await
-                .context("could not launch an installed Chrome-family browser")?,
+                Automation::connect(
+                    self.options.browser_options,
+                    self.options.browser_profile,
+                    self.options.verbose,
+                )
+                .await?,
             );
         }
-        if let Some(browser) = &self.browser {
-            browser.page.goto(url).await?;
+        if let Some(browser) = &mut self.browser {
+            browser.goto(url).await?;
         }
         Ok(())
     }

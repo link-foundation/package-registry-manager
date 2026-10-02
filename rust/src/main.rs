@@ -7,6 +7,9 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use clap::{Subcommand, ValueEnum};
 use lino_arguments::Parser;
+use package_registry_manager::browser_options::{
+    parse_browser_options, BrowserArgs, BrowserOptions,
+};
 use package_registry_manager::plan::{build_plans_with, PlanOptions};
 use package_registry_manager::prerequisites::{
     probe_environment, render_prerequisites, BrowserDisplay, BrowserSummary,
@@ -84,9 +87,14 @@ enum Commands {
         #[arg(long, requires = "execute")]
         no_browser: bool,
 
-        /// Chrome-family browser channel (chrome, chromium, edge, or brave).
+        /// Installed browser channel: chrome, chromium, brave, msedge,
+        /// msedge-beta, msedge-dev, or msedge-canary.
         #[arg(long, default_value = "chrome")]
         browser_channel: String,
+
+        /// Installed browser executable to launch instead of the channel's.
+        #[arg(long)]
+        browser_executable: Option<PathBuf>,
 
         /// Open sign-in and approval pages in your default browser, or in the
         /// automated profile. Forms are always filled in the automated profile.
@@ -97,6 +105,29 @@ enum Commands {
         /// state directory); never point this at a normal browser profile.
         #[arg(long)]
         browser_profile: Option<PathBuf>,
+
+        /// Copy cookies, history, and other data from your chrome, edge,
+        /// brave, or firefox profile (`<browser>[:<profile>]`) into the
+        /// automated profile first.
+        #[arg(long, value_name = "BROWSER[:PROFILE]")]
+        browser_import: Option<String>,
+
+        /// Fill forms in your own browser instead: snapshot[:<profile>]
+        /// launches a temporary copy of your profile, extension drives your
+        /// running browser through the Browser Commander extension.
+        #[arg(long, value_name = "MODE")]
+        browser_attach: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "KEY=VALUE",
+            help = "Browser preference for the automated profile, such as intl.accept_languages=en; may be repeated."
+        )]
+        browser_pref: Vec<String>,
+
+        /// Launch restriction or preset, such as no-extensions; may be repeated.
+        #[arg(long, value_name = "NAME")]
+        browser_restriction: Vec<String>,
     },
 }
 
@@ -147,7 +178,7 @@ async fn main() -> Result<()> {
                 browser: BrowserDisplay {
                     mode: BrowserSummary::Default,
                     channel: "chrome".to_owned(),
-                    profile: None,
+                    ..BrowserDisplay::default()
                 },
             };
             let plans = build_plans_with(&inspection, &selected, &options);
@@ -166,8 +197,22 @@ async fn main() -> Result<()> {
             no_browser,
             browser,
             browser_channel,
+            browser_executable,
             browser_profile,
+            browser_import,
+            browser_attach,
+            browser_pref,
+            browser_restriction,
         } => {
+            let browser_options = parse_browser_options(&BrowserArgs {
+                channel: browser_channel,
+                executable: browser_executable,
+                import: browser_import,
+                attach: browser_attach,
+                preferences: browser_pref,
+                restrictions: browser_restriction,
+                profile_given: browser_profile.is_some(),
+            })?;
             // Only a run that may start the automated browser needs the profile.
             let profile = match browser_profile {
                 Some(profile) => std::path::absolute(profile)?,
@@ -178,7 +223,7 @@ async fn main() -> Result<()> {
                 verify_release,
                 endpoints,
                 environment: Some(environment),
-                browser: browser_display(no_browser, browser, &browser_channel, &profile),
+                browser: browser_display(no_browser, browser, &browser_options, &profile),
             };
             let plans = build_plans_with(&inspection, &selected, &options);
             let plan = select_plan(&plans, package.as_deref())?;
@@ -189,7 +234,7 @@ async fn main() -> Result<()> {
                     repository: &args.repository,
                     browser,
                     browser_profile: &profile,
-                    browser_channel: &browser_channel,
+                    browser_options: &browser_options,
                     execute,
                     yes,
                     no_browser,
@@ -207,7 +252,7 @@ async fn main() -> Result<()> {
 fn browser_display(
     no_browser: bool,
     browser: BrowserMode,
-    channel: &str,
+    options: &BrowserOptions,
     profile: &std::path::Path,
 ) -> BrowserDisplay {
     if no_browser {
@@ -223,8 +268,10 @@ fn browser_display(
         } else {
             BrowserSummary::Default
         },
-        channel: channel.to_owned(),
-        profile: automated.then(|| profile.display().to_string()),
+        channel: options.channel.clone(),
+        profile: (automated && options.attach.is_none()).then(|| profile.display().to_string()),
+        import: options.import.clone(),
+        attach: options.attach.clone(),
     }
 }
 

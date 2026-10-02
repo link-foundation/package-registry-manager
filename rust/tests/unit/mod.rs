@@ -1,3 +1,4 @@
+mod browser_options;
 mod browser_profile;
 mod npm_bootstrap;
 mod pipeline_template;

@@ -6,6 +6,7 @@ use command_stream::StreamingRunner;
 use serde_json::Value;
 
 use crate::auth_urls::resolve_program;
+use crate::browser_options::{automated_description, AttachMode, ImportSource};
 use crate::model::{Prerequisite, Registry, SetupPlan};
 use crate::registry_state::{Endpoints, Lookup, RegistryClient};
 
@@ -207,6 +208,8 @@ pub struct BrowserDisplay {
     pub mode: BrowserSummary,
     pub channel: String,
     pub profile: Option<String>,
+    pub import: Option<ImportSource>,
+    pub attach: Option<AttachMode>,
 }
 
 struct Probe {
@@ -445,19 +448,17 @@ fn browser_description(browser: &BrowserDisplay) -> String {
     } else {
         browser.channel.as_str()
     };
+    let attach = browser.attach.as_ref();
+    let import = browser.import.as_ref();
     match browser.mode {
         BrowserSummary::None => "none; URLs are printed (--no-browser)".to_owned(),
         BrowserSummary::Automated => {
-            let location = browser
-                .profile
-                .as_ref()
-                .map(|profile| format!(" at {profile}"))
-                .unwrap_or_default();
-            format!("the automated {channel} profile{location}")
+            automated_description(channel, browser.profile.as_deref(), attach, import)
         }
-        BrowserSummary::Default => {
-            format!("your default browser; forms open in the automated {channel} profile")
-        }
+        BrowserSummary::Default => format!(
+            "your default browser; forms open in {}",
+            automated_description(channel, None, attach, import)
+        ),
     }
 }
 

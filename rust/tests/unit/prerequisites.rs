@@ -1,3 +1,4 @@
+use package_registry_manager::browser_options::{AttachMode, ImportSource};
 use package_registry_manager::prerequisites::{
     github_auth, plan_prerequisites, render_prerequisites, resolve_trust_npm, trust_npm_spec,
     two_factor_mode, BrowserDisplay, BrowserSummary, Environment, Github, GithubAuth, TwoFactor,
@@ -134,4 +135,61 @@ fn lists_manual_prerequisites_before_an_npm_plan() {
     empty.steps.clear();
     assert!(plan_prerequisites(&empty, Some(&environment), &browser).is_empty());
     assert!(plan_prerequisites(&plan, None, &browser).is_empty());
+}
+
+#[test]
+fn describes_where_browser_pages_open() {
+    let plan = npm_plan(registry_state(false, false), false);
+    let environment = Environment {
+        offline: false,
+        node: None,
+        npm: None,
+        trust_npm: "npm@^11.10".to_owned(),
+        trust_npm_version: None,
+        two_factor: TwoFactor::Unknown,
+        github: Github::Missing,
+    };
+    let describe = |browser: BrowserDisplay| {
+        render_prerequisites(&plan_prerequisites(&plan, Some(&environment), &browser))
+            .pop()
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        describe(BrowserDisplay {
+            channel: "chrome".to_owned(),
+            ..BrowserDisplay::default()
+        }),
+        "    - Browser: your default browser; forms open in the automated chrome profile; needs signed in to the registry, or ready to sign in"
+    );
+    assert_eq!(
+        describe(BrowserDisplay {
+            channel: "msedge".to_owned(),
+            attach: Some(AttachMode::Snapshot {
+                profile: Some("Work".to_owned()),
+            }),
+            ..BrowserDisplay::default()
+        }),
+        "    - Browser: your default browser; forms open in a temporary snapshot of your edge profile Work; needs signed in to the registry, or ready to sign in"
+    );
+    assert_eq!(
+        describe(BrowserDisplay {
+            mode: BrowserSummary::Automated,
+            channel: "brave".to_owned(),
+            profile: Some("/state/browser-profile".to_owned()),
+            import: Some(ImportSource {
+                browser: "chrome".to_owned(),
+                profile: Some("Default".to_owned()),
+            }),
+            attach: None,
+        }),
+        "    - Browser: the automated brave profile at /state/browser-profile with data imported from chrome:Default; needs signed in to the registry, or ready to sign in"
+    );
+    assert_eq!(
+        describe(BrowserDisplay {
+            mode: BrowserSummary::Automated,
+            attach: Some(AttachMode::Extension),
+            ..BrowserDisplay::default()
+        }),
+        "    - Browser: your own browser through the Browser Commander extension; needs signed in to the registry, or ready to sign in"
+    );
 }

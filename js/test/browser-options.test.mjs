@@ -152,9 +152,14 @@ test("accepts every restriction and preset of the shared catalogue", () => {
 
 test("later preferences override earlier ones", () => {
   const { preferences } = parseBrowserOptions({
-    preferences: ["a=1", "a.b=2", "a.c=[1]", "d=null", "e=text"],
+    preferences: ["a=1", "a.b=2", "a.c=[1]", "d=null", "e=text", "f=1e999"],
   });
-  assert.deepEqual(preferences, { a: { b: 2, c: [1] }, d: null, e: "text" });
+  assert.deepEqual(preferences, {
+    a: { b: 2, c: [1] },
+    d: null,
+    e: "text",
+    f: "1e999",
+  });
 });
 
 test("describes where forms are filled", () => {
@@ -184,4 +189,10 @@ test("writes the companion extension next to the dedicated profile", () => {
   assert.match(instructions, /chrome:\/\/extensions/);
   assert.match(instructions, /Load unpacked/);
   assert.ok(instructions.endsWith(`  ${directory}`));
+  assert.equal(
+    extensionInstructions("/x"),
+    "Waiting up to 5 minutes for the Browser Commander extension in your own browser.\n" +
+      'If it is not installed, open chrome://extensions, turn on Developer mode, click "Load unpacked", and choose:\n' +
+      "  /x",
+  );
 });
