@@ -1,3 +1,4 @@
+import { DEFAULT_TRUST_NPM, NPM_TFA_URL } from "./prerequisites.mjs";
 import {
   npmName,
   registryEndpoint,
@@ -97,7 +98,7 @@ function verifyReleaseSteps(context, url) {
       "Start the release workflow; if it has no workflow_dispatch trigger, the latest run is watched instead.",
       {
         command: command("gh", ["workflow", "run", context.workflow, ...repo]),
-        when: "verify-release",
+        when: "release-dispatch",
         cwd: ".",
       },
     ),
@@ -118,7 +119,7 @@ function verifyReleaseSteps(context, url) {
           "--json",
           "databaseId,status,url",
         ]),
-        when: "verify-release",
+        when: "release-dispatch",
         cwd: ".",
       },
     ),
@@ -149,12 +150,84 @@ function verifyReleaseSteps(context, url) {
   ];
 }
 
+function twoFactorSteps() {
+  const profile = command("npm", ["profile", "get", "--json"]);
+  return [
+    step(
+      "check-2fa",
+      "Check npm two-factor authentication",
+      "check",
+      "npm trust requires account-level two-factor authentication, so check it before anything is published.",
+      { command: profile },
+    ),
+    step(
+      "enable-2fa",
+      "Turn on npm two-factor authentication",
+      "browser",
+      "Open the npm account's 2FA settings in your browser and turn on two-factor authentication.",
+      { url: NPM_TFA_URL, when: "tfa-disabled" },
+    ),
+    step(
+      "verify-2fa",
+      "Verify npm two-factor authentication",
+      "check",
+      "Stop before publishing if two-factor authentication is still off.",
+      { command: profile, when: "tfa-disabled" },
+    ),
+  ];
+}
+
+function releaseRunSteps(context) {
+  const repo = repoArgs(context);
+  return [
+    step(
+      "inspect-release-run",
+      "Read the latest release run",
+      "check",
+      "Look up the newest run of the release workflow; a run that npm rejected can be re-run once trust is attached.",
+      {
+        command: command("gh", [
+          "run",
+          "list",
+          ...repo,
+          "--workflow",
+          context.workflow,
+          "--limit",
+          "1",
+          "--json",
+          "databaseId,conclusion,status,url",
+        ]),
+        when: "trust-missing",
+        cwd: ".",
+      },
+    ),
+    step(
+      "read-release-failure",
+      "Read why the release run failed",
+      "check",
+      "Search the failed jobs' log for npm's E404 or invalid-publisher rejection.",
+      {
+        command: command("gh", [
+          "run",
+          "view",
+          "{failed_run_id}",
+          ...repo,
+          "--log-failed",
+        ]),
+        when: "release-failed",
+        cwd: ".",
+      },
+    ),
+  ];
+}
+
 export function npmFlow(packageInfo, context) {
   const name = packageInfo.name;
   const registry = registryEndpoint("npm");
+  const trustNpm = context.trustNpm ?? DEFAULT_TRUST_NPM;
   const trustList = command("npx", [
     "-y",
-    "npm@latest",
+    trustNpm,
     "trust",
     "list",
     name,
@@ -198,6 +271,7 @@ export function npmFlow(packageInfo, context) {
         when: "signed-out",
       },
     ),
+    ...twoFactorSteps(),
     ...worktreeSteps(),
     step(
       "pack",
@@ -215,6 +289,34 @@ export function npmFlow(packageInfo, context) {
         when: "package-missing",
         cwd: packageCwd(context.directory),
       },
+    ),
+    step(
+      "test-install",
+      "Install the packed tarball",
+      "command",
+      "Install the tarball into a scratch directory, without lifecycle scripts, to test it the way users get it.",
+      {
+        command: command("npm", [
+          "install",
+          "--no-save",
+          "--no-package-lock",
+          "--no-audit",
+          "--no-fund",
+          "--ignore-scripts",
+          "--prefix",
+          "{pack_destination}/install",
+          "{tarball}",
+        ]),
+        when: "package-missing",
+        cwd: "{pack_destination}",
+      },
+    ),
+    step(
+      "verify-bins",
+      "Verify the packed bin entries",
+      "check",
+      "Compare the bin entries of the packed package.json with package.json and run each installed bin with --version.",
+      { when: "package-missing" },
     ),
     step(
       "first-publish",
@@ -256,15 +358,16 @@ export function npmFlow(packageInfo, context) {
         "List the trusted publishers configured for the package.",
         { command: trustList },
       ),
+      ...releaseRunSteps(context),
       step(
         "attach-trusted-publisher",
         "Attach the GitHub Actions trusted publisher",
         "command",
-        "Trust the release workflow to publish through OIDC (npm 11.10 or newer, run through npx).",
+        `Trust the release workflow to publish through OIDC with ${trustNpm}, run through npx; npm trust needs npm 11.10 or newer and account-level 2FA.`,
         {
           command: command("npx", [
             "-y",
-            "npm@latest",
+            trustNpm,
             "trust",
             "github",
             name,
@@ -336,6 +439,24 @@ export function npmFlow(packageInfo, context) {
             context.slug,
           ]),
           when: "token-secret-present",
+          cwd: ".",
+          confirm: true,
+        },
+      ),
+      step(
+        "rerun-release",
+        "Re-run the failed release jobs",
+        "command",
+        "Re-run the jobs of the release run that npm rejected, now that the trusted publisher is attached.",
+        {
+          command: command("gh", [
+            "run",
+            "rerun",
+            "{failed_run_id}",
+            ...repoArgs(context),
+            "--failed",
+          ]),
+          when: "release-failed-publish",
           cwd: ".",
           confirm: true,
         },

@@ -6,7 +6,11 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 
 import { runInteractive } from "../src/auth-urls.mjs";
-import { userBrowserCommand } from "../src/browser.mjs";
+import {
+  detachedRunner,
+  openerSucceeded,
+  openInUserBrowser,
+} from "../src/browser.mjs";
 import {
   defaultBrowserProfile,
   ensureProfileIgnored,
@@ -155,22 +159,64 @@ test("protects and reports a profile left in the repository", async () => {
   assert.match(warnings.join("\n"), /is no longer used .* delete it/);
 });
 
-test("opens URLs in the default browser without a shell", () => {
+test("opens URLs in the default browser without a shell", async () => {
   const url = "https://www.npmjs.com/login?next=/login/cli/1&a=b";
-  assert.deepEqual(userBrowserCommand(url, "darwin"), {
-    program: "open",
-    args: [url],
-  });
-  assert.deepEqual(userBrowserCommand(url, "linux"), {
-    program: "xdg-open",
-    args: [url],
-  });
-  assert.deepEqual(userBrowserCommand(url, "win32"), {
-    program: "rundll32",
-    args: ["url.dll,FileProtocolHandler", url],
-  });
-  assert.throws(() => userBrowserCommand("--help", "linux"), /non-web URL/);
-  assert.throws(() => userBrowserCommand("file:///etc/passwd", "linux"));
+  const opener = async (platform) => {
+    const calls = [];
+    await openInUserBrowser(url, {
+      platform,
+      runner: async (file, args) => calls.push([file, ...args]),
+    });
+    return calls;
+  };
+  assert.deepEqual(await opener("darwin"), [["open", url]]);
+  assert.deepEqual(await opener("linux"), [["xdg-open", url]]);
+  assert.deepEqual(await opener("freebsd"), [["xdg-open", url]]);
+  assert.deepEqual(await opener("win32"), [["explorer.exe", url]]);
+});
+
+test("refuses to open non-web URLs", async () => {
+  const runner = () => assert.fail("the opener must not run");
+  for (const hostile of [
+    "--help",
+    "file:///etc/passwd",
+    "https://a b",
+    "https://",
+    "javascript:alert(1)",
+  ]) {
+    await assert.rejects(
+      openInUserBrowser(hostile, { platform: "linux", runner }),
+      /non-web URL/,
+      hostile,
+    );
+  }
+});
+
+test("treats explorer exit code one as handed over", () => {
+  assert.equal(openerSucceeded("explorer.exe", 1), true);
+  assert.equal(openerSucceeded("explorer.exe", 2), false);
+  assert.equal(openerSucceeded("xdg-open", 1), false);
+  assert.equal(openerSucceeded("xdg-open", 0), true);
+});
+
+test("waits for an opener only for a grace period", async () => {
+  const node = (script) => ["-e", script];
+  const runner = detachedRunner(300);
+  assert.deepEqual(await runner(process.execPath, node("")), { code: 0 });
+  await assert.rejects(
+    runner(process.execPath, node("process.exit(3)")),
+    /exited with code 3/,
+  );
+  await assert.rejects(
+    runner(path.join(temporary, "missing-opener"), []),
+    /Could not start/,
+  );
+  const started = Date.now();
+  assert.deepEqual(
+    await runner(process.execPath, node("setTimeout(() => {}, 1500)")),
+    { code: null },
+  );
+  assert.ok(Date.now() - started < 1_400, "a running opener is not awaited");
 });
 
 test("stops npm at its legacy username prompt", async () => {

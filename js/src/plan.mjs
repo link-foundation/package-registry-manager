@@ -6,6 +6,7 @@ import {
   npmFlow,
   pypiFlow,
 } from "./flows.mjs";
+import { planPrerequisites } from "./prerequisites.mjs";
 
 const FLOWS = new Map([
   ["npm", npmFlow],
@@ -17,7 +18,10 @@ const FLOWS = new Map([
 
 /**
  * Builds one setup plan per package. `options.verifyRelease` appends the
- * release-verification steps to flows that support them.
+ * release-verification steps to flows that support them. With
+ * `options.environment` (from `probeEnvironment`) npm trust runs through the
+ * npm that the local Node.js supports, and each plan lists its prerequisites;
+ * `options.browser` describes where browser pages open.
  */
 export function buildPlans(inspection, selected = [], options = {}) {
   const registries = new Set(selected);
@@ -153,6 +157,7 @@ function flowPlan(inspection, packageInfo, options) {
     slug,
     workflow,
     verifyRelease: Boolean(options.verifyRelease),
+    trustNpm: options.environment?.trustNpm,
   };
   const mode = planMode(packageInfo);
   let steps = FLOWS.get(packageInfo.registry)(packageInfo, context);
@@ -164,6 +169,14 @@ function flowPlan(inspection, packageInfo, options) {
   const plan = basePlan(inspection, packageInfo, steps);
   if (mode) {
     plan.mode = mode;
+  }
+  const prerequisites = planPrerequisites(
+    plan,
+    options.environment,
+    options.browser,
+  );
+  if (prerequisites.length > 0) {
+    plan.prerequisites = prerequisites;
   }
   if (
     slug &&

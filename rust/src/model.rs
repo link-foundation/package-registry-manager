@@ -294,6 +294,17 @@ pub struct TrustedPublisherPrefill {
     pub project: Option<String>,
 }
 
+/// A manual prerequisite of a plan: what was detected and what is needed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Prerequisite {
+    pub id: String,
+    pub title: String,
+    pub detected: String,
+    pub required: String,
+    /// Whether the prerequisite is met; `None` when it cannot be told.
+    pub ok: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupPlan {
     pub schema_version: u8,
@@ -304,6 +315,9 @@ pub struct SetupPlan {
     /// Bootstrap, attach, or complete; unset when the registry state is unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<PlanMode>,
+    /// Manual prerequisites, listed before the steps; empty without a probe.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prerequisites: Vec<Prerequisite>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trusted_publisher: Option<TrustedPublisherPrefill>,
     /// Why no steps were planned, for packages whose manifest forbids publishing.

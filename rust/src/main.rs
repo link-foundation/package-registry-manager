@@ -7,7 +7,13 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use clap::{Subcommand, ValueEnum};
 use lino_arguments::Parser;
+use package_registry_manager::browser_options::{
+    parse_browser_options, BrowserArgs, BrowserOptions,
+};
 use package_registry_manager::plan::{build_plans_with, PlanOptions};
+use package_registry_manager::prerequisites::{
+    probe_environment, render_prerequisites, BrowserDisplay, BrowserSummary,
+};
 use package_registry_manager::registry_state::{Endpoints, RegistryClient};
 use package_registry_manager::setup::{
     default_browser_profile, execute_plan, BrowserMode, ExecuteOptions,
@@ -81,9 +87,14 @@ enum Commands {
         #[arg(long, requires = "execute")]
         no_browser: bool,
 
-        /// Chrome-family browser channel (chrome, chromium, edge, or brave).
+        /// Installed browser channel: chrome, chromium, brave, msedge,
+        /// msedge-beta, msedge-dev, or msedge-canary.
         #[arg(long, default_value = "chrome")]
         browser_channel: String,
+
+        /// Installed browser executable to launch instead of the channel's.
+        #[arg(long)]
+        browser_executable: Option<PathBuf>,
 
         /// Open sign-in and approval pages in your default browser, or in the
         /// automated profile. Forms are always filled in the automated profile.
@@ -94,6 +105,29 @@ enum Commands {
         /// state directory); never point this at a normal browser profile.
         #[arg(long)]
         browser_profile: Option<PathBuf>,
+
+        /// Copy cookies, history, and other data from your chrome, edge,
+        /// brave, or firefox profile (`<browser>[:<profile>]`) into the
+        /// automated profile first.
+        #[arg(long, value_name = "BROWSER[:PROFILE]")]
+        browser_import: Option<String>,
+
+        /// Fill forms in your own browser instead: snapshot[:<profile>]
+        /// launches a temporary copy of your profile, extension drives your
+        /// running browser through the Browser Commander extension.
+        #[arg(long, value_name = "MODE")]
+        browser_attach: Option<String>,
+
+        #[arg(
+            long,
+            value_name = "KEY=VALUE",
+            help = "Browser preference for the automated profile, such as intl.accept_languages=en; may be repeated."
+        )]
+        browser_pref: Vec<String>,
+
+        /// Launch restriction or preset, such as no-extensions; may be repeated.
+        #[arg(long, value_name = "NAME")]
+        browser_restriction: Vec<String>,
     },
 }
 
@@ -115,16 +149,37 @@ async fn main() -> Result<()> {
             .probe_registry_state(&discovered)
             .await
     };
+    let selected = match &args.command {
+        Commands::Inspect => return output_inspection(&inspection, args.format),
+        Commands::Plan { registry, .. } => registry.iter().copied().collect::<BTreeSet<_>>(),
+        Commands::Setup { registry, .. } => BTreeSet::from([*registry]),
+    };
+    let environment = probe_environment(
+        args.offline,
+        args.verbose,
+        inspection.packages.iter().any(|package| {
+            package.registry == Registry::Npm
+                && package.publishable
+                && (selected.is_empty() || selected.contains(&Registry::Npm))
+        }),
+        &endpoints,
+    )
+    .await;
     match args.command {
-        Commands::Inspect => output_inspection(&inspection, args.format),
+        Commands::Inspect => Ok(()),
         Commands::Plan {
-            registry,
+            registry: _,
             verify_release,
         } => {
-            let selected = registry.into_iter().collect::<BTreeSet<_>>();
             let options = PlanOptions {
                 verify_release,
                 endpoints,
+                environment: Some(environment),
+                browser: BrowserDisplay {
+                    mode: BrowserSummary::Default,
+                    channel: "chrome".to_owned(),
+                    ..BrowserDisplay::default()
+                },
             };
             let plans = build_plans_with(&inspection, &selected, &options);
             if plans.is_empty() {
@@ -133,7 +188,7 @@ async fn main() -> Result<()> {
             output_plans(&plans, args.format)
         }
         Commands::Setup {
-            registry,
+            registry: _,
             package,
             dry_run: _,
             execute,
@@ -142,28 +197,44 @@ async fn main() -> Result<()> {
             no_browser,
             browser,
             browser_channel,
+            browser_executable,
             browser_profile,
+            browser_import,
+            browser_attach,
+            browser_pref,
+            browser_restriction,
         } => {
-            let options = PlanOptions {
-                verify_release,
-                endpoints,
-            };
-            let plans = build_plans_with(&inspection, &BTreeSet::from([registry]), &options);
-            let plan = select_plan(&plans, package.as_deref())?;
-            output_plans(std::slice::from_ref(plan), args.format)?;
+            let browser_options = parse_browser_options(&BrowserArgs {
+                channel: browser_channel,
+                executable: browser_executable,
+                import: browser_import,
+                attach: browser_attach,
+                preferences: browser_pref,
+                restrictions: browser_restriction,
+                profile_given: browser_profile.is_some(),
+            })?;
             // Only a run that may start the automated browser needs the profile.
             let profile = match browser_profile {
                 Some(profile) => std::path::absolute(profile)?,
-                None if execute => default_browser_profile()?,
+                None if execute || browser == BrowserMode::Automated => default_browser_profile()?,
                 None => PathBuf::new(),
             };
+            let options = PlanOptions {
+                verify_release,
+                endpoints,
+                environment: Some(environment),
+                browser: browser_display(no_browser, browser, &browser_options, &profile),
+            };
+            let plans = build_plans_with(&inspection, &selected, &options);
+            let plan = select_plan(&plans, package.as_deref())?;
+            output_plans(std::slice::from_ref(plan), args.format)?;
             execute_plan(
                 plan,
                 &ExecuteOptions {
                     repository: &args.repository,
                     browser,
                     browser_profile: &profile,
-                    browser_channel: &browser_channel,
+                    browser_options: &browser_options,
                     execute,
                     yes,
                     no_browser,
@@ -175,6 +246,32 @@ async fn main() -> Result<()> {
             )
             .await
         }
+    }
+}
+
+fn browser_display(
+    no_browser: bool,
+    browser: BrowserMode,
+    options: &BrowserOptions,
+    profile: &std::path::Path,
+) -> BrowserDisplay {
+    if no_browser {
+        return BrowserDisplay {
+            mode: BrowserSummary::None,
+            ..BrowserDisplay::default()
+        };
+    }
+    let automated = browser == BrowserMode::Automated;
+    BrowserDisplay {
+        mode: if automated {
+            BrowserSummary::Automated
+        } else {
+            BrowserSummary::Default
+        },
+        channel: options.channel.clone(),
+        profile: (automated && options.attach.is_none()).then(|| profile.display().to_string()),
+        import: options.import.clone(),
+        attach: options.attach.clone(),
     }
 }
 
@@ -271,6 +368,9 @@ fn output_plans(plans: &[SetupPlan], format: OutputFormat) -> Result<()> {
                 }
                 if let Some(reason) = &plan.skipped_reason {
                     writeln!(output, "  skipped: {reason}")?;
+                }
+                for line in render_prerequisites(&plan.prerequisites) {
+                    writeln!(output, "{line}")?;
                 }
                 for (index, step) in plan.steps.iter().enumerate() {
                     let when = step

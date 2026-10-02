@@ -20,7 +20,7 @@ The full tracked trees were compared against these upstream snapshots:
 | Package documentation | Per-package README, LICENSE, and CHANGELOG | Adopted; root documentation describes the combined product. |
 | Rust quality gates | rustfmt, Clippy, rustdoc warnings, unit/integration/doc tests, script tests, crate-size guard | Adopted from the Rust template and made manifest-path aware. |
 | JavaScript quality gates | syntax check, ESLint, Prettier, jscpd, Node tests, audit, and dry-run package inspection | Adopted from the JavaScript template with configuration scoped to `js/`. |
-| Runtime matrix | Rust on Linux/macOS/Windows; Node 20 and 24 across Linux/macOS/Windows | Adapted to supported runtimes. Bun and Deno are not claimed because Playwright and the package's Node CLI are the supported execution contract. |
+| Runtime matrix | Rust on Linux/macOS/Windows; Node 22 and 24 across Linux/macOS/Windows | Adapted to supported runtimes. Bun and Deno are not claimed because Playwright and the package's Node CLI are the supported execution contract. |
 | Fresh-merge validation | `scripts/simulate-fresh-merge.sh` | Adopted once at repository scope and checks both manifests. |
 | Supply-chain checks | pinned third-party actions, CodeQL, dependency review, cargo-audit, npm audit, secretlint, actionlint, and zizmor | Adopted at repository scope so one policy covers both packages. |
 | Timeouts and concurrency | step budgets, job backstops, matrix-specific cancellation groups, non-cancellable writers | Adopted; write jobs share one serialization group. |

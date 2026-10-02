@@ -28,7 +28,9 @@ cover the maintained language ecosystems in the hive-mind CI/CD guidance.
   they are usually already signed in, so the maintainer authenticates directly
   with the registry. Forms are filled in a real installed browser with a
   dedicated profile through
-  [browser-commander](https://github.com/link-foundation/browser-commander).
+  [browser-commander](https://github.com/link-foundation/browser-commander),
+  which launches it the way a maintainer would start it by hand: no
+  automation switches and `navigator.webdriver === false`.
 - Prefills npm trusted-publisher fields from the GitHub remote and release
   workflow, then requires explicit confirmation before submitting.
 - Publishes only the very first version of a package that does not exist yet,
@@ -46,7 +48,7 @@ cargo build --release --manifest-path rust/Cargo.toml
 ./rust/target/release/package-registry-manager inspect --repository /path/to/repo
 ```
 
-Or run the JavaScript CLI with Node.js 20 or newer:
+Or run the JavaScript CLI with Node.js 22 or newer:
 
 ```bash
 cd js
@@ -126,6 +128,32 @@ otherwise into the profile) and refuses to continue if `git check-ignore`
 still reports the profile as not ignored. A profile left in
 `.package-registry-manager/browser-profile` by an earlier release is protected
 the same way, with a warning to delete it.
+
+The automated profile starts fresh, from the installed Chrome channel, with
+no extra switches. Every change to that is opt-in:
+
+- `--browser-executable <path>` launches a specific browser binary instead of
+  the channel's.
+- `--browser-import <chrome|edge|brave|firefox>[:<profile>]` copies cookies,
+  history, and other data from one of your browser profiles into the
+  dedicated profile before it starts, so registry sessions carry over without
+  automating your real profile.
+- `--browser-attach snapshot[:<profile>]` fills forms in a temporary copy of
+  your own profile of the `--browser-channel` browser (default `Default`),
+  which is deleted afterwards. `--browser-attach extension` drives your
+  running browser through the Browser Commander extension: the CLI writes the
+  unpacked extension next to the dedicated profile and explains how to load
+  it from `chrome://extensions`. Neither mode can be combined with
+  `--browser-profile` or `--browser-import`, and the extension mode launches
+  nothing, so it also rejects `--browser-executable`, `--browser-pref`, and
+  `--browser-restriction`.
+- `--browser-pref <key=value>` writes a browser preference, such as
+  `intl.accept_languages=en-US`, into the profile. Values are parsed as JSON
+  when possible (`true`, `4`, `"text"`), dotted keys nest, and later values
+  win.
+- `--browser-restriction <name>` adds a launch restriction or preset from
+  browser-commander's catalogue, such as `no-extensions`; an unknown name
+  lists the valid ones.
 
 Use `--no-browser` with `--execute` on a machine without a graphical browser.
 The CLI runs the validation step and prints the official setup URL for opening
@@ -291,8 +319,13 @@ The CLIs intentionally use the same options and JSON schema:
 | `--yes` | Pre-confirm publishing, secret changes, and form submission; requires `--execute` |
 | `--no-browser` | Print the setup URL after validation; requires `--execute` |
 | `--browser <default\|automated>` | Open sign-in and approval URLs in the default browser (default) or the automation profile |
-| `--browser-channel <name>` | Choose installed Chrome, Chromium, Edge, or Brave |
+| `--browser-channel <name>` | Choose installed Chrome, Chromium, Edge, or Brave (default: `chrome`) |
+| `--browser-executable <path>` | Launch this browser executable instead of the channel's |
 | `--browser-profile <path>` | Choose the dedicated automation profile used to fill forms (default: per-user state directory) |
+| `--browser-import <browser>[:<profile>]` | Copy data from your chrome, edge, brave, or firefox profile into the automated profile first |
+| `--browser-attach snapshot[:<profile>]\|extension` | Fill forms in a temporary copy of your profile, or in your running browser through the Browser Commander extension |
+| `--browser-pref <key=value>` | Set a preference in the automated profile; may be repeated |
+| `--browser-restriction <name>` | Add a launch restriction or preset, such as `no-extensions`; may be repeated |
 
 Registry aliases such as `cargo`, `python`, `go`, `dotnet`, `maven`, and
 `composer`, `docker`, and `ghcr-io` are accepted. Canonical JSON values are
@@ -331,8 +364,10 @@ applicable to this Node CLI and Rust crate.
 
 Rust uses [lino-arguments](https://github.com/link-foundation/lino-arguments)
 for CLI configuration. Both implementations use command-stream for argument-
-preserving process execution and browser-commander for the visible authenticated
-browser. Those focused integrations follow the formal-ai associative stack
+preserving process execution, including the `open`, `xdg-open`, and Windows
+URL-handler calls behind browser-commander's `openInUserBrowser`, and
+browser-commander for the visible authenticated browser: `launchRealBrowser`,
+`migrateProfile`, and `attachUserBrowser`. Those focused integrations follow the formal-ai associative stack
 without coupling registry metadata to unrelated components.
 
 ```text
@@ -370,6 +405,21 @@ registry let both suites run the whole npm bootstrap without credentials or
 network access, and assert the exact argument vectors. Browser tests exercise
 the generated prefill program; a maintainer performs the final authenticated
 browser verification.
+
+A smoke test launches the automated profile in an installed Chrome and
+compares it with a browser started by hand through browser-commander's
+`measureParity`: `navigator.webdriver` must be `false` and the command line
+must carry no extra switches. It needs a display, so it only runs on request:
+
+```bash
+PRM_BROWSER_SMOKE=1 xvfb-run -a node --test js/test/browser-parity.test.mjs
+PRM_BROWSER_SMOKE=1 xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration browser_parity
+```
+
+`node scripts/check-upstream-dependencies.mjs` fails when `js/package.json` or
+`rust/Cargo.toml` requires an older browser-commander, command-stream, or
+lino-arguments than the latest release. A 0.x caret never reaches the next
+minor release, so CI runs this check daily and Dependabot proposes the bump.
 
 ## Contributing
 

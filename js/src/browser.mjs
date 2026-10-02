@@ -1,44 +1,72 @@
-import { spawn } from "node:child_process";
+import { openInUserBrowser as openWithSystemOpener } from "browser-commander";
+import { spawn } from "command-stream";
 
 /**
- * The exact argument vector that opens an http(s) URL in the user's default
- * browser: `open` on macOS, `xdg-open` on Linux and other Unix systems, and
- * the URL protocol handler on Windows, which avoids `cmd` quoting rules.
+ * How long an opener may run before the tool stops waiting for it: `xdg-open`
+ * can wait for a newly started browser to exit.
  */
-export function userBrowserCommand(url, platform = process.platform) {
-  if (!/^https?:\/\/\S+$/i.test(url)) {
-    throw new Error(`refusing to open a non-web URL: ${url}`);
-  }
-  if (platform === "darwin") {
-    return { program: "open", args: [url] };
-  }
-  if (platform === "win32") {
-    return { program: "rundll32", args: ["url.dll,FileProtocolHandler", url] };
-  }
-  return { program: "xdg-open", args: [url] };
+export const OPENER_GRACE_MS = 2_000;
+
+/**
+ * The platform whose opener Browser Commander runs: `open` on macOS,
+ * `explorer.exe` on Windows, and `xdg-open` on Linux and other Unix systems.
+ */
+export function openerPlatform(platform = process.platform) {
+  return platform === "darwin" || platform === "win32" ? platform : "linux";
 }
 
 /**
- * Opens a URL in the user's own default browser, where they are usually
- * already signed in. Nothing is automated. Resolves once the opener started;
- * it is not awaited because `xdg-open` can wait for a new browser to exit.
+ * Opens an http(s) URL in the user's own default browser, where they are
+ * usually already signed in. Nothing is automated. Browser Commander builds
+ * the opener's exact argument vector; `runner` starts it.
  */
-export function openInUserBrowser(url, platform = process.platform) {
-  const command = userBrowserCommand(url, platform);
-  return new Promise((resolve, reject) => {
-    const child = spawn(command.program, command.args, {
-      detached: true,
-      stdio: "ignore",
-      shell: false,
-    });
-    child.once("error", (error) =>
-      reject(new Error(`${command.program}: ${error.message}`)),
-    );
-    child.once("spawn", () => {
-      child.unref();
-      resolve();
-    });
+export async function openInUserBrowser(
+  url,
+  { platform = process.platform, runner = detachedRunner() } = {},
+) {
+  if (!/^https?:\/\/\S+$/i.test(url)) {
+    throw new Error(`refusing to open a non-web URL: ${url}`);
+  }
+  return openWithSystemOpener(url, {
+    platform: openerPlatform(platform),
+    runner,
   });
+}
+
+/** Whether an opener handed the URL over: `explorer.exe` exits with 1 after it did. */
+export function openerSucceeded(file, code) {
+  return code === 0 || (file === "explorer.exe" && code === 1);
+}
+
+/**
+ * Starts an opener through command-stream without a shell and settles once it
+ * exits, or after `graceMs` while it keeps running in the background.
+ */
+export function detachedRunner(graceMs = OPENER_GRACE_MS) {
+  return (file, args) =>
+    new Promise((resolve, reject) => {
+      const child = spawn(file, args, {
+        detached: process.platform !== "win32",
+        stdio: "ignore",
+        shell: false,
+      });
+      const timer = setTimeout(() => {
+        child.unref();
+        resolve({ code: null });
+      }, graceMs);
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(new Error(`Could not start ${file}: ${error.message}`));
+      });
+      child.once("exit", (code, signal) => {
+        clearTimeout(timer);
+        if (openerSucceeded(file, code)) {
+          resolve({ code });
+        } else {
+          reject(new Error(`${file} exited with code ${code ?? signal}`));
+        }
+      });
+    });
 }
 
 export function npmPrefillScript(prefill, submit = false) {

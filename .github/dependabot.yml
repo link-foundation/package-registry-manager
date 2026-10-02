@@ -1,0 +1,39 @@
+# Keep the link-foundation libraries current. For a 0.x version a caret never
+# reaches the next minor release, so without these updates the requirement
+# would silently freeze (issue #12). scripts/check-upstream-dependencies.mjs
+# fails CI when one is behind; these rules open the pull request that fixes it.
+# The cooldown waits a week before proposing a release, so a compromised
+# publish can be yanked before it reaches this repository; the CI check still
+# reports the lag on the day of the release.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /js
+    schedule:
+      interval: daily
+    cooldown:
+      default-days: 7
+    allow:
+      - dependency-name: browser-commander
+      - dependency-name: command-stream
+    groups:
+      link-foundation:
+        patterns: ['*']
+    commit-message:
+      prefix: 'chore(deps)'
+
+  - package-ecosystem: cargo
+    directory: /rust
+    schedule:
+      interval: daily
+    cooldown:
+      default-days: 7
+    allow:
+      - dependency-name: browser-commander
+      - dependency-name: command-stream
+      - dependency-name: lino-arguments
+    groups:
+      link-foundation:
+        patterns: ['*']
+    commit-message:
+      prefix: 'chore(deps)'

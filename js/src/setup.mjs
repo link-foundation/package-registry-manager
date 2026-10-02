@@ -1,21 +1,23 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 
-import { launchRealBrowser } from "browser-commander";
 import { exec } from "command-stream";
 
 import {
+  ANSI,
   nodeOptionsWithShim,
   runInteractive,
   writeTtyShim,
 } from "./auth-urls.mjs";
+import { connectAutomation } from "./automation.mjs";
 import { npmPrefillScript, openInUserBrowser } from "./browser.mjs";
 import { CLEANUP_CONDITIONS } from "./flows.mjs";
 import { packageDirectory } from "./plan.mjs";
-import { ensureProfileIgnored, protectLegacyProfile } from "./profile.mjs";
+import { twoFactorMode } from "./prerequisites.mjs";
+import { protectLegacyProfile } from "./profile.mjs";
 import { getJson, probePackage } from "./registry-state.mjs";
 
 export { defaultBrowserProfile } from "./profile.mjs";
@@ -25,6 +27,8 @@ const PREFILLED_FORMS = new Set([
   "create-pending-publisher",
 ]);
 const INTERACTIVE_CHECKS = new Set(["check-trust", "verify-trusted-publisher"]);
+/** npm's answer when a workflow publishes without an attached trusted publisher. */
+const PUBLISH_REJECTED = /\bE404\b|404 Not Found|invalid-publisher/i;
 /** Where `--browser` opens URLs that need no automation. */
 export const BROWSER_MODES = ["default", "automated"];
 
@@ -70,7 +74,7 @@ class SetupSession {
   constructor(plan, options) {
     this.plan = plan;
     this.options = options;
-    this.conditions = new Set(["verify-release"]);
+    this.conditions = new Set(["verify-release", "release-dispatch"]);
     if (plan.package.exists_on_registry === false) {
       this.conditions.add("package-missing");
     }
@@ -79,7 +83,7 @@ class SetupSession {
     }
     this.values = {};
     this.deferred = [];
-    this.connection = null;
+    this.automation = null;
     this.temporary = null;
     this.shim = null;
   }
@@ -107,8 +111,8 @@ class SetupSession {
         }
       }
     }
-    if (this.connection) {
-      await this.connection.browser.close();
+    if (this.automation) {
+      await this.automation.close();
     }
     for (const directory of [this.temporary, this.shim?.directory]) {
       if (directory) {
@@ -120,7 +124,10 @@ class SetupSession {
   async runStep(step) {
     switch (step.kind) {
       case "check":
-        return step.command ? this.check(step) : this.checkRegistry();
+        if (step.id === "check-registry") {
+          return this.checkRegistry();
+        }
+        return step.id === "verify-bins" ? this.verifyBins() : this.check(step);
       case "command":
         return this.command(step);
       case "wait":
@@ -132,7 +139,7 @@ class SetupSession {
         if (step.url) {
           console.log(`  ${step.url}`);
         }
-        await prompt("Press Enter when this is done...");
+        await this.prompt("Press Enter when this is done...");
     }
   }
 
@@ -184,6 +191,25 @@ class SetupSession {
         }
         return;
       }
+      case "check-2fa":
+      case "verify-2fa":
+        return this.checkTwoFactor(step, result);
+      case "inspect-release-run":
+        return this.inspectReleaseRun(result);
+      case "read-release-failure":
+        if (result.code !== 0) {
+          console.error("warning: could not read the failed release log");
+        } else if (PUBLISH_REJECTED.test(output)) {
+          console.log(
+            "  It failed at publish: npm rejected the workflow (E404/invalid-publisher) because no trusted publisher is attached yet. After attaching trust, its failed jobs can be re-run.",
+          );
+          this.conditions.add("release-failed-publish");
+        } else {
+          console.log(
+            "  It failed for another reason, so trusted publishing alone will not fix it; it is not re-run.",
+          );
+        }
+        return;
       case "audit-token-secrets":
         if (result.code !== 0) {
           console.error("warning: could not list repository secrets with gh");
@@ -213,10 +239,119 @@ class SetupSession {
     }
   }
 
+  checkTwoFactor(step, result) {
+    let mode;
+    try {
+      mode = result.code === 0 ? twoFactorMode(result.stdout) : undefined;
+    } catch {
+      mode = undefined;
+    }
+    if (mode === undefined) {
+      if (step.id === "verify-2fa") {
+        throw new Error("could not read the npm profile to verify 2FA");
+      }
+      console.error(
+        "warning: could not read the npm profile; npm trust requires two-factor authentication",
+      );
+      return;
+    }
+    if (mode) {
+      console.log(`  Two-factor authentication is on (${mode}).`);
+      this.conditions.delete("tfa-disabled");
+      return;
+    }
+    if (step.id === "verify-2fa") {
+      throw new Error(
+        "two-factor authentication is still off; npm trust requires it, so nothing was published",
+      );
+    }
+    console.log(
+      "  Two-factor authentication is off; npm trust requires it, so turn it on before anything is published.",
+    );
+    this.conditions.add("tfa-disabled");
+  }
+
+  inspectReleaseRun(result) {
+    if (result.code !== 0) {
+      console.error("warning: could not list the release workflow runs");
+      return;
+    }
+    const [run] = JSON.parse(String(result.stdout || "[]"));
+    if (!run) {
+      console.log("  The release workflow has not run yet.");
+      return;
+    }
+    const outcome = run.conclusion || run.status;
+    console.log(`  The latest release run ${outcome}: ${run.url}`);
+    if (run.conclusion === "failure") {
+      this.values.failed_run_id = String(run.databaseId);
+      this.conditions.add("release-failed");
+    }
+  }
+
+  async verifyBins() {
+    const pack = this.plan.steps.find((item) => item.id === "pack");
+    const source = await readManifest(
+      path.join(this.cwd(pack), "package.json"),
+    );
+    const prefix = path.join(this.values.pack_destination, "install");
+    const root = path.join(
+      prefix,
+      "node_modules",
+      ...this.plan.package.name.split("/"),
+    );
+    // npm extracts the tarball's package/package.json unchanged.
+    const packed = await readManifest(path.join(root, "package.json"));
+    const removed = Object.keys(binEntries(source)).filter(
+      (name) => !(name in binEntries(packed)),
+    );
+    if (removed.length > 0) {
+      throw new Error(
+        `the packed package.json has no bin ${removed.join(", ")}; npm removed it while packing, so correct the bin entries in package.json before the first publish`,
+      );
+    }
+    const bins = Object.entries(binEntries(packed));
+    if (bins.length === 0) {
+      console.log("  The package has no bin entries.");
+    }
+    for (const [name, file] of bins) {
+      // Windows links bins as .cmd shims, which cannot run without a shell.
+      const command =
+        process.platform === "win32"
+          ? { program: "node", args: [path.join(root, file), "--version"] }
+          : {
+              program: path.join(prefix, "node_modules", ".bin", name),
+              args: ["--version"],
+            };
+      if (this.options.verbose) {
+        console.error(`+ (cd ${prefix} && ${render(command)})`);
+      }
+      const result = await exec(command.program, command.args, {
+        cwd: prefix,
+        capture: true,
+        mirror: this.options.verbose,
+        stdin: "ignore",
+      });
+      if (result.code !== 0) {
+        if (!this.options.verbose) {
+          stdout.write(String(result.stdout ?? ""));
+          process.stderr.write(String(result.stderr ?? ""));
+        }
+        throw new Error(
+          `bin ${name} (${file}) exited with status ${result.code} when run with --version from the installed tarball`,
+        );
+      }
+      const version = String(result.stdout ?? "")
+        .trim()
+        .split("\n")[0];
+      console.log(`  ${name} --version: ${version}`);
+    }
+  }
+
   async command(step) {
     if (step.confirm && !this.options.yes) {
       const rendered = render(this.expand(step.command));
-      const answer = await prompt(`Run \`${rendered}\`? [y/N] `);
+      const answer = await this.prompt(`Run \`${rendered}\`? [y/N] `);
       if (!/^(?:y|yes)$/i.test(answer)) {
         if (step.id === "first-publish") {
           throw new Error("the first publish was declined");
@@ -230,7 +365,11 @@ class SetupSession {
       this.values.worktree = path.join(this.temporary, "worktree");
       this.values.pack_destination = this.temporary;
     }
-    const result = await this.runProcess(step, step.id !== "pack");
+    // Pack output is captured so npm's warnings can be reviewed.
+    const result =
+      step.id === "pack"
+        ? await this.capture(step)
+        : await this.runProcess(step, true);
     if (result.code !== 0) {
       if (step.id === "attach-trusted-publisher") {
         console.error(
@@ -254,7 +393,12 @@ class SetupSession {
     } else if (step.id === "prepare-worktree") {
       this.conditions.add("worktree-created");
     } else if (step.id === "pack") {
+      reportPackWarnings(result.stderr);
       this.recordPack(result.stdout);
+    } else if (step.id === "rerun-release") {
+      console.log("  Re-running the failed release jobs.");
+      this.values.run_id = this.values.failed_run_id;
+      this.conditions.delete("release-dispatch");
     }
   }
 
@@ -298,18 +442,18 @@ class SetupSession {
     // Only a form the tool fills needs the automated profile.
     const fill = PREFILLED_FORMS.has(step.id) && this.plan.trusted_publisher;
     await this.open(step.url, Boolean(fill));
-    if (fill && this.connection) {
+    if (fill && this.automation) {
       await this.prefill();
     }
-    await prompt("Finish this step in the browser, then press Enter...");
+    await this.prompt("Finish this step in the browser, then press Enter...");
     if (step.id === "create-pending-publisher") {
       this.conditions.delete("trust-missing");
     }
   }
 
   async prefill() {
-    await prompt("Press Enter when the form is visible...");
-    const page = this.connection.page;
+    await this.prompt("Press Enter when the form is visible...");
+    const page = this.automation;
     const script = npmPrefillScript(this.plan.trusted_publisher, false);
     let result = await page.evaluate(script);
     if (result.filled?.length === 0) {
@@ -320,7 +464,9 @@ class SetupSession {
     const submit =
       this.options.yes ||
       /^(?:y|yes)$/i.test(
-        await prompt("Submit this trusted-publisher configuration? [y/N] "),
+        await this.prompt(
+          "Submit this trusted-publisher configuration? [y/N] ",
+        ),
       );
     if (submit) {
       const submission = await page.evaluate(
@@ -350,17 +496,12 @@ class SetupSession {
       }
       return;
     }
-    if (!this.connection) {
-      await ensureProfileIgnored(this.options.browserProfile, this.options);
-      this.connection = await launchRealBrowser({
-        engine: "playwright",
-        channel: this.options.browserChannel,
-        userDataDir: this.options.browserProfile,
-        headless: false,
-        verbose: this.options.verbose,
-      });
-    }
-    await this.connection.page.goto(url);
+    this.automation ??= await connectAutomation({
+      browser: this.options.browserOptions,
+      profile: this.options.browserProfile,
+      verbose: this.options.verbose,
+    });
+    await this.automation.goto(url);
   }
 
   cwd(step) {
@@ -450,6 +591,54 @@ class SetupSession {
   log(message) {
     console.log(message);
   }
+
+  /** Asks on the terminal, or through `options.prompt` when given. */
+  prompt(message) {
+    return (this.options.prompt ?? prompt)(message);
+  }
+}
+
+/**
+ * npm's warnings from `npm pack`, such as fields it auto-corrected or removed
+ * from the packed package.json, without npm's advice to run its fixer, which
+ * rewrites package.json in place.
+ */
+export function packWarnings(stderr) {
+  return String(stderr ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.replaceAll(ANSI, "").trim())
+    .filter((line) => /^npm warn/i.test(line))
+    .map((line) =>
+      line.replace(/\s*Please run "npm pkg fix"[^.]*\.?/i, "").trim(),
+    )
+    .filter((line) => !/npm pkg fix/i.test(line));
+}
+
+function reportPackWarnings(stderr) {
+  const warnings = packWarnings(stderr);
+  if (warnings.length === 0) {
+    return;
+  }
+  console.log("  npm warned while packing:");
+  for (const line of warnings) {
+    console.log(`    ${line}`);
+  }
+  if (warnings.some((line) => /corrected|invalid and removed/i.test(line))) {
+    console.log(
+      "  npm changed the packed package.json; correct these fields in package.json itself.",
+    );
+  }
+}
+
+function binEntries(manifest) {
+  if (typeof manifest.bin === "string") {
+    return { [String(manifest.name).replace(/^@[^/]+\//, "")]: manifest.bin };
+  }
+  return manifest.bin && typeof manifest.bin === "object" ? manifest.bin : {};
+}
+
+async function readManifest(file) {
+  return JSON.parse(await readFile(file, "utf8"));
 }
 
 function isTrustedRelease(document, values) {
@@ -472,10 +661,14 @@ function render(command) {
   return [command.program, ...command.args].join(" ");
 }
 
+/** Asks a question on the terminal; a closed stdin answers with "". */
 async function prompt(message) {
   const terminal = createInterface({ input: stdin, output: stdout });
   try {
-    return await terminal.question(message);
+    return await new Promise((resolve) => {
+      terminal.once("close", () => resolve(""));
+      terminal.question(message).then(resolve, () => resolve(""));
+    });
   } finally {
     terminal.close();
   }

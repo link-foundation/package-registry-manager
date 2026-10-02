@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn } from "command-stream";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,8 +20,9 @@ const INLINE =
   /(?:Login at|Authenticate your account at):?\s+(https?:\/\/\S+)/i;
 // npm falls back to this prompt when a web login is not completed in time.
 const LEGACY_LOGIN = /^Username:/i;
+/** Terminal color and cursor escape sequences. */
 // eslint-disable-next-line no-control-regex
-const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+export const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 
 const clean = (raw) => raw.replace(ANSI, "").trim();
 

@@ -1,3 +1,4 @@
+mod browser_parity;
 mod cli;
 mod mock_registry;
 mod npm_bootstrap;

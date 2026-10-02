@@ -6,7 +6,7 @@ tool does not upload package artifacts.
 
 ## Development Setup
 
-Install stable Rust, Node.js 20 or newer, and the Rust components used by CI:
+Install stable Rust, Node.js 22 or newer, and the Rust components used by CI:
 
 ```bash
 rustup component add rustfmt clippy
@@ -45,6 +45,24 @@ cd js
 npm run check
 npm test
 ```
+
+Changes to how the automated browser starts need the browser smoke test. It
+launches the automated profile in an installed Chrome and asserts, through
+browser-commander's `measureParity`, that `navigator.webdriver` is `false` and
+that the command line has no switches a browser started by hand would not
+have. It needs a display, so it is skipped unless `PRM_BROWSER_SMOKE=1`:
+
+```bash
+PRM_BROWSER_SMOKE=1 xvfb-run -a node --test js/test/browser-parity.test.mjs
+PRM_BROWSER_SMOKE=1 xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration browser_parity
+```
+
+The link-foundation libraries (browser-commander, command-stream, and
+lino-arguments) must stay at their latest release in both manifests.
+`node scripts/check-upstream-dependencies.mjs` reports any that are behind;
+CI runs it on every pull request and daily, and Dependabot opens the bump.
+Bump the JavaScript and Rust packages together and adopt new upstream
+features in both implementations.
 
 Keep command execution in exact argument-vector form. Do not introduce shell
 string interpolation for repository-derived values. Keep tracing behind

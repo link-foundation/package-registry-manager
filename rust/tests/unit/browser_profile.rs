@@ -2,9 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use browser_commander::browser::open_in_user_browser::build_open_command;
+use browser_commander::utilities::subprocess::CommandError;
 use package_registry_manager::auth_urls::AuthUrlScanner;
-use package_registry_manager::browser::user_browser_command;
-use package_registry_manager::model::CommandSpec;
+use package_registry_manager::browser::{open_in_user_browser, opener_platform, opener_succeeded};
 use package_registry_manager::profile::{
     default_browser_profile, default_browser_profile_for, ensure_profile_ignored,
     legacy_browser_profile, protect_legacy_profile,
@@ -150,25 +151,45 @@ async fn protects_a_profile_left_in_the_repository() {
 #[test]
 fn opens_urls_in_the_default_browser_without_a_shell() {
     let url = "https://www.npmjs.com/login?next=/login/cli/1&a=b";
-    let command = |program: &str, args: &[&str]| CommandSpec {
-        program: program.to_owned(),
-        args: args.iter().map(|arg| (*arg).to_owned()).collect(),
-    };
-    assert_eq!(
-        user_browser_command(url, "macos").expect("macOS"),
-        command("open", &[url])
-    );
-    assert_eq!(
-        user_browser_command(url, "linux").expect("Linux"),
-        command("xdg-open", &[url])
-    );
-    assert_eq!(
-        user_browser_command(url, "windows").expect("Windows"),
-        command("rundll32", &["url.dll,FileProtocolHandler", url])
-    );
-    for hostile in ["--help", "file:///etc/passwd", "https://a b", "https://"] {
-        assert!(user_browser_command(hostile, "linux").is_err(), "{hostile}");
+    let opener = |os: &str| build_open_command(url, opener_platform(os)).expect("opener");
+    assert_eq!(opener("macos"), ["open", url]);
+    assert_eq!(opener("linux"), ["xdg-open", url]);
+    assert_eq!(opener("freebsd"), ["xdg-open", url]);
+    assert_eq!(opener("windows"), ["explorer.exe", url]);
+}
+
+#[tokio::test]
+async fn refuses_to_open_non_web_urls() {
+    for hostile in [
+        "--help",
+        "file:///etc/passwd",
+        "https://a b",
+        "https://",
+        "javascript:alert(1)",
+    ] {
+        let error = open_in_user_browser(hostile).await.expect_err(hostile);
+        assert!(
+            error.to_string().contains("non-web URL"),
+            "{hostile}: {error}"
+        );
     }
+}
+
+#[test]
+fn treats_explorer_exit_code_one_as_handed_over() {
+    let exited = |file: &str, code| {
+        anyhow::Error::new(CommandError::Exited {
+            file: file.to_owned(),
+            args: Vec::new(),
+            code,
+            stdout: String::new(),
+            stderr: String::new(),
+        })
+    };
+    assert!(opener_succeeded(&exited("explorer.exe", 1)));
+    assert!(!opener_succeeded(&exited("explorer.exe", 2)));
+    assert!(!opener_succeeded(&exited("xdg-open", 1)));
+    assert!(!opener_succeeded(&anyhow::anyhow!("xdg-open: missing")));
 }
 
 #[test]
@@ -192,6 +213,7 @@ fn detects_the_legacy_username_prompt_without_a_newline() {
 #[tokio::test]
 async fn stops_npm_at_its_legacy_username_prompt() {
     use package_registry_manager::auth_urls::run_interactive;
+    use package_registry_manager::model::CommandSpec;
     use std::time::{Duration, Instant};
 
     let temporary = tempfile::tempdir().expect("temporary directory");

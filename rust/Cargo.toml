@@ -32,22 +32,22 @@ name = "package-registry-manager"
 path = "src/main.rs"
 
 [dependencies]
-lino-arguments = "0.3"
-clap = { version = "4.4", features = ["derive", "env"] }
-anyhow = "1"
-browser-commander = "0.12"
-command-stream = "0.25"
-regex = "1"
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tempfile = "3"
-tokio = { version = "1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
-toml = "0.8"
+lino-arguments = "0.3.0"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+anyhow = "1.0.104"
+browser-commander = "0.14.1"
+command-stream = "1.2.0"
+regex = "1.13.1"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+toml = "1.1.6"
 
 [dev-dependencies]
-serde_json = "1"
-walkdir = "2"
+serde_json = "1.0.151"
+walkdir = "2.5.0"
 
 [lints.rust]
 unsafe_code = "forbid"

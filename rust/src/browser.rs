@@ -1,54 +1,75 @@
-use std::process::Stdio;
+use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
+use browser_commander::browser::open_in_user_browser::{
+    build_open_command, open_in_user_browser as open_with_system_opener,
+};
+use browser_commander::utilities::subprocess::{run_command, CommandError, RunCommandOptions};
 use regex::Regex;
 
-use crate::model::{CommandSpec, TrustedPublisherPrefill};
+use crate::model::TrustedPublisherPrefill;
 
-/// The exact argument vector that opens an http(s) URL in the default browser.
+/// How long an opener may run before the tool stops waiting for it:
+/// `xdg-open` can wait for a newly started browser to exit.
+pub const OPENER_GRACE: Duration = Duration::from_secs(2);
+
+/// The platform whose opener Browser Commander runs, from a value of
+/// [`std::env::consts::OS`]: `open` on macOS, `explorer.exe` on Windows, and
+/// `xdg-open` on Linux and other Unix systems.
+#[must_use]
+pub fn opener_platform(os: &str) -> &'static str {
+    match os {
+        "macos" => "macos",
+        "windows" => "windows",
+        _ => "linux",
+    }
+}
+
+/// Whether a failed opener still handed the URL over: `explorer.exe` exits
+/// with 1 after it did.
+#[must_use]
+pub fn opener_succeeded(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<CommandError>(),
+        Some(CommandError::Exited { file, code: 1, .. }) if file == "explorer.exe"
+    )
+}
+
+/// Open an http(s) URL in the user's own default browser.
 ///
-/// `os` is a value of [`std::env::consts::OS`]: `open` runs on macOS, the URL
-/// protocol handler on Windows, which avoids `cmd` quoting rules, and
-/// `xdg-open` elsewhere.
-pub fn user_browser_command(url: &str, os: &str) -> Result<CommandSpec> {
+/// The user is usually already signed in there, and nothing is automated.
+/// Browser Commander builds the opener's exact argument vector and runs it
+/// through command-stream.
+///
+/// Returns once the opener exits, or after [`OPENER_GRACE`] while it keeps
+/// running in the background.
+///
+/// # Errors
+/// Fails for a non-web URL, or when the opener cannot start or fails.
+pub async fn open_in_user_browser(url: &str) -> Result<()> {
     let web = Regex::new(r"(?i)^https?://\S+$").expect("static pattern must compile");
     if !web.is_match(url) {
         bail!("refusing to open a non-web URL: {url}");
     }
-    let (program, mut args) = match os {
-        "macos" => ("open", Vec::new()),
-        "windows" => ("rundll32", vec!["url.dll,FileProtocolHandler".to_owned()]),
-        _ => ("xdg-open", Vec::new()),
-    };
-    args.push(url.to_owned());
-    Ok(CommandSpec {
-        program: program.to_owned(),
-        args,
-    })
-}
-
-/// Open a URL in the user's own default browser, where they are usually
-/// already signed in. Nothing is automated.
-///
-/// Returns once the opener started; it is not awaited because `xdg-open` can
-/// wait for a newly started browser to exit.
-pub fn open_in_user_browser(url: &str) -> Result<()> {
-    let command = user_browser_command(url, std::env::consts::OS)?;
-    let mut opener = std::process::Command::new(&command.program);
-    opener
-        .args(&command.args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // Keep the browser running when the terminal interrupts the tool.
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut opener, 0);
-    let mut child = opener
-        .spawn()
-        .with_context(|| format!("{}: cannot start", command.program))?;
-    // Reap the opener in the background so it does not linger as a zombie.
-    std::thread::spawn(move || child.wait());
-    Ok(())
+    let url = url.to_owned();
+    let platform = opener_platform(std::env::consts::OS);
+    // A detached task keeps a slow opener running while the setup continues.
+    let opener = tokio::spawn(async move {
+        if platform == std::env::consts::OS {
+            open_with_system_opener(&url).await.map(drop)
+        } else {
+            let command = build_open_command(&url, platform)?;
+            run_command(&command[0], &command[1..], RunCommandOptions::default()).await?;
+            Ok(())
+        }
+    });
+    match tokio::time::timeout(OPENER_GRACE, opener).await {
+        Err(_) => Ok(()),
+        Ok(joined) => match joined? {
+            Err(error) if !opener_succeeded(&error) => Err(error),
+            _ => Ok(()),
+        },
+    }
 }
 
 /// Build a self-contained script that fills a trusted-publisher form (npm,

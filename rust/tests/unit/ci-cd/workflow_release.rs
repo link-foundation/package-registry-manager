@@ -178,6 +178,7 @@ fn release_workflow_jobs_have_explicit_timeouts() {
         // 70% share the invariant in issue_135.rs enforces. See issue #135.
         ("test", 30),
         ("javascript", 15),
+        ("browser-smoke", 30),
         // Compiles and runs every scripts/*.rs test harness from scratch; the
         // cargo-install of rust-script dominates a cold run. See issue #150.
         ("script-tests", 20),

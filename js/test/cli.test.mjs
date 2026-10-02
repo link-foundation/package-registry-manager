@@ -75,7 +75,12 @@ test("setup is safe by default", async () => {
   assert.match(stdout, /\(bootstrap\)/);
   assert.match(stdout, /npm login --auth-type=web --browser=false/);
   assert.match(stdout, /npm publish \{tarball\} --access public/);
-  assert.match(stdout, /npx -y npm@latest trust github @acme\/widgets/);
+  assert.match(
+    stdout,
+    /npx -y npm@(?:\^12|\^11\.10) trust github @acme\/widgets/,
+  );
+  assert.match(stdout, /prerequisites:\n {4}- Node\.js: /);
+  assert.match(stdout, /npm two-factor authentication: /);
   assert.match(stdout, /npm logout/);
   assert.ok(requests.includes("/npm/@acme%2Fwidgets/latest"));
 });
