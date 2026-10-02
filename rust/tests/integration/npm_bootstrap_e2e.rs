@@ -448,7 +448,7 @@ fn stops_when_an_installed_bin_fails_to_run_with_version() {
 }
 
 #[test]
-fn reruns_a_release_that_npm_rejected_before_trust_and_watches_it() {
+fn reruns_the_release_npm_refused_before_trust_and_watches_the_rerun() {
     let temporary = TempDir::new().expect("create temporary directory");
     let Some((repository, state)) = prepare(&temporary) else {
         return;
