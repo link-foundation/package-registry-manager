@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { inspectRepository } from "./discovery.mjs";
 import { parseRegistry } from "./model.mjs";
 import { buildPlans } from "./plan.mjs";
+import { probeEnvironment, renderPrerequisites } from "./prerequisites.mjs";
 import { probeRegistryState } from "./registry-state.mjs";
 import { BROWSER_MODES, defaultBrowserProfile, executePlan } from "./setup.mjs";
 
@@ -92,7 +93,24 @@ export async function main(args = process.argv.slice(2)) {
   }
 
   const registries = (values.registry ?? []).map(parseRegistry);
-  const planOptions = { verifyRelease: values["verify-release"] };
+  if (!["plan", "setup"].includes(command)) {
+    throw new Error(`unknown command '${command}'`);
+  }
+  const environment = await probeEnvironment({
+    offline: values.offline,
+    verbose: values.verbose,
+    npm: inspection.packages.some(
+      (item) =>
+        item.registry === "npm" &&
+        item.publishable &&
+        (registries.length === 0 || registries.includes("npm")),
+    ),
+  });
+  const planOptions = {
+    verifyRelease: values["verify-release"],
+    environment,
+    browser: browserSummary(command, values),
+  };
   if (command === "plan") {
     const plans = buildPlans(inspection, registries, planOptions);
     if (plans.length === 0) {
@@ -100,9 +118,6 @@ export async function main(args = process.argv.slice(2)) {
     }
     outputPlans(plans, values.format);
     return;
-  }
-  if (command !== "setup") {
-    throw new Error(`unknown command '${command}'`);
   }
   if (registries.length !== 1) {
     throw new Error("setup requires exactly one --registry <registry>");
@@ -133,6 +148,20 @@ export async function main(args = process.argv.slice(2)) {
     verbose: values.verbose,
     verifyRelease: values["verify-release"],
   });
+}
+
+function browserSummary(command, values) {
+  if (command === "setup" && values["no-browser"]) {
+    return { mode: "none" };
+  }
+  return {
+    mode: command === "setup" ? values.browser : "default",
+    channel: values["browser-channel"],
+    profile:
+      command === "setup" && values.browser === "automated"
+        ? path.resolve(values["browser-profile"] ?? defaultBrowserProfile())
+        : undefined,
+  };
 }
 
 function selectPlan(plans, packageName) {
@@ -204,6 +233,9 @@ function outputPlans(plans, format) {
     }
     if (plan.skipped_reason) {
       process.stdout.write(`  skipped: ${plan.skipped_reason}\n`);
+    }
+    for (const line of renderPrerequisites(plan.prerequisites ?? [])) {
+      process.stdout.write(`${line}\n`);
     }
     plan.steps.forEach((step, index) => {
       const when = step.when ? ` [when ${step.when}]` : "";

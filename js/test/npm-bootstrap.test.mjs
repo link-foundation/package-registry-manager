@@ -69,17 +69,25 @@ test("plans a bootstrap for a package missing from npm", async () => {
       "check-registry",
       "check-sign-in",
       "sign-in",
+      "check-2fa",
+      "enable-2fa",
+      "verify-2fa",
       "fetch-default-branch",
       "prepare-worktree",
       "pack",
+      "test-install",
+      "verify-bins",
       "first-publish",
       "wait-for-registry",
       "check-trust",
+      "inspect-release-run",
+      "read-release-failure",
       "attach-trusted-publisher",
       "configure-trusted-publisher",
       "verify-trusted-publisher",
       "audit-token-secrets",
       "delete-token-secret",
+      "rerun-release",
       "sign-out",
       "remove-worktree",
     ],
@@ -111,7 +119,7 @@ test("plans a bootstrap for a package missing from npm", async () => {
   assert.deepEqual(argv(plan, "attach-trusted-publisher"), [
     "npx",
     "-y",
-    "npm@latest",
+    "npm@^11.10",
     "trust",
     "github",
     "pipeline-app",
@@ -126,7 +134,7 @@ test("plans a bootstrap for a package missing from npm", async () => {
   assert.deepEqual(argv(plan, "check-trust"), [
     "npx",
     "-y",
-    "npm@latest",
+    "npm@^11.10",
     "trust",
     "list",
     "pipeline-app",
@@ -294,6 +302,8 @@ async function runWithFakeTools(plan, registry, overrides = {}) {
       noBrowser: true,
       verbose: false,
       pollIntervalMs: 1,
+      // Browser steps wait for Enter; answer at once.
+      prompt: async () => "",
       fetch: async (url) => {
         const found = registry(url);
         return {
@@ -304,6 +314,9 @@ async function runWithFakeTools(plan, registry, overrides = {}) {
       },
       ...overrides,
     });
+  } catch (error) {
+    error.lines = lines;
+    throw error;
   } finally {
     console.log = originalLog;
     process.env.PATH = originalPath;
@@ -345,13 +358,16 @@ test(
       "npm pkg get name version repository",
       "npm whoami",
       "npm login --auth-type=web --browser=false",
+      "npm profile get --json",
       "git fetch origin HEAD",
       `git worktree add --detach ${worktree} FETCH_HEAD`,
       `npm pack --ignore-scripts --json --pack-destination ${destination}`,
+      `npm install --no-save --no-package-lock --no-audit --no-fund --ignore-scripts --prefix ${destination}/install ${destination}/pipeline-app-0.1.0.tgz`,
       `npm publish ${destination}/pipeline-app-0.1.0.tgz --access public --auth-type=web --browser=false --provenance=false`,
-      "npx -y npm@latest trust list pipeline-app --json",
-      "npx -y npm@latest trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false",
-      "npx -y npm@latest trust list pipeline-app --json",
+      "npx -y npm@^11.10 trust list pipeline-app --json",
+      "gh run list --repo acme/pipeline-app --workflow release.yml --limit 1 --json databaseId,conclusion,status,url",
+      "npx -y npm@^11.10 trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false",
+      "npx -y npm@^11.10 trust list pipeline-app --json",
       "gh secret list --repo acme/pipeline-app --json name",
       "gh secret delete NPM_TOKEN --repo acme/pipeline-app",
       "npm logout",
@@ -372,6 +388,18 @@ test(
     assert.ok(
       lines.some((line) => line.includes("pipeline-app-0.1.0.tgz: 120 bytes")),
     );
+    assert.ok(
+      lines.includes("  Two-factor authentication is on (auth-and-writes)."),
+    );
+    assert.ok(
+      lines.includes("  pipeline-app --version: 0.1.0"),
+      lines.join("\n"),
+    );
+    assert.ok(
+      lines.includes(
+        "  The latest release run success: https://github.com/acme/pipeline-app/actions/runs/41",
+      ),
+    );
     await assert.rejects(stat(destination), "temporary files are removed");
 
     const resumed = await runWithFakeTools(
@@ -388,7 +416,7 @@ test(
       false,
     );
     assert.ok(
-      again.includes("npx -y npm@latest trust list pipeline-app --json"),
+      again.includes("npx -y npm@^11.10 trust list pipeline-app --json"),
     );
   },
 );
@@ -469,6 +497,182 @@ test(
       delete process.env.FAKE_LEGACY_LOGIN;
     }
     assert.ok(Date.now() - started < 20_000, "the prompt is not awaited");
+  },
+);
+
+async function withEnv(values, run) {
+  const saved = Object.fromEntries(
+    Object.keys(values).map((key) => [key, process.env[key]]),
+  );
+  Object.assign(process.env, values);
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+async function freshState() {
+  const state = await mkdtemp(path.join(temporary, "state-"));
+  process.env.FAKE_STATE = state;
+  await installFakeTools(state);
+  return state;
+}
+
+const POSIX_ONLY = {
+  skip: process.platform === "win32" && "fake tools are POSIX scripts",
+};
+
+test(
+  "opens the npm 2FA settings and stops before publishing while 2FA is off",
+  POSIX_ONLY,
+  async () => {
+    const state = await freshState();
+    const plan = await npmPlan({
+      exists_on_registry: false,
+      trusted_publishing: false,
+    });
+    const error = await withEnv({ FAKE_TFA: "off" }, () =>
+      runWithFakeTools(plan, () => null).catch((failure) => failure),
+    );
+    assert.match(error.message, /two-factor authentication is still off/);
+    const { lines } = error;
+    assert.ok(lines.includes("Open https://www.npmjs.com/settings/~/tfa"));
+    const commands = (await readLog(state)).map((entry) =>
+      entry.argv.join(" "),
+    );
+    assert.equal(
+      commands.filter((item) => item === "npm profile get --json").length,
+      2,
+    );
+    for (const prefix of ["npm pack", "npm publish", "npx"]) {
+      assert.equal(
+        commands.some((item) => item.startsWith(prefix)),
+        false,
+        prefix,
+      );
+    }
+  },
+);
+
+test(
+  "reports npm's pack corrections and stops when a bin was removed",
+  POSIX_ONLY,
+  async () => {
+    const state = await freshState();
+    const plan = await npmPlan({
+      exists_on_registry: false,
+      trusted_publishing: false,
+    });
+    const error = await withEnv({ FAKE_PACK_WARNINGS: "1" }, () =>
+      runWithFakeTools(plan, () => null).catch((failure) => failure),
+    );
+    assert.match(error.message, /packed package\.json has no bin pipeline-app/);
+    const { lines } = error;
+    assert.ok(
+      lines.includes(
+        '    npm warn pack "bin[pipeline-app]" script name bin/cli.js was invalid and removed',
+      ),
+      lines.join("\n"),
+    );
+    assert.ok(
+      lines.includes(
+        "    npm warn pack npm auto-corrected some errors in your package.json when publishing.",
+      ),
+    );
+    assert.equal(
+      lines.some((line) => /pkg fix/.test(line)),
+      false,
+      "never suggests npm pkg fix",
+    );
+    const commands = (await readLog(state)).map((entry) =>
+      entry.argv.join(" "),
+    );
+    assert.ok(commands.some((item) => item.startsWith("npm install")));
+    assert.equal(
+      commands.some((item) => /^npm (publish|pkg fix)/.test(item)),
+      false,
+    );
+  },
+);
+
+test("keeps npm's warnings without its npm pkg fix advice", async () => {
+  const { packWarnings } = await import("../src/setup.mjs");
+  assert.deepEqual(
+    packWarnings(
+      '\u001b[33mnpm warn\u001b[39m pack auto-corrected.  Please run "npm pkg fix" to address these errors.\nnpm notice 1 file\nnpm warn run npm pkg fix\n',
+    ),
+    ["npm warn pack auto-corrected."],
+  );
+});
+
+test(
+  "stops when an installed bin fails to run with --version",
+  POSIX_ONLY,
+  async () => {
+    await freshState();
+    const plan = await npmPlan({
+      exists_on_registry: false,
+      trusted_publishing: false,
+    });
+    await withEnv({ FAKE_BIN_FAILS: "1" }, () =>
+      assert.rejects(
+        runWithFakeTools(plan, () => null),
+        /bin pipeline-app \(bin\/cli\.js\) exited with status 1/,
+      ),
+    );
+  },
+);
+
+test(
+  "re-runs a release that npm rejected before trust and watches it",
+  POSIX_ONLY,
+  async () => {
+    await freshState();
+    const plan = await npmPlan(
+      { exists_on_registry: true, trusted_publishing: false },
+      { verifyRelease: true },
+    );
+    let calls = 0;
+    const registry = () =>
+      (calls += 1) === 1
+        ? { version: "0.1.0" }
+        : {
+            version: "0.1.1",
+            _npmUser: { trustedPublisher: { id: "github" } },
+            dist: { attestations: {} },
+          };
+    const { lines, log } = await withEnv(
+      { FAKE_RELEASE_RUN: "failed-publish" },
+      () => runWithFakeTools(plan, registry),
+    );
+    const commands = log.map((entry) => entry.argv.join(" "));
+    assert.ok(
+      commands.includes("gh run view 42 --repo acme/pipeline-app --log-failed"),
+    );
+    assert.ok(
+      commands.includes("gh run rerun 42 --repo acme/pipeline-app --failed"),
+    );
+    assert.ok(
+      commands.includes(
+        "gh run watch 42 --repo acme/pipeline-app --exit-status",
+      ),
+    );
+    assert.equal(
+      commands.some((item) => item.startsWith("gh workflow run")),
+      false,
+      "the re-run is watched instead of a new dispatch",
+    );
+    assert.ok(
+      lines.some((line) => line.includes("E404/invalid-publisher")),
+      lines.join("\n"),
+    );
   },
 );
 
