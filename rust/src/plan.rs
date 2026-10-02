@@ -7,6 +7,7 @@ use crate::model::{
     Inspection, Package, PlanMode, Registry, SetupPlan, SetupStep, StepKind,
     TrustedPublisherPrefill,
 };
+use crate::prerequisites::{plan_prerequisites, BrowserDisplay, Environment};
 use crate::registry_state::Endpoints;
 
 /// Options that shape setup plans.
@@ -16,6 +17,12 @@ pub struct PlanOptions {
     pub verify_release: bool,
     /// Registry API base URLs used in lookup steps.
     pub endpoints: Endpoints,
+    /// The probed local tools (see `probe_environment`); with it npm trust runs
+    /// through the npm the Node.js on `PATH` supports, and plans list their
+    /// manual prerequisites.
+    pub environment: Option<Environment>,
+    /// Where browser pages open, for the prerequisites.
+    pub browser: BrowserDisplay,
 }
 
 /// Build setup plans for every publishable package found during inspection.
@@ -31,8 +38,8 @@ pub fn build_plans_for(inspection: &Inspection, selected: &BTreeSet<Registry>) -
         inspection,
         selected,
         &PlanOptions {
-            verify_release: false,
             endpoints: Endpoints::from_env(),
+            ..PlanOptions::default()
         },
     )
 }
@@ -60,6 +67,7 @@ fn base_plan(inspection: &Inspection, package: &Package, steps: Vec<SetupStep>) 
         repository: inspection.repository.clone(),
         steps,
         mode: None,
+        prerequisites: Vec::new(),
         trusted_publisher: None,
         skipped_reason: None,
     }
@@ -167,6 +175,10 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
         workflow: workflow.clone(),
         verify_release: options.verify_release,
         endpoints: &options.endpoints,
+        trust_npm: options
+            .environment
+            .as_ref()
+            .map(|environment| environment.trust_npm.as_str()),
     };
     let flow = match package.registry {
         Registry::Npm => npm_flow,
@@ -190,6 +202,7 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
     };
     let mut plan = base_plan(inspection, package, steps);
     plan.mode = mode;
+    plan.prerequisites = plan_prerequisites(&plan, options.environment.as_ref(), &options.browser);
     if let (Some((owner, name)), Some(workflow), true) = (
         owner_repo,
         workflow,

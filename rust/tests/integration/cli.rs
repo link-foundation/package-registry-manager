@@ -66,11 +66,18 @@ fn setup_is_safe_by_default() {
         "(bootstrap)",
         "npm login --auth-type=web --browser=false",
         "npm publish {tarball} --access public",
-        "npx -y npm@latest trust github @acme/widgets",
+        "prerequisites:\n    - Node.js: ",
+        "npm two-factor authentication: ",
         "npm logout",
     ] {
         assert!(stdout.contains(expected), "{expected} in\n{stdout}");
     }
+    assert!(
+        regex::Regex::new(r"npx -y npm@(?:\^12|\^11\.10) trust github @acme/widgets")
+            .expect("valid pattern")
+            .is_match(&stdout),
+        "npm trust through npm 11.10 or 12 in\n{stdout}"
+    );
     assert!(registry
         .requests()
         .contains(&"/npm/@acme%2Fwidgets/latest".to_owned()));

@@ -2,6 +2,7 @@
 //! unpublished to trusted publishing without long-lived tokens.
 
 use crate::model::{Package, SetupStep, StepKind};
+use crate::prerequisites::{DEFAULT_TRUST_NPM, NPM_TFA_URL};
 use crate::registry_state::{encode_uri_component, npm_name, Endpoints};
 
 /// Step conditions that only hold while a package is not yet published.
@@ -23,6 +24,8 @@ pub struct FlowContext<'a> {
     pub verify_release: bool,
     /// Registry API base URLs.
     pub endpoints: &'a Endpoints,
+    /// The npm package spec that runs `npm trust`; `npm@^11.10` when unset.
+    pub trust_npm: Option<&'a str>,
 }
 
 impl FlowContext<'_> {
@@ -119,7 +122,7 @@ fn verify_release_steps(context: &FlowContext<'_>, workflow: &str, url: String) 
             "Start the release workflow; if it has no workflow_dispatch trigger, the latest run is watched instead.",
         )
         .command("gh", &run)
-        .when("verify-release")
+        .when("release-dispatch")
         .cwd("."),
         step(
             "find-release-run",
@@ -128,7 +131,7 @@ fn verify_release_steps(context: &FlowContext<'_>, workflow: &str, url: String) 
             "Look up the newest run of the release workflow.",
         )
         .command("gh", &list)
-        .when("verify-release")
+        .when("release-dispatch")
         .cwd("."),
         step(
             "watch-release",
@@ -150,13 +153,80 @@ fn verify_release_steps(context: &FlowContext<'_>, workflow: &str, url: String) 
     ]
 }
 
+fn two_factor_steps() -> [SetupStep; 3] {
+    let profile = ["profile", "get", "--json"];
+    [
+        step(
+            "check-2fa",
+            "Check npm two-factor authentication",
+            StepKind::Check,
+            "npm trust requires account-level two-factor authentication, so check it before anything is published.",
+        )
+        .command("npm", &profile),
+        step(
+            "enable-2fa",
+            "Turn on npm two-factor authentication",
+            StepKind::Browser,
+            "Open the npm account's 2FA settings in your browser and turn on two-factor authentication.",
+        )
+        .url(NPM_TFA_URL)
+        .when("tfa-disabled"),
+        step(
+            "verify-2fa",
+            "Verify npm two-factor authentication",
+            StepKind::Check,
+            "Stop before publishing if two-factor authentication is still off.",
+        )
+        .command("npm", &profile)
+        .when("tfa-disabled"),
+    ]
+}
+
+fn release_run_steps(context: &FlowContext<'_>, workflow: &str) -> [SetupStep; 2] {
+    let repo = context.repo_args();
+    let mut list = vec!["run", "list"];
+    list.extend(&repo);
+    list.extend([
+        "--workflow",
+        workflow,
+        "--limit",
+        "1",
+        "--json",
+        "databaseId,conclusion,status,url",
+    ]);
+    let mut view = vec!["run", "view", "{failed_run_id}"];
+    view.extend(&repo);
+    view.push("--log-failed");
+    [
+        step(
+            "inspect-release-run",
+            "Read the latest release run",
+            StepKind::Check,
+            "Look up the newest run of the release workflow; a run that npm rejected can be re-run once trust is attached.",
+        )
+        .command("gh", &list)
+        .when("trust-missing")
+        .cwd("."),
+        step(
+            "read-release-failure",
+            "Read why the release run failed",
+            StepKind::Check,
+            "Search the failed jobs' log for npm's E404 or invalid-publisher rejection.",
+        )
+        .command("gh", &view)
+        .when("release-failed")
+        .cwd("."),
+    ]
+}
+
 /// npm: web sign-in, one confirmed first publish from a clean worktree, then
 /// `npm trust github` with a prefilled browser fallback.
 #[must_use]
 pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> {
     let name = package.name.as_str();
     let registry = context.endpoints.base(package.registry).unwrap_or_default();
-    let trust_list = ["-y", "npm@latest", "trust", "list", name, "--json"];
+    let trust_npm = context.trust_npm.unwrap_or(DEFAULT_TRUST_NPM);
+    let trust_list = ["-y", trust_npm, "trust", "list", name, "--json"];
     let package_cwd = context.package_cwd();
     let mut steps = vec![
         step(
@@ -183,6 +253,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
         .command("npm", &["login", "--auth-type=web", "--browser=false"])
         .when("signed-out"),
     ];
+    steps.extend(two_factor_steps());
     steps.extend(worktree_steps());
     steps.extend([
         step(
@@ -197,6 +268,35 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
         )
         .when("package-missing")
         .cwd(package_cwd.clone()),
+        step(
+            "test-install",
+            "Install the packed tarball",
+            StepKind::Command,
+            "Install the tarball into a scratch directory, without lifecycle scripts, to test it the way users get it.",
+        )
+        .command(
+            "npm",
+            &[
+                "install",
+                "--no-save",
+                "--no-package-lock",
+                "--no-audit",
+                "--no-fund",
+                "--ignore-scripts",
+                "--prefix",
+                "{pack_destination}/install",
+                "{tarball}",
+            ],
+        )
+        .when("package-missing")
+        .cwd("{pack_destination}"),
+        step(
+            "verify-bins",
+            "Verify the packed bin entries",
+            StepKind::Check,
+            "Compare the bin entries of the packed package.json with package.json and run each installed bin with --version.",
+        )
+        .when("package-missing"),
         step(
             "first-publish",
             "Publish the first version",
@@ -229,25 +329,26 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
     ]);
     let trusted_target = context.slug.as_deref().zip(context.workflow.as_deref());
     if let Some((slug, workflow)) = trusted_target {
+        steps.extend([step(
+            "check-trust",
+            "Check trusted publishing",
+            StepKind::Check,
+            "List the trusted publishers configured for the package.",
+        )
+        .command("npx", &trust_list)]);
+        steps.extend(release_run_steps(context, workflow));
         steps.extend([
-            step(
-                "check-trust",
-                "Check trusted publishing",
-                StepKind::Check,
-                "List the trusted publishers configured for the package.",
-            )
-            .command("npx", &trust_list),
             step(
                 "attach-trusted-publisher",
                 "Attach the GitHub Actions trusted publisher",
                 StepKind::Command,
-                "Trust the release workflow to publish through OIDC (npm 11.10 or newer, run through npx).",
+                format!("Trust the release workflow to publish through OIDC with {trust_npm}, run through npx; npm trust needs npm 11.10 or newer and account-level 2FA."),
             )
             .command(
                 "npx",
                 &[
                     "-y",
-                    "npm@latest",
+                    trust_npm,
                     "trust",
                     "github",
                     name,
@@ -308,6 +409,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
             .when("token-secret-present")
             .cwd(".")
             .confirmed(),
+            rerun_release_step(context),
         ]);
         if context.verify_release {
             steps.extend(verify_release_steps(
@@ -329,6 +431,22 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
         remove_worktree_step(),
     ]);
     steps
+}
+
+fn rerun_release_step(context: &FlowContext<'_>) -> SetupStep {
+    let mut rerun = vec!["run", "rerun", "{failed_run_id}"];
+    rerun.extend(context.repo_args());
+    rerun.push("--failed");
+    step(
+        "rerun-release",
+        "Re-run the failed release jobs",
+        StepKind::Command,
+        "Re-run the jobs of the release run that npm rejected, now that the trusted publisher is attached.",
+    )
+    .command("gh", &rerun)
+    .when("release-failed-publish")
+    .cwd(".")
+    .confirmed()
 }
 
 /// crates.io: a short-lived publish-new token entered into `cargo login` for

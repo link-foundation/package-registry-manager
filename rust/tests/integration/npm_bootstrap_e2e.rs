@@ -1,5 +1,5 @@
 //! End-to-end npm bootstrap through the binary, with Node.js stand-ins for
-//! npm, npx, git, gh, and the default-browser openers on PATH and a mock
+//! node, npm, npx, git, gh, and the default-browser openers on PATH and a mock
 //! registry.
 
 use std::fs;
@@ -39,7 +39,7 @@ fn install_fake_tools(node: &Path, state: &Path) -> PathBuf {
     let script = fs::read_to_string(fixtures.join("fake-tools/fake-tool.cjs")).expect("fake tool");
     let bin = state.join("bin");
     fs::create_dir_all(&bin).expect("create fake bin");
-    for tool in ["npm", "npx", "git", "gh", "open", "xdg-open"] {
+    for tool in ["node", "npm", "npx", "git", "gh", "open", "xdg-open"] {
         let file = bin.join(tool);
         fs::write(&file, format!("#!{}\n{script}", node.display())).expect("write fake tool");
         fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).expect("chmod fake tool");
@@ -54,19 +54,25 @@ struct Run {
 
 impl Run {
     fn commands(&self) -> Vec<String> {
-        self.log
-            .iter()
-            .map(|entry| {
-                entry["argv"]
-                    .as_array()
-                    .expect("argv")
-                    .iter()
-                    .map(|arg| arg.as_str().expect("argument"))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .collect()
+        step_commands(&self.log)
     }
+}
+
+/// The commands of the setup steps, without the prerequisite probes (node,
+/// npm, 2FA, and gh versions) that run before the first step.
+fn step_commands(log: &[Value]) -> Vec<String> {
+    log.iter()
+        .map(|entry| {
+            entry["argv"]
+                .as_array()
+                .expect("argv")
+                .iter()
+                .map(|arg| arg.as_str().expect("argument"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .skip_while(|command| !command.starts_with("npm pkg get"))
+        .collect()
 }
 
 fn read_log(state: &Path) -> Vec<Value> {
@@ -194,15 +200,20 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
             "npm pkg get name version repository".to_owned(),
             "npm whoami".to_owned(),
             "npm login --auth-type=web --browser=false".to_owned(),
+            "npm profile get --json".to_owned(),
             "git fetch origin HEAD".to_owned(),
             format!("git worktree add --detach {worktree} FETCH_HEAD"),
             format!("npm pack --ignore-scripts --json --pack-destination {destination}"),
             format!(
+                "npm install --no-save --no-package-lock --no-audit --no-fund --ignore-scripts --prefix {destination}/install {destination}/pipeline-app-0.1.0.tgz"
+            ),
+            format!(
                 "npm publish {destination}/pipeline-app-0.1.0.tgz --access public --auth-type=web --browser=false --provenance=false"
             ),
-            "npx -y npm@latest trust list pipeline-app --json".to_owned(),
-            "npx -y npm@latest trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false".to_owned(),
-            "npx -y npm@latest trust list pipeline-app --json".to_owned(),
+            "npx -y npm@^11.10 trust list pipeline-app --json".to_owned(),
+            "gh run list --repo acme/pipeline-app --workflow release.yml --limit 1 --json databaseId,conclusion,status,url".to_owned(),
+            "npx -y npm@^11.10 trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false".to_owned(),
+            "npx -y npm@^11.10 trust list pipeline-app --json".to_owned(),
             "gh secret list --repo acme/pipeline-app --json name".to_owned(),
             "gh secret delete NPM_TOKEN --repo acme/pipeline-app".to_owned(),
             "npm logout".to_owned(),
@@ -240,6 +251,18 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
         assert!(run.stdout.lines().any(|output| output == line), "{line}");
     }
     assert!(run.stdout.contains("pipeline-app-0.1.0.tgz: 120 bytes"));
+    for line in [
+        "  Two-factor authentication is on (auth-and-writes).",
+        "  pipeline-app --version: 0.1.0",
+        "  The latest release run success: https://github.com/acme/pipeline-app/actions/runs/41",
+        "    - Node.js: v20.19.4; needs ^20.17.0 || >=22.9.0",
+    ] {
+        assert!(
+            run.stdout.lines().any(|output| output == line),
+            "{line}\n{}",
+            run.stdout
+        );
+    }
     assert!(
         !Path::new(&destination).exists(),
         "temporary files are removed"
@@ -252,7 +275,7 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
     assert!(!resumed
         .iter()
         .any(|command| command.contains("trust github")));
-    assert!(resumed.contains(&"npx -y npm@latest trust list pipeline-app --json".to_owned()));
+    assert!(resumed.contains(&"npx -y npm@^11.10 trust list pipeline-app --json".to_owned()));
 }
 
 #[test]
@@ -318,4 +341,159 @@ fn stops_the_legacy_username_prompt_with_a_clear_message() {
         "{stderr}"
     );
     assert!(started.elapsed() < Duration::from_secs(40), "not awaited");
+}
+
+/// A registry where `pipeline-app` is missing, for runs that stop before the
+/// first publish.
+fn missing_registry() -> MockRegistry {
+    MockRegistry::start(|_| None)
+}
+
+/// Runs a setup that must fail, returning its stdout, stderr, and step
+/// commands.
+fn failing_setup(
+    repository: &Path,
+    state: &Path,
+    registry: &MockRegistry,
+    env: &[(&str, &str)],
+) -> (String, String, Vec<String>) {
+    let output = setup_command(repository, state, registry, &["--no-browser"], env);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(!output.status.success(), "{stdout}\n{stderr}");
+    (stdout, stderr, step_commands(&read_log(state)))
+}
+
+#[test]
+fn opens_the_npm_2fa_settings_and_stops_before_publishing_while_2fa_is_off() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let (stdout, stderr, commands) = failing_setup(
+        &repository,
+        &state,
+        &missing_registry(),
+        &[("FAKE_TFA", "off")],
+    );
+    assert!(
+        stderr.contains("two-factor authentication is still off"),
+        "{stderr}"
+    );
+    assert!(stdout
+        .lines()
+        .any(|line| line == "Open https://www.npmjs.com/settings/~/tfa"));
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|command| *command == "npm profile get --json")
+            .count(),
+        2
+    );
+    for prefix in ["npm pack", "npm publish", "npx"] {
+        assert!(
+            !commands.iter().any(|command| command.starts_with(prefix)),
+            "{prefix}"
+        );
+    }
+}
+
+#[test]
+fn reports_npm_pack_corrections_and_stops_when_a_bin_was_removed() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let (stdout, stderr, commands) = failing_setup(
+        &repository,
+        &state,
+        &missing_registry(),
+        &[("FAKE_PACK_WARNINGS", "1")],
+    );
+    assert!(
+        stderr.contains("packed package.json has no bin pipeline-app"),
+        "{stderr}"
+    );
+    for line in [
+        r#"    npm warn pack "bin[pipeline-app]" script name bin/cli.js was invalid and removed"#,
+        "    npm warn pack npm auto-corrected some errors in your package.json when publishing.",
+    ] {
+        assert!(stdout.lines().any(|output| output == line), "{stdout}");
+    }
+    assert!(!stdout.contains("pkg fix"), "never suggests npm pkg fix");
+    assert!(commands
+        .iter()
+        .any(|command| command.starts_with("npm install")));
+    assert!(!commands
+        .iter()
+        .any(|command| command.starts_with("npm publish") || command.starts_with("npm pkg fix")));
+}
+
+#[test]
+fn stops_when_an_installed_bin_fails_to_run_with_version() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let (_, stderr, _) = failing_setup(
+        &repository,
+        &state,
+        &missing_registry(),
+        &[("FAKE_BIN_FAILS", "1")],
+    );
+    assert!(
+        stderr.contains("bin pipeline-app (bin/cli.js) exited with status 1"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn reruns_a_release_that_npm_rejected_before_trust_and_watches_it() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    // The trusted release appears once the failed jobs were re-run.
+    let log = state.join("log.jsonl");
+    let registry = MockRegistry::start(move |path| {
+        if !path.starts_with("/npm/pipeline-app/") {
+            return None;
+        }
+        let rerun = fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains(r#""run","rerun""#);
+        Some(if rerun {
+            r#"{"version":"0.1.1","_npmUser":{"trustedPublisher":{"id":"github"}},"dist":{"attestations":{}}}"#.to_owned()
+        } else {
+            r#"{"version":"0.1.0"}"#.to_owned()
+        })
+    });
+    let output = setup_command(
+        &repository,
+        &state,
+        &registry,
+        &["--no-browser", "--verify-release"],
+        &[("FAKE_RELEASE_RUN", "failed-publish")],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let commands = step_commands(&read_log(&state));
+    for command in [
+        "gh run view 42 --repo acme/pipeline-app --log-failed",
+        "gh run rerun 42 --repo acme/pipeline-app --failed",
+        "gh run watch 42 --repo acme/pipeline-app --exit-status",
+    ] {
+        assert!(commands.iter().any(|item| item == command), "{command}");
+    }
+    assert!(
+        !commands
+            .iter()
+            .any(|command| command.starts_with("gh workflow run")),
+        "the re-run is watched instead of a new dispatch"
+    );
+    assert!(stdout.contains("E404/invalid-publisher"), "{stdout}");
 }

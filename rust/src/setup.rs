@@ -18,7 +18,9 @@ use crate::auth_urls::{
 use crate::browser::{npm_prefill_script, open_in_user_browser};
 use crate::flows::CLEANUP_CONDITIONS;
 use crate::model::{CommandSpec, PlanMode, SetupPlan, SetupStep, StepKind};
+use crate::npm_package::{report_pack_warnings, verify_bins, PUBLISH_REJECTED};
 use crate::plan::package_directory;
+use crate::prerequisites::two_factor_mode;
 use crate::profile::{ensure_profile_ignored, protect_legacy_profile};
 use crate::registry_state::{npm_trusted, truthy, Endpoints, Lookup, RegistryClient};
 
@@ -101,7 +103,7 @@ struct Session<'a> {
 #[allow(clippy::future_not_send)] // Browser Commander's native CDP adapter is intentionally !Sync.
 impl<'a> Session<'a> {
     fn new(plan: &'a SetupPlan, options: &'a ExecuteOptions<'a>) -> Self {
-        let mut conditions = BTreeSet::from(["verify-release"]);
+        let mut conditions = BTreeSet::from(["verify-release", "release-dispatch"]);
         if plan.package.exists_on_registry == Some(false) {
             conditions.insert("package-missing");
         }
@@ -170,6 +172,7 @@ impl<'a> Session<'a> {
     async fn run_step(&mut self, step: &SetupStep) -> Result<()> {
         match step.kind {
             StepKind::Check if step.command.is_some() => self.check(step).await,
+            StepKind::Check if step.id == "verify-bins" => self.verify_bins().await,
             StepKind::Check => self.check_registry().await,
             StepKind::Command => self.command(step).await,
             StepKind::Wait => self.wait(step).await,
@@ -240,6 +243,22 @@ impl<'a> Session<'a> {
                     bail!("npm does not list a trusted publisher for the package");
                 }
             }
+            "check-2fa" | "verify-2fa" => self.check_two_factor(step, &result)?,
+            "inspect-release-run" => self.inspect_release_run(&result)?,
+            "read-release-failure" => {
+                if result.code != 0 {
+                    eprintln!("warning: could not read the failed release log");
+                } else if Regex::new(PUBLISH_REJECTED)?.is_match(output) {
+                    println!(
+                        "  It failed at publish: npm rejected the workflow (E404/invalid-publisher) because no trusted publisher is attached yet. After attaching trust, its failed jobs can be re-run."
+                    );
+                    self.conditions.insert("release-failed-publish");
+                } else {
+                    println!(
+                        "  It failed for another reason, so trusted publishing alone will not fix it; it is not re-run."
+                    );
+                }
+            }
             "audit-token-secrets" => {
                 if result.code != 0 {
                     eprintln!("warning: could not list repository secrets with gh");
@@ -275,6 +294,83 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
+    fn check_two_factor(&mut self, step: &SetupStep, result: &CommandOutput) -> Result<()> {
+        let mode = if result.code == 0 {
+            two_factor_mode(&result.stdout).ok()
+        } else {
+            None
+        };
+        let Some(mode) = mode else {
+            if step.id == "verify-2fa" {
+                bail!("could not read the npm profile to verify 2FA");
+            }
+            eprintln!(
+                "warning: could not read the npm profile; npm trust requires two-factor authentication"
+            );
+            return Ok(());
+        };
+        if let Some(mode) = mode {
+            println!("  Two-factor authentication is on ({mode}).");
+            self.conditions.remove("tfa-disabled");
+            return Ok(());
+        }
+        if step.id == "verify-2fa" {
+            bail!(
+                "two-factor authentication is still off; npm trust requires it, so nothing was published"
+            );
+        }
+        println!(
+            "  Two-factor authentication is off; npm trust requires it, so turn it on before anything is published."
+        );
+        self.conditions.insert("tfa-disabled");
+        Ok(())
+    }
+
+    fn inspect_release_run(&mut self, result: &CommandOutput) -> Result<()> {
+        if result.code != 0 {
+            eprintln!("warning: could not list the release workflow runs");
+            return Ok(());
+        }
+        let Some(run) = json_list(&result.stdout)?.into_iter().next() else {
+            println!("  The release workflow has not run yet.");
+            return Ok(());
+        };
+        let outcome = run["conclusion"]
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .map_or_else(|| json_text(&run["status"]), str::to_owned);
+        println!(
+            "  The latest release run {outcome}: {}",
+            json_text(&run["url"])
+        );
+        if run["conclusion"] == "failure" {
+            self.values
+                .insert("failed_run_id".to_owned(), json_text(&run["databaseId"]));
+            self.conditions.insert("release-failed");
+        }
+        Ok(())
+    }
+
+    async fn verify_bins(&self) -> Result<()> {
+        let pack = self
+            .plan
+            .steps
+            .iter()
+            .find(|step| step.id == "pack")
+            .context("the plan has no pack step")?;
+        let destination = self
+            .values
+            .get("pack_destination")
+            .context("the tarball was not packed")?;
+        verify_bins(
+            &self.cwd(pack),
+            &Path::new(destination).join("install"),
+            &self.plan.package.name,
+            self.options.verbose,
+        )
+        .await
+    }
+
     async fn command(&mut self, step: &SetupStep) -> Result<()> {
         if step.confirm && !self.options.yes {
             let rendered = render(&self.expand(command_of(step)?));
@@ -299,7 +395,12 @@ impl<'a> Session<'a> {
                 .insert("pack_destination".to_owned(), destination);
             self.temporary = Some(temporary);
         }
-        let result = self.run_process(step, step.id != "pack").await?;
+        // Pack output is captured so npm's warnings can be reviewed.
+        let result = if step.id == "pack" {
+            self.capture(step).await?
+        } else {
+            self.run_process(step, true).await?
+        };
         if result.code != 0 {
             match step.id.as_str() {
                 "attach-trusted-publisher" => {
@@ -321,7 +422,17 @@ impl<'a> Session<'a> {
             "prepare-worktree" => {
                 self.conditions.insert("worktree-created");
             }
-            "pack" => self.record_pack(&result.stdout)?,
+            "pack" => {
+                report_pack_warnings(&result.stderr);
+                self.record_pack(&result.stdout)?;
+            }
+            "rerun-release" => {
+                println!("  Re-running the failed release jobs.");
+                if let Some(id) = self.values.get("failed_run_id").cloned() {
+                    self.values.insert("run_id".to_owned(), id);
+                }
+                self.conditions.remove("release-dispatch");
+            }
             _ => {}
         }
         Ok(())
@@ -446,14 +557,15 @@ impl<'a> Session<'a> {
         }
         if self.browser.is_none() {
             ensure_profile_ignored(self.options.browser_profile, self.options.verbose).await?;
+            // Boxed: the launch future is large, and every step awaits it.
             self.browser = Some(
-                launch_real_browser(
+                Box::pin(launch_real_browser(
                     RealBrowserOptions::chromiumoxide()
                         .channel(self.options.browser_channel)
                         .user_data_dir(self.options.browser_profile)
                         .headless(false)
                         .verbose(self.options.verbose),
-                )
+                ))
                 .await
                 .context("could not launch an installed Chrome-family browser")?,
             );
@@ -494,12 +606,13 @@ impl<'a> Session<'a> {
             .await
             .with_context(|| format!("failed to run {}", command.program))?;
         if self.options.verbose || (result.code != 0 && step.id != "check-sign-in") {
-            io::stdout().write_all(result.stdout.as_bytes())?;
-            io::stderr().write_all(result.stderr.as_bytes())?;
+            io::stdout().write_all(result.stdout.to_string().as_bytes())?;
+            io::stderr().write_all(result.stderr.to_string().as_bytes())?;
         }
         Ok(CommandOutput {
             code: result.code,
-            stdout: result.stdout,
+            stdout: result.stdout.to_string(),
+            stderr: result.stderr.to_string(),
             legacy_login: false,
         })
     }

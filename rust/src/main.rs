@@ -8,6 +8,9 @@ use anyhow::{bail, Context, Result};
 use clap::{Subcommand, ValueEnum};
 use lino_arguments::Parser;
 use package_registry_manager::plan::{build_plans_with, PlanOptions};
+use package_registry_manager::prerequisites::{
+    probe_environment, render_prerequisites, BrowserDisplay, BrowserSummary,
+};
 use package_registry_manager::registry_state::{Endpoints, RegistryClient};
 use package_registry_manager::setup::{
     default_browser_profile, execute_plan, BrowserMode, ExecuteOptions,
@@ -115,16 +118,37 @@ async fn main() -> Result<()> {
             .probe_registry_state(&discovered)
             .await
     };
+    let selected = match &args.command {
+        Commands::Inspect => return output_inspection(&inspection, args.format),
+        Commands::Plan { registry, .. } => registry.iter().copied().collect::<BTreeSet<_>>(),
+        Commands::Setup { registry, .. } => BTreeSet::from([*registry]),
+    };
+    let environment = probe_environment(
+        args.offline,
+        args.verbose,
+        inspection.packages.iter().any(|package| {
+            package.registry == Registry::Npm
+                && package.publishable
+                && (selected.is_empty() || selected.contains(&Registry::Npm))
+        }),
+        &endpoints,
+    )
+    .await;
     match args.command {
-        Commands::Inspect => output_inspection(&inspection, args.format),
+        Commands::Inspect => Ok(()),
         Commands::Plan {
-            registry,
+            registry: _,
             verify_release,
         } => {
-            let selected = registry.into_iter().collect::<BTreeSet<_>>();
             let options = PlanOptions {
                 verify_release,
                 endpoints,
+                environment: Some(environment),
+                browser: BrowserDisplay {
+                    mode: BrowserSummary::Default,
+                    channel: "chrome".to_owned(),
+                    profile: None,
+                },
             };
             let plans = build_plans_with(&inspection, &selected, &options);
             if plans.is_empty() {
@@ -133,7 +157,7 @@ async fn main() -> Result<()> {
             output_plans(&plans, args.format)
         }
         Commands::Setup {
-            registry,
+            registry: _,
             package,
             dry_run: _,
             execute,
@@ -144,19 +168,21 @@ async fn main() -> Result<()> {
             browser_channel,
             browser_profile,
         } => {
-            let options = PlanOptions {
-                verify_release,
-                endpoints,
-            };
-            let plans = build_plans_with(&inspection, &BTreeSet::from([registry]), &options);
-            let plan = select_plan(&plans, package.as_deref())?;
-            output_plans(std::slice::from_ref(plan), args.format)?;
             // Only a run that may start the automated browser needs the profile.
             let profile = match browser_profile {
                 Some(profile) => std::path::absolute(profile)?,
-                None if execute => default_browser_profile()?,
+                None if execute || browser == BrowserMode::Automated => default_browser_profile()?,
                 None => PathBuf::new(),
             };
+            let options = PlanOptions {
+                verify_release,
+                endpoints,
+                environment: Some(environment),
+                browser: browser_display(no_browser, browser, &browser_channel, &profile),
+            };
+            let plans = build_plans_with(&inspection, &selected, &options);
+            let plan = select_plan(&plans, package.as_deref())?;
+            output_plans(std::slice::from_ref(plan), args.format)?;
             execute_plan(
                 plan,
                 &ExecuteOptions {
@@ -175,6 +201,30 @@ async fn main() -> Result<()> {
             )
             .await
         }
+    }
+}
+
+fn browser_display(
+    no_browser: bool,
+    browser: BrowserMode,
+    channel: &str,
+    profile: &std::path::Path,
+) -> BrowserDisplay {
+    if no_browser {
+        return BrowserDisplay {
+            mode: BrowserSummary::None,
+            ..BrowserDisplay::default()
+        };
+    }
+    let automated = browser == BrowserMode::Automated;
+    BrowserDisplay {
+        mode: if automated {
+            BrowserSummary::Automated
+        } else {
+            BrowserSummary::Default
+        },
+        channel: channel.to_owned(),
+        profile: automated.then(|| profile.display().to_string()),
     }
 }
 
@@ -271,6 +321,9 @@ fn output_plans(plans: &[SetupPlan], format: OutputFormat) -> Result<()> {
                 }
                 if let Some(reason) = &plan.skipped_reason {
                     writeln!(output, "  skipped: {reason}")?;
+                }
+                for line in render_prerequisites(&plan.prerequisites) {
+                    writeln!(output, "{line}")?;
                 }
                 for (index, step) in plan.steps.iter().enumerate() {
                     let when = step

@@ -11,7 +11,7 @@ use regex::Regex;
 
 use crate::pipeline_template::fixture;
 
-fn npm_plan(state: impl FnOnce(&mut Package), verify_release: bool) -> SetupPlan {
+pub fn npm_plan(state: impl FnOnce(&mut Package), verify_release: bool) -> SetupPlan {
     let (_temporary, root) = fixture();
     let mut inspection = inspect_repository(&root).expect("inspect fixture");
     state(
@@ -24,6 +24,7 @@ fn npm_plan(state: impl FnOnce(&mut Package), verify_release: bool) -> SetupPlan
     let options = PlanOptions {
         verify_release,
         endpoints: Endpoints::default(),
+        ..PlanOptions::default()
     };
     build_plans_with(&inspection, &BTreeSet::from([Registry::Npm]), &options)
         .into_iter()
@@ -31,7 +32,7 @@ fn npm_plan(state: impl FnOnce(&mut Package), verify_release: bool) -> SetupPlan
         .expect("pipeline-app plan")
 }
 
-fn registry_state(exists: bool, trusted: bool) -> impl FnOnce(&mut Package) {
+pub fn registry_state(exists: bool, trusted: bool) -> impl FnOnce(&mut Package) {
     move |package| {
         package.exists_on_registry = Some(exists);
         package.trusted_publishing = Some(trusted);
@@ -69,17 +70,25 @@ fn plans_a_bootstrap_for_a_package_missing_from_npm() {
             "check-registry",
             "check-sign-in",
             "sign-in",
+            "check-2fa",
+            "enable-2fa",
+            "verify-2fa",
             "fetch-default-branch",
             "prepare-worktree",
             "pack",
+            "test-install",
+            "verify-bins",
             "first-publish",
             "wait-for-registry",
             "check-trust",
+            "inspect-release-run",
+            "read-release-failure",
             "attach-trusted-publisher",
             "configure-trusted-publisher",
             "verify-trusted-publisher",
             "audit-token-secrets",
             "delete-token-secret",
+            "rerun-release",
             "sign-out",
             "remove-worktree",
         ]
@@ -96,11 +105,11 @@ fn plans_a_bootstrap_for_a_package_missing_from_npm() {
         ),
         (
             "attach-trusted-publisher",
-            "npx -y npm@latest trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false",
+            "npx -y npm@^11.10 trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false",
         ),
         (
             "check-trust",
-            "npx -y npm@latest trust list pipeline-app --json",
+            "npx -y npm@^11.10 trust list pipeline-app --json",
         ),
         ("sign-out", "npm logout"),
     ] {

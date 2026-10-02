@@ -24,6 +24,9 @@ pub const TTY_SHIM: &str = r#"for (const stream of [process.stdin, process.stdou
 }
 "#;
 
+/// Matches ANSI escape sequences, such as colors, in command output.
+pub const ANSI_PATTERN: &str = r"\x1b\[[0-9;?]*[ -/]*[@-~]";
+
 /// Finds web-authentication URLs in streamed npm output, and npm's legacy
 /// `Username:` prompt, which npm prints without a trailing newline when a web
 /// login is not completed in time.
@@ -58,7 +61,7 @@ impl AuthUrlScanner {
             seen: BTreeSet::new(),
             prompt: compile(r"(?i)^(?:Login at|Authenticate your account at):?$"),
             inline: compile(r"(?i)(?:Login at|Authenticate your account at):?\s+(https?://\S+)"),
-            ansi: compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]"),
+            ansi: compile(ANSI_PATTERN),
             url: compile(r"^https?://\S+$"),
             legacy: compile(r"(?i)^Username:"),
         }
@@ -146,6 +149,8 @@ pub struct CommandOutput {
     pub code: i32,
     /// Everything the command wrote to stdout.
     pub stdout: String,
+    /// What the command wrote to stderr, when it was captured.
+    pub stderr: String,
     /// The command was stopped at npm's legacy `Username:` prompt.
     pub legacy_login: bool,
 }
@@ -230,6 +235,7 @@ pub async fn run_interactive(
     Ok(CommandOutput {
         code: status.code().unwrap_or(1),
         stdout: String::from_utf8_lossy(&captured).into_owned(),
+        stderr: String::new(),
         legacy_login: stop_on_legacy_login && scanner.legacy_login(),
     })
 }
