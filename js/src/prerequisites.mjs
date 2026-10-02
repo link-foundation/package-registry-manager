@@ -7,7 +7,8 @@ export const NPM_11_ENGINES = "^20.17.0 || >=22.9.0";
 /** The Node.js versions npm 12 runs on. */
 export const NPM_12_ENGINES = "^22.22.2 || ^24.15.0 || >=26.0.0";
 /** Where an npm account turns on two-factor authentication. */
-export const NPM_TFA_URL = "https://www.npmjs.com/settings/~/tfa";
+export const NPM_TFA_URL =
+  "https://docs.npmjs.com/configuring-two-factor-authentication/";
 /** The npm that runs `npm trust` when Node.js cannot run npm 12. */
 export const DEFAULT_TRUST_NPM = "npm@^11.10";
 

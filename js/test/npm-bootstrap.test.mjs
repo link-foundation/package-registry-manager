@@ -543,7 +543,11 @@ test(
     );
     assert.match(error.message, /two-factor authentication is still off/);
     const { lines } = error;
-    assert.ok(lines.includes("Open https://www.npmjs.com/settings/~/tfa"));
+    assert.ok(
+      lines.includes(
+        "Open https://docs.npmjs.com/configuring-two-factor-authentication/",
+      ),
+    );
     const commands = (await readLog(state)).map((entry) =>
       entry.argv.join(" "),
     );

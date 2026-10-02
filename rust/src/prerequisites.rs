@@ -14,7 +14,7 @@ pub const NPM_11_ENGINES: &str = "^20.17.0 || >=22.9.0";
 /// The Node.js versions npm 12 runs on.
 pub const NPM_12_ENGINES: &str = "^22.22.2 || ^24.15.0 || >=26.0.0";
 /// Where an npm account turns on two-factor authentication.
-pub const NPM_TFA_URL: &str = "https://www.npmjs.com/settings/~/tfa";
+pub const NPM_TFA_URL: &str = "https://docs.npmjs.com/configuring-two-factor-authentication/";
 /// The npm that runs `npm trust` when Node.js cannot run npm 12.
 pub const DEFAULT_TRUST_NPM: &str = "npm@^11.10";
 

@@ -382,7 +382,7 @@ fn opens_the_npm_2fa_settings_and_stops_before_publishing_while_2fa_is_off() {
     );
     assert!(stdout
         .lines()
-        .any(|line| line == "Open https://www.npmjs.com/settings/~/tfa"));
+        .any(|line| line == "Open https://docs.npmjs.com/configuring-two-factor-authentication/"));
     assert_eq!(
         commands
             .iter()
