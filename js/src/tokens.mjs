@@ -51,7 +51,7 @@ export function tokenSecretSteps(packageInfo, slug) {
  * into the ones a workflow still reads, which must be replaced by trusted
  * publishing first, and leftovers that can be deleted.
  */
-export function auditTokenSecrets(output, packageInfo) {
+export function auditRegistryTokens(output, packageInfo) {
   const listed = new Set(
     JSON.parse(String(output || "[]")).map((item) => item.name),
   );
@@ -70,7 +70,7 @@ export function auditTokenSecrets(output, packageInfo) {
  * ones no workflow reads any more and that can be deleted.
  */
 export function reportTokenSecrets(output, packageInfo) {
-  const { inUse, leftover } = auditTokenSecrets(output, packageInfo);
+  const { inUse, leftover } = auditRegistryTokens(output, packageInfo);
   for (const name of inUse) {
     console.log(
       `  ${name} is still read by a workflow; switch that workflow to trusted publishing before deleting it.`,

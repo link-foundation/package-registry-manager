@@ -17,7 +17,7 @@ import { cratesFlow, pypiFlow } from "../src/flows.mjs";
 import { buildPlans } from "../src/plan.mjs";
 import { executePlan } from "../src/setup.mjs";
 import {
-  auditTokenSecrets,
+  auditRegistryTokens,
   cargoHome,
   registryToken,
   tokenState,
@@ -56,14 +56,14 @@ test("splits token secrets into ones still read and leftovers (#16)", () => {
     { name: "DOCKERHUB_TOKEN" },
   ]);
   assert.deepEqual(
-    auditTokenSecrets(output, { ...crate, token_secrets: ["CARGO_TOKEN"] }),
+    auditRegistryTokens(output, { ...crate, token_secrets: ["CARGO_TOKEN"] }),
     { inUse: ["CARGO_TOKEN"], leftover: ["CARGO_REGISTRY_TOKEN"] },
   );
-  assert.deepEqual(auditTokenSecrets(output, { registry: "npm" }), {
+  assert.deepEqual(auditRegistryTokens(output, { registry: "npm" }), {
     inUse: [],
     leftover: ["NPM_TOKEN"],
   });
-  assert.deepEqual(auditTokenSecrets("", { registry: "pypi" }), {
+  assert.deepEqual(auditRegistryTokens("", { registry: "pypi" }), {
     inUse: [],
     leftover: [],
   });
@@ -252,7 +252,7 @@ test(
     Object.assign(process.env, {
       PATH: `${bin}${path.delimiter}${process.env.PATH}`,
       FAKE_STATE: state,
-      FAKE_SECRETS: "CARGO_TOKEN,CARGO_REGISTRY_TOKEN,GITHUB_TOKEN",
+      FAKE_REPO_TOKEN_NAMES: "CARGO_TOKEN,CARGO_REGISTRY_TOKEN,GITHUB_TOKEN",
       CARGO_HOME: cargo,
     });
     const lines = [];

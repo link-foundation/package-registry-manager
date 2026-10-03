@@ -10,8 +10,7 @@ use serde_json::Value;
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::approvals::{
-    approval_deadline, next_link, trusted_release_note, LinkKind, APPROVAL_ATTEMPTS,
-    TWO_FACTOR_HINT,
+    approval_deadline, next_link, oidc_release_note, LinkKind, APPROVAL_ATTEMPTS, TWO_FACTOR_HINT,
 };
 use crate::auth_urls::{
     node_options_with_shim, resolve_program, run_interactive, write_tty_shim, CommandOutput,
@@ -111,7 +110,7 @@ pub async fn execute_plan(plan: &SetupPlan, options: &ExecuteOptions<'_>) -> Res
     session.cleanup().await;
     result?;
     if let Some(prefill) = &plan.trusted_publisher {
-        println!("\n{}", trusted_release_note(&prefill.workflow));
+        println!("\n{}", oidc_release_note(&prefill.workflow));
     }
     Ok(())
 }

@@ -5,7 +5,7 @@ import {
   APPROVAL_ATTEMPTS,
   approvalDeadline,
   expiredApproval,
-  trustedReleaseNote,
+  oidcReleaseNote,
   withFreshLinks,
 } from "../src/approvals.mjs";
 import { authUrlScanner } from "../src/auth-urls.mjs";
@@ -66,7 +66,7 @@ test("requests fresh links a bounded number of times", async () => {
   );
   assert.equal(calls, APPROVAL_ATTEMPTS);
   assert.equal(
-    trustedReleaseNote("release.yml"),
+    oidcReleaseNote("release.yml"),
     "Future releases publish from release.yml through trusted publishing; no login is needed.",
   );
 });

@@ -67,6 +67,6 @@ export async function withFreshLinks(
 }
 
 /** The closing note once a package publishes through trusted publishing. */
-export function trustedReleaseNote(workflow) {
+export function oidcReleaseNote(workflow) {
   return `Future releases publish from ${workflow} through trusted publishing; no login is needed.`;
 }

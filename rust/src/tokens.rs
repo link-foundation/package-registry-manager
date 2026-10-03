@@ -60,7 +60,7 @@ pub struct TokenSecretAudit {
 /// # Errors
 ///
 /// Fails when the output is not a JSON array.
-pub fn audit_token_secrets(output: &str, package: &Package) -> Result<TokenSecretAudit> {
+pub fn audit_registry_tokens(output: &str, package: &Package) -> Result<TokenSecretAudit> {
     let listed: Vec<Value> = if output.trim().is_empty() {
         Vec::new()
     } else {
@@ -87,7 +87,7 @@ pub fn audit_token_secrets(output: &str, package: &Package) -> Result<TokenSecre
 ///
 /// Fails when the output is not a JSON array.
 pub fn report_token_secrets(output: &str, package: &Package) -> Result<Vec<String>> {
-    let audit = audit_token_secrets(output, package)?;
+    let audit = audit_registry_tokens(output, package)?;
     for name in &audit.in_use {
         println!(
             "  {name} is still read by a workflow; switch that workflow to trusted publishing before deleting it."

@@ -6,7 +6,7 @@
 // Scenarios: FAKE_TFA=off (no 2FA), FAKE_PACK_WARNINGS (npm drops the bin
 // while packing), FAKE_BIN_FAILS (the installed bin exits 1), and
 // FAKE_RELEASE_RUN=failed-publish (the last release failed with E404), and
-// FAKE_SECRETS (comma-separated repository secret names; default NPM_TOKEN),
+// FAKE_REPO_TOKEN_NAMES (comma-separated repository secret names; default NPM_TOKEN),
 // FAKE_LEGACY_LOGIN=<n> (the first n web logins fall back to Username:), and
 // FAKE_EXPIRED_PUBLISH=<n> (the first n publish approvals expire), and
 // FAKE_PAGES=missing|legacy|workflow (the GitHub Pages site; default workflow).
@@ -176,7 +176,7 @@ if (tool === "gh") {
   if (command.startsWith("secret list"))
     console.log(
       JSON.stringify(
-        (process.env.FAKE_SECRETS ?? "NPM_TOKEN")
+        (process.env.FAKE_REPO_TOKEN_NAMES ?? "NPM_TOKEN")
           .split(",")
           .map((name) => ({ name })),
       ),

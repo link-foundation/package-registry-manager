@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use package_registry_manager::tokens::{
-    audit_token_secrets, cargo_home, read_cargo_token, registry_token, token_state,
+    audit_registry_tokens, cargo_home, read_cargo_token, registry_token, token_state,
     TokenSecretAudit, TokenState,
 };
 use package_registry_manager::{Package, Registry};
@@ -32,20 +32,20 @@ fn splits_token_secrets_into_ones_still_read_and_leftovers() {
     let mut package = crate_package(Registry::CratesIo);
     package.token_secrets = strings(&["CARGO_TOKEN"]);
     assert_eq!(
-        audit_token_secrets(&output, &package).expect("audit"),
+        audit_registry_tokens(&output, &package).expect("audit"),
         TokenSecretAudit {
             in_use: strings(&["CARGO_TOKEN"]),
             leftover: strings(&["CARGO_REGISTRY_TOKEN"]),
         }
     );
     assert_eq!(
-        audit_token_secrets(&output, &crate_package(Registry::Npm))
+        audit_registry_tokens(&output, &crate_package(Registry::Npm))
             .expect("audit")
             .leftover,
         strings(&["NPM_TOKEN"])
     );
     assert_eq!(
-        audit_token_secrets("", &crate_package(Registry::PyPi)).expect("audit"),
+        audit_registry_tokens("", &crate_package(Registry::PyPi)).expect("audit"),
         TokenSecretAudit::default()
     );
 }

@@ -1,7 +1,6 @@
 use chrono::NaiveTime;
 use package_registry_manager::approvals::{
-    approval_deadline, expired_approval, next_link, trusted_release_note, LinkKind,
-    APPROVAL_ATTEMPTS,
+    approval_deadline, expired_approval, next_link, oidc_release_note, LinkKind, APPROVAL_ATTEMPTS,
 };
 use package_registry_manager::auth_urls::CommandOutput;
 use package_registry_manager::default_browser::{
@@ -76,7 +75,7 @@ fn requests_fresh_links_a_bounded_number_of_times() {
         "{error}"
     );
     assert_eq!(
-        trusted_release_note("release.yml"),
+        oidc_release_note("release.yml"),
         "Future releases publish from release.yml through trusted publishing; no login is needed."
     );
 }

@@ -15,7 +15,7 @@ import {
 import {
   approvalDeadline,
   TWO_FACTOR_HINT,
-  trustedReleaseNote,
+  oidcReleaseNote,
   withFreshLinks,
 } from "./approvals.mjs";
 import { connectAutomation } from "./automation.mjs";
@@ -91,7 +91,7 @@ export async function executePlan(plan, options) {
     await session.cleanup();
   }
   if (plan.trusted_publisher?.workflow) {
-    console.log(`\n${trustedReleaseNote(plan.trusted_publisher.workflow)}`);
+    console.log(`\n${oidcReleaseNote(plan.trusted_publisher.workflow)}`);
   }
 }
 

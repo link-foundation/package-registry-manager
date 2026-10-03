@@ -86,7 +86,7 @@ pub fn next_link(
 
 /// The closing note once a package publishes through trusted publishing.
 #[must_use]
-pub fn trusted_release_note(workflow: &str) -> String {
+pub fn oidc_release_note(workflow: &str) -> String {
     format!(
         "Future releases publish from {workflow} through trusted publishing; no login is needed."
     )
