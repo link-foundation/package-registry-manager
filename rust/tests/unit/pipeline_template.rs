@@ -41,7 +41,7 @@ fn copy_tree(source: &Path, destination: &Path) {
 fn skips_the_example_app_listing_it_only_when_asked() {
     let (_temporary, root) = fixture();
     let inspection = inspect_repository(&root).expect("inspect fixture");
-    assert!(inspection.skipped.is_empty());
+    assert_eq!(inspection.skipped, [] as [Skipped; 0]);
     assert!(inspection
         .packages
         .iter()

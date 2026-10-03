@@ -53,7 +53,7 @@ fn skips_test_fixture_and_example_manifests() {
     ]);
     let inspection = inspect_repository(temporary.path()).expect("inspect repository");
     assert_eq!(names(&inspection), ["tool", "bom"]);
-    assert!(inspection.skipped.is_empty());
+    assert_eq!(inspection.skipped, [] as [Skipped; 0]);
 
     let verbose = inspect_repository_with(temporary.path(), VERBOSE).expect("inspect repository");
     assert_eq!(

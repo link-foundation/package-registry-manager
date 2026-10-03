@@ -5,7 +5,7 @@ use std::path::Path;
 use package_registry_manager::publishers::{detect_publisher, parse_workflow};
 use package_registry_manager::workflows::{read_workflows, Workflow};
 use package_registry_manager::{build_plans_for, build_plans_with, inspect_repository};
-use package_registry_manager::{PlanOptions, Registry};
+use package_registry_manager::{PlanOptions, Registry, SetupStep};
 use tempfile::TempDir;
 
 fn repository(files: &[(&str, &str)]) -> TempDir {
@@ -317,7 +317,7 @@ fn stops_and_asks_when_several_workflows_publish() {
     assert_eq!(inspection.repository.release_workflow, None);
 
     let skipped = &npm_plans(temporary.path(), &PlanOptions::default())[0];
-    assert!(skipped.steps.is_empty());
+    assert_eq!(skipped.steps, [] as [SetupStep; 0]);
     assert!(skipped
         .skipped_reason
         .as_deref()
