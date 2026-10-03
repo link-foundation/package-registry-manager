@@ -132,6 +132,14 @@ fn names_the_default_browser_on_every_platform() {
 }
 
 #[test]
+fn reads_the_default_browser_from_a_successful_macos_answer() {
+    // `defaults read` prints the LaunchServices handlers followed by a newline;
+    // the JS twin of this test runs the query through command-stream.
+    let answer = "(\n    {\n    LSHandlerRoleAll = \"org.mozilla.firefox\";\n    LSHandlerURLScheme = https;\n}\n)\n";
+    assert_eq!(browser_from_query(0, answer, "macos"), Some("Firefox"));
+}
+
+#[test]
 fn opens_a_link_in_a_chosen_application_without_a_shell() {
     let url = "https://www.npmjs.com/auth/cli/2";
     let mac = open_with_command(url, "Firefox", "macos").expect("command");
