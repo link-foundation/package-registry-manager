@@ -17,6 +17,7 @@ import {
   testDirectory,
   testDirectoryReason,
 } from "./skips.mjs";
+import { pagesWorkflow } from "./pages.mjs";
 import { readWorkflows } from "./workflows.mjs";
 
 const IGNORED_DIRECTORIES = new Set([
@@ -130,6 +131,10 @@ export async function inspectRepository(repository, options = {}) {
     },
     packages,
   };
+  const pages = pagesWorkflow(workflows);
+  if (pages) {
+    inspection.repository.pages_workflow = pages;
+  }
   if (options.includeSkipped && skipped.length > 0) {
     inspection.skipped = skipped.sort((left, right) =>
       left.manifest.localeCompare(right.manifest),

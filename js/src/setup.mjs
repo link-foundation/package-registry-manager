@@ -26,6 +26,7 @@ import {
 } from "./browser.mjs";
 import { detectDefaultBrowser, openWithCommand } from "./default-browser.mjs";
 import { CLEANUP_CONDITIONS } from "./flows.mjs";
+import { pagesSettingsUrl, pagesState } from "./pages.mjs";
 import { packageDirectory } from "./plan.mjs";
 import { twoFactorMode } from "./prerequisites.mjs";
 import { protectLegacyProfile } from "./profile.mjs";
@@ -39,6 +40,9 @@ const PREFILLED_FORMS = new Set([
   "create-pending-publisher",
 ]);
 const INTERACTIVE_CHECKS = new Set(["check-trust", "verify-trusted-publisher"]);
+const PAGES_CHANGES = new Set(["enable-pages", "use-pages-workflow"]);
+/** Checks whose failure is an answer, so their output is not echoed. */
+const QUIET_CHECKS = new Set(["check-sign-in", "check-pages"]);
 /** npm's answer when a workflow publishes without an attached trusted publisher. */
 const PUBLISH_REJECTED = /\bE404\b|404 Not Found|invalid-publisher/i;
 /** Where `--browser` opens URLs that need no automation. */
@@ -56,10 +60,16 @@ export async function executePlan(plan, options) {
     );
   }
   if (plan.mode === "complete") {
+    const remaining =
+      plan.steps.length === 0
+        ? "nothing to do."
+        : "only the repository checks remain.";
     console.log(
-      `${plan.package.name} already publishes through trusted publishing; nothing to do.`,
+      `${plan.package.name} already publishes through trusted publishing; ${remaining}`,
     );
-    return;
+    if (plan.steps.length === 0) {
+      return;
+    }
   }
   if (!options.execute) {
     console.log(
@@ -257,6 +267,8 @@ class SetupSession {
           this.tokenSecrets.length > 0,
         );
         return;
+      case "check-pages":
+        return this.checkPages(result);
       case "find-release-run": {
         const [run] = result.code === 0 ? JSON.parse(output || "[]") : [];
         if (!run) {
@@ -304,6 +316,34 @@ class SetupSession {
       "  Two-factor authentication is off; npm trust requires it, so turn it on before anything is published.",
     );
     this.conditions.add("tfa-disabled");
+  }
+
+  checkPages(result) {
+    const state = pagesState(result);
+    toggle(this.conditions, "pages-missing", state === "missing");
+    toggle(this.conditions, "pages-legacy", state === "legacy");
+    if (state === "workflow") {
+      console.log(
+        "  GitHub Pages is enabled with GitHub Actions as its source.",
+      );
+    } else if (state === "legacy") {
+      console.log(
+        "  GitHub Pages builds from a branch, so the workflow's deployment is not served.",
+      );
+    } else if (state === "missing") {
+      console.log(
+        "  GitHub Pages is not enabled, so the workflow's deployment fails with Not Found.",
+      );
+    } else {
+      console.error(
+        `warning: could not read the GitHub Pages site; check its source at ${this.pagesSettings()}`,
+      );
+    }
+  }
+
+  pagesSettings() {
+    const { github_owner, github_repository } = this.plan.repository;
+    return pagesSettingsUrl(`${github_owner}/${github_repository}`);
   }
 
   inspectReleaseRun(result) {
@@ -419,6 +459,12 @@ class SetupSession {
           "warning: npm trust failed; falling back to the browser form",
         );
         this.conditions.add("trust-cli-failed");
+        return;
+      }
+      if (PAGES_CHANGES.has(step.id)) {
+        console.error(
+          `warning: could not change GitHub Pages (this needs repository administrator rights); set its source to GitHub Actions at ${this.pagesSettings()}`,
+        );
         return;
       }
       if (step.id === "trigger-release") {
@@ -608,7 +654,7 @@ class SetupSession {
     if (
       !this.options.verbose &&
       result.code !== 0 &&
-      step.id !== "check-sign-in"
+      !QUIET_CHECKS.has(step.id)
     ) {
       stdout.write(String(result.stdout ?? ""));
       process.stderr.write(String(result.stderr ?? ""));

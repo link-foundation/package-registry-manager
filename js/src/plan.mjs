@@ -6,6 +6,7 @@ import {
   npmFlow,
   pypiFlow,
 } from "./flows.mjs";
+import { pagesSteps } from "./pages.mjs";
 import { planPrerequisites } from "./prerequisites.mjs";
 import { TRUSTED_REGISTRIES } from "./publishers.mjs";
 
@@ -179,6 +180,11 @@ function flowPlan(inspection, packageInfo, options) {
     steps = [];
   } else if (mode === "attach") {
     steps = steps.filter((item) => !BOOTSTRAP_CONDITIONS.has(item.when));
+  }
+  // Pages readiness belongs to the repository, so it is checked in every mode.
+  const pages = inspection.repository.pages_workflow;
+  if (slug && pages) {
+    steps = steps.concat(pagesSteps(slug, pages));
   }
   const plan = basePlan(inspection, packageInfo, steps);
   if (mode) {

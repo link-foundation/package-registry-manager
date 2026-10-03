@@ -8,7 +8,8 @@
 // FAKE_RELEASE_RUN=failed-publish (the last release failed with E404), and
 // FAKE_SECRETS (comma-separated repository secret names; default NPM_TOKEN),
 // FAKE_LEGACY_LOGIN=<n> (the first n web logins fall back to Username:), and
-// FAKE_EXPIRED_PUBLISH=<n> (the first n publish approvals expire).
+// FAKE_EXPIRED_PUBLISH=<n> (the first n publish approvals expire), and
+// FAKE_PAGES=missing|legacy|workflow (the GitHub Pages site; default workflow).
 const fs = require("node:fs");
 const path = require("node:path");
 const tool = path.basename(__filename);
@@ -157,6 +158,21 @@ if (tool === "git") {
     fs.rmSync(args[3], { recursive: true, force: true });
 }
 if (tool === "gh") {
+  if (/^api (?:-X (?:POST|PUT) )?repos\/[^ ]+\/pages\b/.test(command)) {
+    if (command.includes("-X ")) set("pages", true);
+    const site = flag("pages") ? "workflow" : process.env.FAKE_PAGES;
+    if (site === "missing") {
+      console.log('{"message":"Not Found","status":"404"}');
+      console.error("gh: Not Found (HTTP 404)");
+      process.exit(1);
+    }
+    console.log(
+      JSON.stringify({
+        build_type: site === "legacy" ? "legacy" : "workflow",
+        html_url: "https://acme.github.io/demo/",
+      }),
+    );
+  }
   if (command.startsWith("secret list"))
     console.log(
       JSON.stringify(
