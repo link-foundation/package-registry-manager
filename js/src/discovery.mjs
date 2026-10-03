@@ -204,7 +204,7 @@ async function collectManifests(directory, manifests, dockerfiles) {
 }
 
 async function parseManifest(manifestPath, manifest) {
-  const contents = await readFile(manifestPath, "utf8");
+  const contents = await readManifest(manifestPath);
   const filename = path.basename(manifestPath);
   switch (filename) {
     case "package.json":
@@ -360,6 +360,11 @@ function packageInfo(
   return result;
 }
 
+// Editors on Windows may save a byte order mark; npm and Cargo accept it.
+async function readManifest(manifest) {
+  return (await readFile(manifest, "utf8")).replace(/^\uFEFF/, "");
+}
+
 function parseJson(contents, manifest) {
   try {
     return JSON.parse(contents);
@@ -412,7 +417,7 @@ async function githubCoordinates(root, manifests) {
 
   for (const manifest of manifests) {
     const filename = path.basename(manifest);
-    contents = await readFile(manifest, "utf8");
+    contents = await readManifest(manifest);
     let repository;
     if (filename === "package.json") {
       const metadata = parseJson(contents, relativePath(root, manifest));

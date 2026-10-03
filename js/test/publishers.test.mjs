@@ -202,6 +202,49 @@ test("follows changesets/action and package scripts", async () => {
   assert.deepEqual(result.jobs, ["version"]);
 });
 
+test("follows a package script that a release script runs", async () => {
+  // The layout of the link-foundation pipeline templates, e.g. browser-commander.
+  const root = await repository({
+    "js/package.json":
+      '{"name": "tool", "version": "1.0.0", "scripts": {"changeset:publish": "changeset publish"}}\n',
+    "js/scripts/publish-to-npm.mjs": [
+      'import { $ } from "command-stream";',
+      "// npm run changeset:publish --dry-run is not run",
+      "await $`npm run changeset:publish`;",
+      "",
+    ].join("\n"),
+    ".github/workflows/js.yml": [
+      "on: push",
+      "defaults:",
+      "  run:",
+      "    working-directory: js",
+      "jobs:",
+      "  release:",
+      "    permissions:",
+      "      id-token: write",
+      "    steps:",
+      "      - run: node scripts/publish-to-npm.mjs --should-pull",
+      "",
+    ].join("\n"),
+  });
+  const result = await detectPublisher(root, await readWorkflows(root), "npm");
+  assert.equal(result.workflow, "js.yml");
+  assert.deepEqual(result.jobs, ["release"]);
+});
+
+test("recognizes the changesets/action publish sub-action", async () => {
+  const workflows = [
+    {
+      name: "publish.yml",
+      contents:
+        "on: push\njobs:\n  publish:\n    permissions:\n      id-token: write\n    steps:\n      - uses: changesets/action/publish@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2\n",
+    },
+  ];
+  const result = await detectPublisher("/nonexistent", workflows, "npm");
+  assert.equal(result.workflow, "publish.yml");
+  assert.deepEqual(result.jobs, ["publish"]);
+});
+
 test("names the caller of a reusable publishing workflow", async () => {
   const root = await repository({
     "package.json": '{"name": "tool", "version": "1.0.0"}\n',

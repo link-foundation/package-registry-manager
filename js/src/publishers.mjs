@@ -7,7 +7,7 @@ export const TRUSTED_REGISTRIES = Object.freeze(["npm", "crates-io", "pypi"]);
 const JOB_PATTERNS = new Map([
   [
     "npm",
-    /\b(?:npm|pnpm)\s+(?:-r\s+|--recursive\s+)?(?:stage\s+)?publish\b|\byarn\s+npm\s+publish\b|\bchangeset\s+publish\b|JS-DevTools\/npm-publish/,
+    /\b(?:npm|pnpm)\s+(?:-r\s+|--recursive\s+)?(?:stage\s+)?publish\b|\byarn\s+npm\s+publish\b|\bchangeset\s+publish\b|changesets\/action\/publish@|JS-DevTools\/npm-publish/,
   ],
   [
     "crates-io",
@@ -254,11 +254,14 @@ async function jobPublishes(root, parsed, job, registry) {
     return true;
   }
   const directories = workingDirectories([...parsed.header, ...job.lines]);
+  const scripts = [];
   for (const script of scriptReferences(job.lines)) {
     const contents = await readInside(root, directories, script);
-    if (contents !== null && scriptPublishes(contents, registry)) {
+    const lines = contents === null ? [] : codeLines(contents);
+    if (scriptPublishes(lines, registry)) {
       return true;
     }
+    scripts.push(...lines);
   }
   const commands = job.lines.some((line) => /changesets\/action@/.test(line))
     ? job.lines
@@ -269,7 +272,9 @@ async function jobPublishes(root, parsed, job, registry) {
   if (publishingLine(commands, pattern)) {
     return true;
   }
-  for (const line of [...job.lines, ...commands]) {
+  // A package script may run from the job, its changesets command, or a
+  // script, as in `$\`npm run changeset:publish\``.
+  for (const line of [...job.lines, ...commands, ...scripts]) {
     for (const match of line.matchAll(RUN_SCRIPT)) {
       const manifest = await readInside(root, directories, "package.json");
       const command =
@@ -312,12 +317,15 @@ function publishingLine(lines, pattern) {
   );
 }
 
-function scriptPublishes(contents, registry) {
-  const lines = contents
+function codeLines(contents) {
+  return contents
     .split(/\r?\n/)
     .filter(
       (line) => !line.includes("--dry-run") && !SCRIPT_COMMENT.test(line),
     );
+}
+
+function scriptPublishes(lines, registry) {
   const pattern = new RegExp(JOB_PATTERNS.get(registry).source, "g");
   if (
     lines.some((line) =>

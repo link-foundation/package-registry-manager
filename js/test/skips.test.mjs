@@ -35,12 +35,13 @@ test("skips test, fixture, and example manifests (#16)", async () => {
     "src/__fixtures__/package.json": npmPackage("snapshot"),
     "examples/demo/package.json": npmPackage("demo"),
     "examples/broken/package.json": "{ not json",
+    "packages/bom/package.json": `\uFEFF${npmPackage("bom")}`,
     "tests/fixtures/app/Dockerfile": "FROM scratch\n",
   });
   const inspection = await inspectRepository(root);
   assert.deepEqual(
     inspection.packages.map((item) => item.name),
-    ["tool"],
+    ["tool", "bom"],
   );
   assert.equal(inspection.skipped, undefined);
 
@@ -135,6 +136,7 @@ test("matches globs against a path and its parents", () => {
   assert.equal(ignoredBy(["packages"], "packages-extra/package.json"), null);
   assert.equal(ignoredBy(["*.json"], "a/package.json"), null);
   assert.equal(testDirectory("tests/package.json"), "tests");
+  assert.equal(testDirectory("src/__tests__/package.json"), "__tests__");
   assert.equal(testDirectory("package.json"), null);
   assert.equal(testDirectory("src/testing/package.json"), null);
 });
