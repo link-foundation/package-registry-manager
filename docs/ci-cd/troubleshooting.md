@@ -11,8 +11,11 @@ This guide covers common CI/CD issues and their solutions for Rust projects usin
 5. [Crates.io Publishing Fails](#cratesio-publishing-fails)
 6. [Crate Package Too Large (HTTP 413)](#crate-package-too-large-http-413)
 7. [Docker Hub Publishing Fails](#docker-hub-publishing-fails)
-8. [Secret Configuration Issues](#secret-configuration-issues)
-9. [Multi-Language Repository Issues](#multi-language-repository-issues)
+8. [Release Preflight Verdicts](#release-preflight-verdicts)
+9. [npm Publication Skipped](#npm-publication-skipped)
+10. [Documentation Deployment Skipped (Pages Disabled)](#documentation-deployment-skipped-pages-disabled)
+11. [Secret Configuration Issues](#secret-configuration-issues)
+12. [Multi-Language Repository Issues](#multi-language-repository-issues)
 
 ---
 
@@ -180,36 +183,79 @@ env:
 ## Crates.io Publishing Fails
 
 ### Symptom
-The "Publish to Crates.io" step fails with an error.
+The "Publish to Crates.io" step fails, or it is skipped with a
+"crates.io publication skipped" warning.
+
+### How publishing authenticates
+The release workflow stores no crates.io token. `auto-release` and
+`manual-release` hold `id-token: write`. The hash-pinned
+`rust-lang/crates-io-auth-action` exchanges the workflow's OIDC identity for a
+short-lived token. Only the "Publish to Crates.io" step receives that token:
+
+```yaml
+- name: Authenticate to crates.io with trusted publishing
+  id: crates-io-auth
+  uses: rust-lang/crates-io-auth-action@<full commit SHA> # v1.0.5
+
+- name: Publish to Crates.io
+  env:
+    CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+  run: rust-script rust/scripts/publish-crate.rs --rust-root rust
+```
+
+The action's post step revokes the token when the job ends. `publish-crate.rs`
+reads the token from Cargo's own `CARGO_REGISTRY_TOKEN` variable and never puts
+it on the command line.
 
 ### Common Errors
 
-#### "please provide a non-empty token"
-**Cause:** The `CARGO_REGISTRY_TOKEN` environment variable is empty or not set.
+#### "crates.io publication skipped: the crate is not on crates.io yet"
+**Cause:** Trusted publishing cannot create a crate. Someone has to publish the
+first version with a personal token. The release preflight reports
+`crates=bootstrap`. The GitHub release, npm and Docker publications still run;
+only crates.io is skipped.
 
-**Solution:**
-1. Ensure you have a secret configured (either `CARGO_REGISTRY_TOKEN` or `CARGO_TOKEN`)
-2. Map the secret correctly in your workflow:
-```yaml
-- name: Publish to Crates.io
-  env:
-    CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
-  run: rust-script rust/scripts/publish-crate.rs --rust-root rust
+**Solution:** Bootstrap the crate once from a maintainer machine, then configure
+the trusted publisher:
+```bash
+package-registry-manager setup --registry crates-io --execute
 ```
+On crates.io, open the crate's **Settings → Trusted Publishing** and add a
+GitHub publisher with repository owner `link-foundation`, repository
+`package-registry-manager` and workflow `release.yml`. Afterwards, delete the
+personal token you used for the first publication.
+
+The release check keeps `should_release=true` until the crate exists. The next
+push to `main` therefore publishes the pending version, without bumping it
+again.
+
+#### "403 Forbidden" or "unauthorized"
+**Cause:** The crate exists, but crates.io refused the trusted-publishing token.
+Usually no trusted publisher is configured, or the one that is configured names
+a different repository or workflow file.
+
+**Solution:** Check the trusted publisher on the crate's settings page. It must
+match `link-foundation/package-registry-manager` and `release.yml` exactly. Also
+check that the job still declares `id-token: write`.
+
+#### "please provide a non-empty token"
+**Cause:** The publish step ran without a token. Usually the
+`crates-io-auth` step was skipped or removed.
+
+**Solution:** Keep the three steps in order: the readiness check
+(`id: crates-io`), then the authentication step (`id: crates-io-auth`), then the
+publish step. The authentication and publish steps share the condition
+`steps.crates-io.outputs.publish == 'true'`.
 
 #### "already uploaded" or "already exists"
 **Cause:** This version was already published to crates.io.
 
 **Note:** This is handled gracefully by the script and is not a failure.
 
-#### "unauthorized" or authentication errors
-**Cause:** Invalid or expired token.
-
-**Solution:**
-1. Generate a new token at https://crates.io/settings/tokens
-2. Update the secret in your repository or organization settings
-
 ### Reference
+- [package-registry-manager Issue #16](https://github.com/link-foundation/package-registry-manager/issues/16)
+- [crates.io trusted publishing](https://crates.io/docs/trusted-publishing)
+- [rust-lang/crates-io-auth-action](https://github.com/rust-lang/crates-io-auth-action)
 - [browser-commander Issue #33](https://github.com/link-foundation/browser-commander/issues/33)
 - [Cargo Publishing Documentation](https://doc.rust-lang.org/cargo/reference/publishing.html)
 
@@ -286,6 +332,7 @@ Docker Hub publishing is optional. It runs only when all of these are true:
 - Repository variable `DOCKERHUB_IMAGE` is set to `namespace/repository`
 - `DOCKERHUB_USERNAME` is set as a repository variable or secret
 - Repository secret `DOCKERHUB_TOKEN` is set
+- The release preflight proved that the token can push the image (`docker=ok`)
 
 ### Common Errors
 
@@ -311,43 +358,147 @@ curl -fsSL "https://hub.docker.com/v2/repositories/NAMESPACE/REPOSITORY/tags/VER
 
 ---
 
+## Release Preflight Verdicts
+
+### Symptom
+A release run publishes to some registries and skips others. The
+**Release Preflight** job summary shows a table like this:
+
+| registry | verdict | publishes this run |
+| --- | --- | --- |
+| crates.io | bootstrap | no |
+| npm | ok | yes |
+| Docker Hub | skipped | no |
+
+### How it works
+`release-preflight` runs `rust/scripts/preflight-credentials.sh` and exposes
+one verdict per registry as a job output: `crates`, `npm` and `docker`. Each
+publishing job gates on its own verdict, so one registry's problem never blocks
+the others:
+
+| Output | Gates | Probe |
+| --- | --- | --- |
+| `crates` | "Authenticate to crates.io" and "Publish to Crates.io" in `auto-release` / `manual-release` | `GET https://crates.io/api/v1/crates/<crate>` |
+| `npm` | `javascript-release` | `GET https://registry.npmjs.org/<package>` |
+| `docker` | "Configure Docker Hub publishing", `docker-publish`, `docker-merge-manifest` | Docker Hub token exchange with `push` scope |
+
+| Verdict | Meaning | Publishes |
+| --- | --- | --- |
+| `ok` | The registry is ready for this release | yes |
+| `bootstrap` | The crate or package does not exist yet. Trusted publishing cannot create it | no; the run shows the bootstrap command as a warning |
+| `refused` | The registry rejected the credential (Docker Hub only) | no; `::error::` in release mode |
+| `unknown` | The registry could not be reached or answered unexpectedly | no; re-run when the registry recovers |
+| `skipped` | The registry is not configured (for example, no `DOCKERHUB_IMAGE`) | no |
+
+The script always exits 0. The GitHub release is created as long as crates.io
+was either published or deliberately skipped. Only `ok` publishes; every other
+verdict skips that registry.
+
+Trusted publishing mints its crates.io and npm tokens inside the publishing
+jobs. The preflight therefore checks only that the crate and package exist; it
+cannot test the OIDC exchange in advance. A missing or mismatched trusted
+publisher still fails at the publish step. See
+[Crates.io Publishing Fails](#cratesio-publishing-fails).
+
+### Reproducing locally
+```bash
+PREFLIGHT_MODE=report bash rust/scripts/preflight-credentials.sh
+```
+
+---
+
+## npm Publication Skipped
+
+### Symptom
+`javascript-release` is skipped, and the preflight warns that the package "is
+not on npm yet".
+
+### Cause
+npm publishes with trusted publishing (OIDC) only; the workflow has no
+`NPM_TOKEN` fallback. Trusted publishing cannot create a package, so the job
+runs only when the preflight reports `npm=ok`.
+
+### Solution
+Publish the first version once from a maintainer machine:
+```bash
+package-registry-manager setup --registry npm --execute
+```
+On npmjs.com, open the package's **Settings → Trusted Publisher** and add a
+GitHub Actions publisher for `link-foundation/package-registry-manager` with
+workflow `release.yml`. Later releases then publish with the workflow's OIDC
+identity.
+
+---
+
+## Documentation Deployment Skipped (Pages Disabled)
+
+### Symptom
+`deploy-docs` is green, but every step after "Check whether GitHub Pages is
+enabled" is skipped, and the run shows this warning:
+
+```
+Documentation deployment skipped: GitHub Pages is not enabled for OWNER/REPO. Enable it once with GitHub Actions as the source: gh api -X POST repos/OWNER/REPO/pages -f build_type=workflow ...
+```
+
+Before this check existed, the job failed on every push to `main` with
+`Get Pages site failed`.
+
+### Cause
+The repository has never enabled GitHub Pages, or Pages builds from a branch
+instead of from GitHub Actions. `actions/configure-pages` can enable Pages
+itself (`enablement: true`), but only with a token that has administration
+rights. The workflow's `GITHUB_TOKEN` does not have them, and the job
+deliberately keeps its permissions minimal: `contents: read`, `pages: write`
+and `id-token: write`.
+
+### Solution
+A repository administrator enables Pages with GitHub Actions as the source,
+once:
+```bash
+gh api -X POST repos/OWNER/REPO/pages -f build_type=workflow
+```
+If Pages is already enabled but builds from a branch, switch it to GitHub
+Actions instead:
+```bash
+gh api -X PUT repos/OWNER/REPO/pages -f build_type=workflow
+```
+The next push to `main` deploys the documentation. Any other answer from the
+Pages API fails the check step loudly rather than being silently skipped.
+
+---
+
 ## Secret Configuration Issues
 
 ### Required Secrets
 
 | Secret Name | Purpose | Where to Get |
 |------------|---------|--------------|
-| `CARGO_REGISTRY_TOKEN` or `CARGO_TOKEN` | Publish to crates.io | https://crates.io/settings/tokens |
 | `DOCKERHUB_TOKEN` | Publish to Docker Hub when `DOCKERHUB_IMAGE` is configured | https://docs.docker.com/security/access-tokens/ |
 | `GITHUB_TOKEN` | Create GitHub releases | Automatic (provided by GitHub) |
 
-### Organization vs Repository Secrets
-
-If using organization secrets with different names, map them on the step that
-publishes — not in the workflow-level `env:`, which is inherited by every job,
-including the `pull_request` jobs that compile and run code from the branch
-under review:
-```yaml
-- name: Publish to Crates.io
-  env:
-    # Map organization secret to the expected variable name
-    CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
-  run: rust-script rust/scripts/publish-crate.rs
+crates.io and npm need no secret, because both publish with trusted publishing
+(OIDC). Delete any leftover `CARGO_TOKEN`, `CARGO_REGISTRY_TOKEN` or `NPM_TOKEN`
+repository or organization secrets:
+```bash
+gh secret delete CARGO_TOKEN --repo link-foundation/package-registry-manager
+gh secret delete CARGO_REGISTRY_TOKEN --repo link-foundation/package-registry-manager
+gh secret delete NPM_TOKEN --repo link-foundation/package-registry-manager
 ```
+A long-lived publish token in the repository is a standing credential that any
+compromised workflow step could exfiltrate. The release workflow never reads
+one, and `rust/tests/unit/ci-cd/trusted_publishing.rs` fails if one is
+reintroduced.
 
-### Checking Secret Values
+### Mapping a secret that is still needed
 
-Secrets are masked in logs, but you can verify they're set:
+Map the secret on the step that uses it, not in the workflow-level `env:`. The
+workflow-level `env:` is inherited by every job, including the `pull_request`
+jobs that compile and run code from the branch under review:
 ```yaml
-- name: Debug secrets
-  run: |
-    if [ -n "$CARGO_REGISTRY_TOKEN" ]; then
-      echo "CARGO_REGISTRY_TOKEN is set (value masked)"
-    else
-      echo "WARNING: CARGO_REGISTRY_TOKEN is NOT set"
-    fi
+- name: Probe every release registry
   env:
-    CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
+    DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+  run: bash rust/scripts/preflight-credentials.sh
 ```
 
 ### Reference

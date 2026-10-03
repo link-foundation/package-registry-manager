@@ -1,35 +1,68 @@
 #!/usr/bin/env bash
 #
-# Prove the release credentials can write before any expensive job runs.
+# Decide, per registry, whether this run can publish -- before any expensive
+# job runs.
 #
 # Principle 16 of the shared CI/CD best practices ("Prove You Can Publish
-# Before You Build", issues #163 and #167). A non-empty secret proves nothing
-# (an expired token is non-empty), and a login -- or a registry token
-# endpoint -- proves authentication, not authorisation: auth.docker.io
-# answers an anonymous pull,push request with 200 and silently narrows the
-# grant to pull. The only form of the check that is not a guess is an
-# attempted write: POST /v2/<repo>/blobs/uploads/ -> 202 opens an upload
-# session, DELETE cancels it, nothing is stored and no tag moves.
+# Before You Build", issues #163 and #167), reworked for package-registry-manager
+# issue #16: every registry is probed independently and gets its own verdict,
+# so one refused registry no longer blocks the others. The verdicts are
+# written to $GITHUB_OUTPUT as `crates=`, `npm=` and `docker=`; each
+# publishing job gates on its own verdict being `ok`.
+#
+# Verdicts:
+#   ok        -- this run can publish to the registry.
+#   bootstrap -- the package does not exist on the registry yet. Trusted
+#                publishing (OIDC) can only publish *new versions* of a package
+#                that already exists, so the first version has to be published
+#                once from a maintainer's machine:
+#                  package-registry-manager setup --registry <registry> --execute
+#   refused   -- the registry refused the credential (Docker Hub only: it is
+#                the one registry this workflow still reaches with a
+#                long-lived token).
+#   unknown   -- the probe got no verdict (timeout, 429, 5xx). Not a guess
+#                that the credential is broken -- but not a pass either.
+#   skipped   -- publishing to the registry is not configured.
+#
+# Registries:
+#   crates.io -- published with trusted publishing (rust-lang/crates-io-auth-action).
+#                There is no long-lived token left to probe: the short-lived
+#                token is minted by an OIDC exchange in the publishing job, the
+#                only job that holds `id-token: write`. The probe here is
+#                whether the crate exists (GET /api/v1/crates/<name>).
+#   npm       -- published with npm trusted publishing (OIDC). Same reasoning:
+#                the probe is whether the package exists on the registry.
+#   Docker Hub-- still a username + token. A login -- or a registry token
+#                endpoint -- proves authentication, not authorisation:
+#                auth.docker.io answers an anonymous pull,push request with 200
+#                and silently narrows the grant to pull. The only form of the
+#                check that is not a guess is an attempted write:
+#                POST /v2/<repo>/blobs/uploads/ -> 202 opens an upload session,
+#                DELETE cancels it, nothing is stored and no tag moves.
 #
 # PREFLIGHT_MODE:
-#   release -- push to main / manual instant release. A refused credential
-#              fails the run here, before the matrix spends a minute.
+#   release -- push to main / manual instant release. A registry whose verdict
+#              is not `ok` is annotated as a problem and its publishing job is
+#              skipped; the other registries still publish.
 #   report  -- pull requests, where a fork legitimately has no publishing
 #              secrets. The same probes run and annotate, but never block.
 #
+# The script exits 0 in both modes: the gate is the per-registry output, not
+# the job result. (A crashed script still fails the job, and every publishing
+# job additionally requires `needs.release-preflight.result == 'success'`.)
+#
 # Rules each caller depends on (each is a defect if dropped):
-#   1. Report every failure, not the first -- no probe aborts the script.
-#   2. Report `unknown`, never a guess: a timeout or a 429 has not said the
-#      credential is broken. But a release-mode run that verified nothing is
-#      not a pass.
-#   3. Probe with a write, not a login.
+#   1. Report every registry, not the first -- no probe aborts the script.
+#   2. Report `unknown`, never a guess -- and only `ok` publishes.
+#   3. Probe a long-lived credential with a write, not a login.
+#   4. Never print a credential.
 #
 # No set -e on purpose: rule 1 means one failed probe must not hide the rest.
 
 set -u
 
-# Credential probes read the package manifest. Keep the script callable from
-# the repository root now that the Rust package lives in rust/.
+# The crates.io probe reads the package manifest. Keep the script callable
+# from the repository root now that the Rust package lives in rust/.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [ ! -f Cargo.toml ] && [ -f "$SCRIPT_DIR/../Cargo.toml" ]; then
   cd "$SCRIPT_DIR/.."
@@ -37,32 +70,36 @@ fi
 
 MODE="${PREFLIGHT_MODE:-report}"
 CRATES_API="${CRATES_API:-https://crates.io}"
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}"
+NPM_PACKAGE_JSON="${NPM_PACKAGE_JSON:-$SCRIPT_DIR/../../js/package.json}"
 DOCKER_REGISTRY="${DOCKER_REGISTRY:-https://registry-1.docker.io}"
 DOCKER_AUTH="${DOCKER_AUTH:-https://auth.docker.io}"
 CURL_TIMEOUT="${PREFLIGHT_CURL_TIMEOUT:-15}"
 NEWLINE=$'\n'
 
-verified=0
-n_fail=0
-n_unknown=0
-failures=''
-unknowns=''
+# crates.io answers 403 to API calls without a User-Agent.
+CURL_USER_AGENT="release-preflight (github.com/link-foundation/package-registry-manager)"
 
-ok() {
-  verified=$((verified + 1))
+crates_verdict='skipped'
+npm_verdict='skipped'
+docker_verdict='skipped'
+# One line per registry whose verdict is not ok/skipped: "<level>|<message>".
+problems=''
+
+pass() {
   printf '  PASS: %s\n' "$*"
 }
 
-bad() {
-  n_fail=$((n_fail + 1))
-  failures="${failures}${failures:+${NEWLINE}}$1"
-  printf '  FAIL: %s\n' "$*"
+skip() {
+  printf '  SKIP: %s\n' "$*"
 }
 
-unknown() {
-  n_unknown=$((n_unknown + 1))
-  unknowns="${unknowns}${unknowns:+${NEWLINE}}$1"
-  printf '  UNKNOWN: %s\n' "$*"
+# problem <verdict> <message>
+problem() {
+  local verdict="$1" message="$2" label
+  label=$(printf '%s' "$verdict" | tr '[:lower:]' '[:upper:]')
+  problems="${problems}${problems:+${NEWLINE}}${verdict}|${message}"
+  printf '  %s: %s\n' "$label" "$message"
 }
 
 # curl that separates the HTTP status from the body without temp files.
@@ -74,18 +111,10 @@ http() {
   printf '%s\n%s' "${body%"${NEWLINE}"*}" "${body##*"$NEWLINE"}"
 }
 
-# crates.io answers 403 to API calls without a User-Agent.
-CURL_USER_AGENT="release-preflight (github.com/link-foundation/rust-ai-driven-development-pipeline-template)"
-
-# First `login` in a JSON payload -- enough for crates.io's flat responses
-# (`{"user":{"login":...}}`, `{"users":[{"login":...},...]}`) and free of
-# jq/node dependencies this template does not otherwise have.
-first_login() {
-  printf '%s' "$1" | sed -n 's/.*"login" *: *"\([^"]*\)".*/\1/p' | head -n 1
-}
-
-lowercase() {
-  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+http_status() {
+  local response
+  response=$(http "$@")
+  printf '%s' "${response##*"$NEWLINE"}"
 }
 
 # The [package].name from Cargo.toml, parsed section-aware the same way
@@ -101,90 +130,81 @@ crate_name_from_manifest() {
   ' Cargo.toml
 }
 
+# The top-level "name" of package.json: the first key indented by exactly
+# two spaces, which is how npm itself writes the manifest. Nested objects
+# (`repository`, `bin`, ...) are indented deeper and never match.
+npm_name_from_manifest() {
+  [ -f "$NPM_PACKAGE_JSON" ] || return 1
+  sed -n 's/^  "name"[ \t]*:[ \t]*"\([^"]*\)".*/\1/p' "$NPM_PACKAGE_JSON" | head -n 1
+}
+
 check_crates_io() {
-  # The publish steps use `secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN`
-  # (auto-release and manual-release); mirror that fallback exactly.
-  local token="${CARGO_REGISTRY_TOKEN:-${CARGO_TOKEN:-}}"
-  local crate_name login response status payload owners_status owners_payload owner is_owner
+  local crate_name status
 
-  printf 'crates.io:\n'
+  printf 'crates.io (trusted publishing):\n'
 
-  if [ -z "$token" ]; then
-    bad 'crates.io has no publish credential: neither CARGO_REGISTRY_TOKEN nor CARGO_TOKEN is set -- cargo publish would fail with 401'
-    return 0
-  fi
-
-  response=$(http -A "$CURL_USER_AGENT" -H "Authorization: ${token}" "$CRATES_API/api/v1/me")
-  status="${response##*"$NEWLINE"}"
-  payload="${response%"${NEWLINE}"*}"
-
-  case "$status" in
-    200)
-      login=$(first_login "$payload")
-      if [ -z "$login" ]; then
-        ok 'crates.io accepted the publish token (200 from /api/v1/me)'
-        return 0
-      fi
-      ok "crates.io accepted the publish token (logged in as ${login})"
-      ;;
-    401 | 403)
-      bad "crates.io rejected the publish token (${status}) -- the token is missing, invalid or expired; a 403 is what crates.io answers to a bad token on /api/v1/me"
-      return 0
-      ;;
-    '')
-      unknown 'crates.io unreachable during the /api/v1/me probe'
-      return 0
-      ;;
-    *)
-      unknown "crates.io answered ${status} to the /api/v1/me probe (no verdict on the token)"
-      return 0
-      ;;
-  esac
-
-  # A valid token belonging to an account that is not an owner of this crate
-  # passes /api/v1/me and still fails `cargo publish`. The owners endpoint is
-  # public, so this second probe is free.
   crate_name=$(crate_name_from_manifest) || crate_name=''
   if [ -z "$crate_name" ]; then
-    printf '  SKIP: no Cargo.toml in the working directory -- the ownership probe needs the crate name\n'
+    skip 'no Cargo.toml [package] name -- crates.io publishing is not configured'
+    crates_verdict='skipped'
     return 0
   fi
 
-  response=$(http -A "$CURL_USER_AGENT" "$CRATES_API/api/v1/crates/${crate_name}/owners")
-  owners_status="${response##*"$NEWLINE"}"
-  owners_payload="${response%"${NEWLINE}"*}"
-
-  case "$owners_status" in
+  status=$(http_status -A "$CURL_USER_AGENT" "$CRATES_API/api/v1/crates/${crate_name}")
+  case "$status" in
     200)
-      is_owner=0
-      while IFS= read -r owner; do
-        [ -z "$owner" ] && continue
-        if [ "$(lowercase "$owner")" = "$(lowercase "$login")" ]; then
-          is_owner=1
-          break
-        fi
-      done <<OWNERS
-$(printf '%s' "$owners_payload" | grep -o '"login" *: *"[^"]*"' | sed 's/.*"login" *: *"//;s/"$//')
-OWNERS
-      if [ "$is_owner" -eq 1 ]; then
-        ok "${login} is an owner of ${crate_name}"
-      else
-        bad "crates.io accepted the token, but account '${login}' is not an owner of ${crate_name} -- the publish would fail"
-      fi
+      pass "${crate_name} exists on crates.io -- the release job publishes it with trusted publishing (OIDC, no long-lived token)"
+      crates_verdict='ok'
       ;;
     404)
-      # A crate name that has never been published has no owner list; the
-      # first publish creates it. /api/v1/me is the credential proof here.
-      printf "  SKIP: ${crate_name} is not on crates.io yet (404 from owners) -- the ownership probe starts with the first publish\n"
+      problem bootstrap "${crate_name} is not on crates.io yet -- trusted publishing cannot create a crate, so crates.io publication is skipped. Publish the first version once with: package-registry-manager setup --registry crates-io --execute"
+      crates_verdict='bootstrap'
       ;;
     '')
-      unknown 'crates.io unreachable during the ownership probe'
+      problem unknown "crates.io unreachable while checking whether ${crate_name} exists -- crates.io publication is skipped this run"
+      crates_verdict='unknown'
       ;;
     *)
-      unknown "crates.io answered ${owners_status} to the ownership probe (no verdict on ownership)"
+      problem unknown "crates.io answered ${status} while checking whether ${crate_name} exists (no verdict) -- crates.io publication is skipped this run"
+      crates_verdict='unknown'
       ;;
   esac
+  return 0
+}
 
+check_npm() {
+  local package_name encoded status
+
+  printf 'npm (trusted publishing):\n'
+
+  package_name=$(npm_name_from_manifest) || package_name=''
+  if [ -z "$package_name" ]; then
+    skip "no package name in ${NPM_PACKAGE_JSON} -- npm publishing is not configured"
+    npm_verdict='skipped'
+    return 0
+  fi
+
+  # Scoped names (@scope/name) address the registry document as @scope%2Fname.
+  encoded="${package_name//\//%2F}"
+  status=$(http_status -H 'Accept: application/vnd.npm.install-v1+json' "$NPM_REGISTRY/${encoded}")
+  case "$status" in
+    200)
+      pass "${package_name} exists on npm -- the release job publishes it with trusted publishing (OIDC, no NPM_TOKEN)"
+      npm_verdict='ok'
+      ;;
+    404)
+      problem bootstrap "${package_name} is not on npm yet -- trusted publishing cannot create a package, so npm publication is skipped. Publish the first version once with: package-registry-manager setup --registry npm --execute"
+      npm_verdict='bootstrap'
+      ;;
+    '')
+      problem unknown "the npm registry was unreachable while checking whether ${package_name} exists -- npm publication is skipped this run"
+      npm_verdict='unknown'
+      ;;
+    *)
+      problem unknown "the npm registry answered ${status} while checking whether ${package_name} exists (no verdict) -- npm publication is skipped this run"
+      npm_verdict='unknown'
+      ;;
+  esac
   return 0
 }
 
@@ -196,12 +216,14 @@ check_docker_hub() {
   printf 'Docker Hub:\n'
 
   if [ -z "$image" ]; then
-    printf '  SKIP: DOCKERHUB_IMAGE is not set -- Docker publishing is disabled (the release workflow disables it with the same condition)\n'
+    skip 'DOCKERHUB_IMAGE is not set -- Docker publishing is disabled (the release workflow disables it with the same condition)'
+    docker_verdict='skipped'
     return 0
   fi
 
   if [ -z "$username" ] || [ -z "$token" ]; then
-    bad "DOCKERHUB_IMAGE is set (${image}) but DOCKERHUB_USERNAME or DOCKERHUB_TOKEN is missing -- docker-publish would fail at login"
+    problem refused "DOCKERHUB_IMAGE is set (${image}) but DOCKERHUB_USERNAME or DOCKERHUB_TOKEN is missing -- docker-publish would fail at login"
+    docker_verdict='refused'
     return 0
   fi
 
@@ -214,7 +236,8 @@ check_docker_hub() {
   payload="${auth_body%"${NEWLINE}"*}"
   registry_token=$(printf '%s' "$payload" | sed -n 's/.*"token" *: *"\([^"]*\)".*/\1/p')
   if [ -z "$registry_token" ]; then
-    unknown 'Docker Hub auth endpoint did not return a usable token'
+    problem unknown 'Docker Hub auth endpoint did not return a usable token'
+    docker_verdict='unknown'
     return 0
   fi
 
@@ -223,7 +246,8 @@ check_docker_hub() {
     -X POST -H "Authorization: Bearer $registry_token" \
     "$DOCKER_REGISTRY/v2/${image}/blobs/uploads/" 2>/dev/null)
   if [ -z "$headers" ]; then
-    unknown 'Docker Hub registry unreachable during the write probe'
+    problem unknown 'Docker Hub registry unreachable during the write probe'
+    docker_verdict='unknown'
     return 0
   fi
   status=$(printf '%s\n' "$headers" | awk 'NR==1{gsub(/\r/,"");print $2}')
@@ -236,85 +260,88 @@ check_docker_hub() {
         curl -sS --max-time "$CURL_TIMEOUT" -o /dev/null -X DELETE \
           -H "Authorization: Bearer $registry_token" "$location" 2>/dev/null || true
       fi
-      ok "Docker Hub accepted a blob-upload write for ${image} (202; upload session cancelled)"
+      pass "Docker Hub accepted a blob-upload write for ${image} (202; upload session cancelled)"
+      docker_verdict='ok'
       ;;
     401 | 403)
-      bad "Docker Hub refused the write for ${image} (${status}) -- the token cannot push this repository; the login the publishing jobs run would still have succeeded"
+      problem refused "Docker Hub refused the write for ${image} (${status}) -- the token cannot push this repository; the login the publishing jobs run would still have succeeded"
+      docker_verdict='refused'
       ;;
     404)
-      bad "Docker Hub reports ${image} as unknown (404) -- check DOCKERHUB_IMAGE and DOCKERHUB_USERNAME"
+      problem refused "Docker Hub reports ${image} as unknown (404) -- check DOCKERHUB_IMAGE and DOCKERHUB_USERNAME"
+      docker_verdict='refused'
       ;;
     429)
-      unknown 'Docker Hub rate-limited the write probe (429)'
+      problem unknown 'Docker Hub rate-limited the write probe (429)'
+      docker_verdict='unknown'
       ;;
     *)
-      unknown "Docker Hub answered ${status:-no status} to the write probe (no verdict on the credential)"
+      problem unknown "Docker Hub answered ${status:-no status} to the write probe (no verdict on the credential)"
+      docker_verdict='unknown'
       ;;
   esac
 
   return 0
 }
 
+# In release mode a refused credential is an error (somebody has to fix a
+# secret); a missing package or an unknown verdict is a warning. Report mode
+# only ever warns.
 emit_annotations() {
-  local level="$1" list="$2"
-  [ -n "$list" ] || return 0
-  printf '%s\n' "$list" | while IFS= read -r line; do
-    [ -n "$line" ] && printf '::%s::release-preflight: %s\n' "$level" "$line"
+  [ -n "$problems" ] || return 0
+  printf '%s\n' "$problems" | while IFS='|' read -r verdict message; do
+    [ -n "$verdict" ] || continue
+    level='warning'
+    if [ "$MODE" = 'release' ] && [ "$verdict" = 'refused' ]; then
+      level='error'
+    fi
+    printf '::%s::release-preflight: %s\n' "$level" "$message"
   done
 }
 
+write_outputs() {
+  [ -n "${GITHUB_OUTPUT:-}" ] || return 0
+  {
+    printf 'crates=%s\n' "$crates_verdict"
+    printf 'npm=%s\n' "$npm_verdict"
+    printf 'docker=%s\n' "$docker_verdict"
+  } >> "$GITHUB_OUTPUT"
+}
+
 append_summary() {
-  local verdict="$1" list
   [ -n "${GITHUB_STEP_SUMMARY:-}" ] || return 0
   {
     printf '### Release preflight (%s mode)\n\n' "$MODE"
-    printf '| verdict | count |\n| --- | --- |\n'
-    printf '| verified | %d |\n' "$verified"
-    printf '| failed | %d |\n' "$n_fail"
-    printf '| unknown | %d |\n' "$n_unknown"
-    for list in "$failures" "$unknowns"; do
-      [ -n "$list" ] || continue
-      printf '%s\n' "$list" | while IFS= read -r line; do
-        [ -n "$line" ] && printf -- '- %s\n' "$line"
+    printf '| registry | verdict | publishes this run |\n| --- | --- | --- |\n'
+    printf '| crates.io | %s | %s |\n' "$crates_verdict" "$([ "$crates_verdict" = ok ] && echo yes || echo no)"
+    printf '| npm | %s | %s |\n' "$npm_verdict" "$([ "$npm_verdict" = ok ] && echo yes || echo no)"
+    printf '| Docker Hub | %s | %s |\n' "$docker_verdict" "$([ "$docker_verdict" = ok ] && echo yes || echo no)"
+    if [ -n "$problems" ]; then
+      printf '\n'
+      printf '%s\n' "$problems" | while IFS='|' read -r verdict message; do
+        [ -n "$verdict" ] && printf -- '- **%s**: %s\n' "$verdict" "$message"
       done
-    done
+    fi
   } >> "$GITHUB_STEP_SUMMARY"
 }
 
 check_crates_io
+check_npm
 check_docker_hub
 
-printf '\nRelease preflight: %d verified, %d failed, %d unknown\n' \
-  "$verified" "$n_fail" "$n_unknown"
+printf '\nRelease preflight: crates=%s npm=%s docker=%s\n' \
+  "$crates_verdict" "$npm_verdict" "$docker_verdict"
 
-if [ "$n_fail" -gt 0 ]; then
+write_outputs
+emit_annotations
+append_summary
+
+if [ -n "$problems" ]; then
   if [ "$MODE" = 'release' ]; then
-    emit_annotations error "$failures"
-    append_summary failed
-    printf '::error::release-preflight: refusing to release with %d refused credential(s)\n' "$n_fail"
-    exit 1
+    printf 'Release mode: only registries with verdict ok publish this run; the others are skipped and do not block the rest of the release.\n'
+  else
+    printf 'Report mode: the findings above are advisory -- pull requests may come from forks without publishing secrets.\n'
   fi
-  emit_annotations warning "$failures"
-  append_summary failed
-  printf 'Report mode: the failures above are advisory -- pull requests may come from forks without publishing secrets.\n'
-  exit 0
 fi
 
-if [ "$verified" -eq 0 ]; then
-  # Rule 2, second half: every probe came back unknown (or there was nothing
-  # to probe). That is not a pass in release mode -- a release would run on
-  # pure hope.
-  if [ "$MODE" = 'release' ]; then
-    emit_annotations warning "$unknowns"
-    append_summary unverified
-    printf '::error::release-preflight: verified nothing (%d unknown) -- refusing to release on an unproven credential set\n' "$n_unknown"
-    exit 1
-  fi
-  emit_annotations warning "$unknowns"
-  append_summary unverified
-  printf 'Report mode: nothing was verified -- advisory only.\n'
-  exit 0
-fi
-
-append_summary passed
 exit 0

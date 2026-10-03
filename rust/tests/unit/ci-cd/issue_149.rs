@@ -8,9 +8,11 @@
 //! publish token out of its own environment.
 //!
 //! Only two steps need the credentials, and both declare them at step level.
-//! These tests pin the invariant in both directions: no workflow-level `env:`
-//! value anywhere under `.github/workflows` may reference `secrets.`, and the
-//! two publish steps must still receive the tokens.
+//! Since issue #16 that credential is no secret at all: it is the short-lived
+//! token rust-lang/crates-io-auth-action mints with trusted publishing. These
+//! tests pin the invariant in both directions: no workflow-level `env:` value
+//! anywhere under `.github/workflows` may reference `secrets.`, and the two
+//! publish steps must still receive the token.
 
 use std::fs;
 
@@ -90,6 +92,8 @@ fn release_workflow_level_env_omits_the_crates_io_credentials() {
 }
 
 /// The other direction: removing the inherited env must not disarm publishing.
+/// Each publish step receives the trusted-publishing token from the auth step
+/// of its own job, and nothing long-lived.
 #[test]
 fn both_publish_steps_declare_the_crates_io_credentials() {
     let (_, release) = workflows()
@@ -114,16 +118,17 @@ fn both_publish_steps_declare_the_crates_io_credentials() {
             .next()
             .expect("a step body should be present");
         assert!(
-            step.contains(
-                "CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}"
-            ),
-            "the publish step must declare CARGO_REGISTRY_TOKEN itself, since it is no \
-             longer inherited from the workflow-level env"
+            step.contains("CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}"),
+            "the publish step must declare CARGO_REGISTRY_TOKEN itself, from the \
+             trusted-publishing auth step, since it is not inherited from the workflow-level env"
         );
         assert!(
-            step.contains("CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}"),
-            "the publish step must declare CARGO_TOKEN itself, since it is no longer \
-             inherited from the workflow-level env"
+            !step.contains("secrets."),
+            "the publish step must not read a long-lived crates.io secret (issue #16)"
+        );
+        assert!(
+            !step.contains("CARGO_TOKEN:"),
+            "the publish step must not declare the legacy CARGO_TOKEN"
         );
     }
 }
