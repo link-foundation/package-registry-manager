@@ -19,3 +19,4 @@ bump: minor
 
 ### Fixed
 - Self-publishing no longer picks the wrong trusted-publisher workflow or plans test fixtures as packages, and the documentation deployment explains how to enable GitHub Pages instead of failing with "Get Pages site failed ... Not Found" (#16)
+- The JavaScript CLI finds the publishing job when the repository is reached through a symlinked path (macOS's `/var`, Windows short names), and names the macOS default browser instead of printing none (#16, #17)
