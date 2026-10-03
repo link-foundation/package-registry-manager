@@ -35,9 +35,10 @@ Plan and setup options:
                                   .github/workflows, when detection finds
                                   several or the wrong one
   --environment <name>            GitHub environment of the trusted publisher
+  --package <name>                Plan only this package, or select it for
+                                  setup when a registry has several
 
 Setup options:
-  --package <name>                Select one of multiple packages
   --dry-run                       Print the flow without running it (default)
   --execute                       Run the flow and open a visible browser
   --yes                           Confirm publishing, secret changes, and
@@ -165,10 +166,10 @@ export async function main(args = process.argv.slice(2)) {
     browser: browserSummary(command, values, browserOptions),
   };
   if (command === "plan") {
-    const plans = buildPlans(inspection, registries, planOptions);
-    if (plans.length === 0) {
-      throw new Error("no matching package manifests were found");
-    }
+    const plans = filterPlans(
+      buildPlans(inspection, registries, planOptions),
+      values.package,
+    );
     outputPlans(plans, values.format);
     return;
   }
@@ -252,6 +253,21 @@ function browserSummary(command, values, browserOptions) {
     import: browserOptions.import ?? undefined,
     attach: browserOptions.attach ?? undefined,
   };
+}
+
+/** Keeps the plans of `packageName`, or every plan without one. */
+function filterPlans(plans, packageName) {
+  if (plans.length === 0) {
+    throw new Error("no matching package manifests were found");
+  }
+  if (!packageName) {
+    return plans;
+  }
+  const named = plans.filter((plan) => plan.package.name === packageName);
+  if (named.length === 0) {
+    throw new Error(`package '${packageName}' was not found`);
+  }
+  return named;
 }
 
 function selectPlan(plans, packageName) {

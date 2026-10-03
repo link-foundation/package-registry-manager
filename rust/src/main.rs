@@ -61,6 +61,10 @@ enum Commands {
         #[arg(long)]
         verify_release: bool,
 
+        /// Plan only the packages with this name.
+        #[arg(long)]
+        package: Option<String>,
+
         #[command(flatten)]
         publisher: PublisherArgs,
     },
@@ -236,6 +240,7 @@ async fn main() -> Result<()> {
         Commands::Plan {
             registry: _,
             verify_release,
+            package,
             publisher,
         } => {
             let options = PlanOptions {
@@ -250,10 +255,10 @@ async fn main() -> Result<()> {
                     ..BrowserDisplay::default()
                 },
             };
-            let plans = build_plans_with(&inspection, &selected, &options);
-            if plans.is_empty() {
-                bail!("no matching package manifests were found");
-            }
+            let plans = filter_plans(
+                build_plans_with(&inspection, &selected, &options),
+                package.as_deref(),
+            )?;
             output_plans(&plans, args.format)
         }
         Commands::Setup {
@@ -359,6 +364,24 @@ fn parse_registry(value: &str) -> Result<Registry, String> {
     value
         .parse()
         .map_err(|error: anyhow::Error| error.to_string())
+}
+
+/// Keep the plans of `package`, or every plan without one.
+fn filter_plans(plans: Vec<SetupPlan>, package: Option<&str>) -> Result<Vec<SetupPlan>> {
+    if plans.is_empty() {
+        bail!("no matching package manifests were found");
+    }
+    let Some(package) = package else {
+        return Ok(plans);
+    };
+    let named: Vec<SetupPlan> = plans
+        .into_iter()
+        .filter(|plan| plan.package.name == package)
+        .collect();
+    if named.is_empty() {
+        bail!("package '{package}' was not found");
+    }
+    Ok(named)
 }
 
 fn select_plan<'a>(plans: &'a [SetupPlan], package: Option<&str>) -> Result<&'a SetupPlan> {

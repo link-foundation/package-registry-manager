@@ -344,7 +344,7 @@ The CLIs intentionally use the same options and JSON schema:
 | `--format text\|json` | Human or machine-readable output |
 | `--verbose` | Enable command and browser tracing |
 | `--registry <name>` | Restrict `plan`, or select exactly one registry for `setup` |
-| `--package <name>` | Disambiguate multiple packages for one registry |
+| `--package <name>` | Plan only this package, or select it for `setup` when a registry has several |
 | `--offline` | Skip the public registry lookups; unknown state keeps every conditional step |
 | `--dry-run` | Print the whole setup flow without running it; the default |
 | `--execute` | Run the setup flow and open the browser |

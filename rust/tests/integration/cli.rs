@@ -113,6 +113,48 @@ fn plan_reports_registry_state_in_json() {
 }
 
 #[test]
+fn plan_package_keeps_only_the_named_package() {
+    let repository = polyglot();
+    let output = run(
+        &[
+            "--repository",
+            &repository,
+            "--format",
+            "json",
+            "plan",
+            "--offline",
+            "--package",
+            "acme-widgets",
+        ],
+        None,
+    );
+    let plans: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).expect("parse JSON output");
+    let mut registries: Vec<&str> = plans
+        .iter()
+        .map(|plan| plan["registry"].as_str().expect("registry"))
+        .collect();
+    registries.sort_unstable();
+    assert_eq!(registries, ["crates-io", "pypi"]);
+    assert!(plans
+        .iter()
+        .all(|plan| plan["package"]["name"] == "acme-widgets"));
+    let missing = Command::new(env!("CARGO_BIN_EXE_package-registry-manager"))
+        .args([
+            "--repository",
+            &repository,
+            "plan",
+            "--offline",
+            "--package",
+            "missing",
+        ])
+        .output()
+        .expect("run package-registry-manager");
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("package 'missing' was not found"));
+}
+
+#[test]
 fn dry_run_conflicts_with_execute() {
     let output = Command::new(env!("CARGO_BIN_EXE_package-registry-manager"))
         .args([
