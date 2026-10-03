@@ -1,6 +1,6 @@
 {
   "name": "package-registry-manager",
-  "version": "0.19.35",
+  "version": "0.20.0",
   "description": "Inspect repositories and guide secure package-registry setup",
   "type": "module",
   "bin": {

@@ -65,6 +65,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.20.0] - 2026-10-03
+
+### Added
+- `release-preflight` job proves the crates.io and Docker Hub credentials can actually publish before the release matrix spends its minutes (#163, #167)
+- `validate-docs` job verifies every required document and section, and `check-file-size.rs` now measures markdown against its own larger budget (#161)
+- The link checker re-asks exactly the failures where no host ever answered and releases the run when they all recover; the Wayback lookup skips the recovered URLs (#168)
+
+### Changed
+- The pipeline status gate runs in every workflow and can tell a superseded run from a timeout on main (#156)
+- cargo audit denies warnings, so `unmaintained`, `unsound` and `yanked` findings fail the gate (#164)
+- actionlint is digest-pinned to 1.7.12 and the zizmor CLI version is named explicitly, matching the pin-everything policy (#160, #165, #166)
+- Each buildx platform writes to its own GHA cache scope, so separate builds no longer evict each other (#154)
+
+### Fixed
+- `run-with-budget-warning.sh` measures elapsed wall-clock time, so a non-integer poll setting can no longer silently disable enforcement (#153)
+- `rust-paths.rs` reads the crate name and version from the `[package]` table only, instead of a table-blind regex (#155)
+- A transient `git fetch` failure no longer fails the whole fresh-merge job (#157)
+- The leaked hive-mind `.gitkeep` placeholder is removed from the default branch (#158)
+- The version commit is linted, formatted and tested before it is pushed to main (#159)
+- Push retries classify GH006/GH013 ruleset rejections instead of rebasing three times and reporting the wrong cause (#162)
+
+### Fixed
+
+- Link recovery now considers every original failure, including final HTTP responses, before releasing the link-check gate (#170)
+- Cancelled jobs are excused only when their own effective concurrency policy proves a superseding run could cancel them (#171)
+- Step budgets isolate output from surviving descendants and can detect, terminate, and report privileged process-group survivors (#172)
+- Manual changelog descriptions cannot inject GitHub Actions workflow commands through generated fragment output (#173)
+- Changelog and version policy checks fail closed when their base diff is unavailable and retry after fetching the explicit base ref (#174)
+- Pipeline status checks remain portable to the Bash 3.2 macOS runner, and the file-size gate freezes existing source debt while excluding generated changelog history
+
+### Added
+
+- Add equivalent Rust and JavaScript CLIs for detecting packages and planning setup across npm, crates.io, PyPI, Go modules, NuGet, Maven Central, and Packagist.
+- Add guarded command execution and authenticated browser guidance, including npm trusted-publisher form prefilling from GitHub repository metadata.
+- Keep publishable crates and npm packages under `rust/` and `js/`, with template-aligned checks and synchronized releases.
+
+### Fixed
+- `plan` no longer emits setup steps or a trusted publisher for unpublishable packages; they appear with `"steps": []` and a `skipped_reason`, and `setup` picks the only publishable package when a registry also has private ones (#4)
+
+### Added
+- `setup --registry npm --execute` takes a never-published package to OIDC trusted publishing in one run: web login, a confirmed first publish from a temporary worktree of the default branch, `npm trust github`, and cleanup of a leftover `NPM_TOKEN` secret. It never reads, creates, or asks for an npm token (#3)
+- `inspect` and `plan` look packages up on npm, crates.io, PyPI, and Docker Hub and plan a `bootstrap`, `attach`, or `complete` mode; `--offline` skips the lookups, `--dry-run` prints the whole flow, and `--verify-release` watches the next release for provenance (#3)
+- PyPI bootstraps through a pending publisher and a first OIDC publish from CI; crates.io publishes once with a revocable token and then opens the trusted publisher settings (#3)
+- Docker Hub and GHCR images are detected from a `Dockerfile` and the release workflow, with plans for the repository, a scoped token, `DOCKERHUB_*` variables and secret, `packages: write`, and package linking (#5)
+- The Rust CLI now matches the JavaScript CLI's plan JSON and text output (#6)
+
+### Added
+- `setup --browser default|automated` chooses where sign-in and approval URLs open; `default`, the default, uses the user's default browser (#9)
+
+### Changed
+- npm web-auth URLs (`npm login`, `npm publish` 2FA, `npm trust`) open in the user's default browser (`open`, `xdg-open`, or the Windows URL handler), where they are usually already signed in. The automated browser profile is only used to fill the trusted-publisher form (#9)
+- The automation browser profile now defaults to a per-user state directory outside any repository: `~/Library/Application Support/package-registry-manager/browser-profile` on macOS, `$XDG_STATE_HOME` (or `~/.local/state`)`/package-registry-manager/browser-profile` on Linux, and `%LOCALAPPDATA%\package-registry-manager\browser-profile` on Windows (#8)
+
+### Fixed
+- A browser profile inside a Git work tree gets a `.gitignore` containing `*` before the browser starts, and setup refuses to continue if Git still does not ignore it or already tracks files in it, so session cookies cannot be committed. A profile left in `.package-registry-manager/` by an earlier release is protected the same way, with a warning to delete it (#8)
+- When a web login is not completed and npm falls back to its legacy `Username:` prompt, setup stops npm and says to re-run for a fresh login link instead of failing with `npm exited with status 1` (#9)
+
+### Added
+- `plan` and `setup` list the prerequisites before the steps: the Node.js and npm versions, the npm that runs `npm trust` and the version it resolves to, the npm account's 2FA state, `gh` sign-in and scopes, and where browser pages open (#13)
+- npm bootstrap checks account-level 2FA with `npm profile get --json` after signing in, opens https://docs.npmjs.com/configuring-two-factor-authentication/ when it is off, and stops before publishing until it is on (#13)
+- npm attach reads the latest release run; when npm rejected it with E404 or `invalid-publisher`, setup says so and, once trust is attached, re-runs its failed jobs with `gh run rerun <id> --failed`, which `--verify-release` then watches instead of dispatching a new run (#13)
+- The packed tarball is installed into a scratch directory without lifecycle scripts, its bin entries are compared with package.json, and each installed bin is run with `--version`; npm's pack warnings are reported, without ever suggesting or running `npm pkg fix` (#13)
+
+- `--browser-executable <path>`, `--browser-import <chrome|edge|brave|firefox>[:<profile>]`, `--browser-attach snapshot[:<profile>]|extension`, `--browser-pref <key=value>`, and `--browser-restriction <name>` choose the browser binary, import data from a real profile into the dedicated one, fill forms in a temporary copy of your own profile or in your running browser through the Browser Commander extension, and set preferences and launch restrictions; without them the dedicated profile starts exactly as before (#12)
+- A smoke test, run in CI, launches the automated profile and asserts with browser-commander's `measureParity` that `navigator.webdriver` is `false` and that no switch differs from a browser started by hand (#12)
+- CI fails when browser-commander, command-stream, or lino-arguments falls behind its latest release, and Dependabot proposes the bump (#12)
+
+### Changed
+- `npm trust` runs through `npx -y npm@^11.10`, or `npm@^12` when the local Node.js satisfies npm 12's engines (`^22.22.2 || ^24.15.0 || >=26.0.0`), instead of `npm@latest`, which fails on older Node.js (#13)
+- Sign-in and approval URLs open through browser-commander's `open_in_user_browser`, the automated browser starts through `launch_real_browser`, and every subprocess, including the openers, runs through command-stream, except the commands that must read masked input from the terminal (`cargo login`, `gh secret set`), because command-stream only lets its shell-string runner inherit stdin; the local copies of these helpers are removed (#12)
+- browser-commander 0.14.1 and command-stream 1.2.0 (#12)
+
+### Added
+- npm sign-in and approval links print their deadline ("Sign in within about 5 minutes (until 19:05)."); when npm's web login expires, setup asks for a fresh link up to 3 times instead of failing (#17)
+- Setup names the default browser it opens links in, `--open-with <app>` opens them in another browser application, and `--keep-session` keeps the npm sign-in after a first publish so the next package needs no new sign-in (#17)
+- After the first publish, setup says that future releases publish from the trusted workflow without a login, and before approvals it suggests npm's "skip two-factor checks for 5 minutes" option so the approvals that follow need no new confirmation (#17)
+- Every plan for a repository whose workflow deploys with `actions/deploy-pages` checks the Pages site with `gh api repos/{owner}/{repo}/pages` and, after a confirmation, enables it (`POST`) or switches it (`PUT`) to GitHub Actions as its source; without administrator rights it prints the settings link instead of failing (#16)
+- `--workflow <file>` and `--environment <name>` override the detected trusted publisher, and `plan --package <name>` plans only that package in both CLIs (#16)
+- Manifests in `tests`, `test`, `fixtures`, `__fixtures__`, `__tests__`, and `examples` directories are skipped unless a workflow mentions them, more paths can be skipped through an `ignore` list in `.package-registry-manager.json`, and `--verbose` lists the skipped manifests with their reasons (#16)
+- Setup lists every registry's leftover token secrets (`NPM_TOKEN`, `NPM_AUTH_TOKEN`, `CARGO_TOKEN`, `CARGO_REGISTRY_TOKEN`, `CRATES_IO_TOKEN`, `CRATES_TOKEN`) and deletes each unused one after a confirmation; after the crates.io first publish it checks with `GET /api/v1/me/tokens` that the one-time token was revoked (#16)
+
+### Changed
+- The trusted-publisher workflow is the one whose job actually runs `npm publish` (directly or through a package script), not a workflow that merely mentions npm (#16)
+- npm bootstrap packs and checks the bins first and signs in right before publishing, so the 5-minute sign-in window is not spent on local checks (#17)
+- A package that already publishes through trusted publishing still runs the repository checks instead of stopping early (#16)
+- The release workflow mints the crates.io token with `rust-lang/crates-io-auth-action` (OIDC), no longer reads `CARGO_TOKEN`, `CARGO_REGISTRY_TOKEN`, or `NPM_TOKEN`, and skips each registry separately when its package is not bootstrapped yet (#16)
+
+### Fixed
+- Self-publishing no longer picks the wrong trusted-publisher workflow or plans test fixtures as packages, and the documentation deployment explains how to enable GitHub Pages instead of failing with "Get Pages site failed ... Not Found" (#16)
+- The JavaScript CLI finds the publishing job when the repository is reached through a symlinked path (macOS's `/var`, Windows short names), and names the macOS default browser instead of printing none (#16, #17)
+
 ## [0.19.35] - 2026-09-05
 
 ### Fixed
