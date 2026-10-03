@@ -392,6 +392,12 @@ function workingDirectories(lines) {
 }
 
 async function readInside(root, directories, file) {
+  // Compare real paths with the real root: a checkout reached through a
+  // symlink (macOS's /var, a Windows short name) resolves elsewhere.
+  const realRoot = await realpath(root).catch(() => null);
+  if (!realRoot) {
+    return null;
+  }
   for (const directory of directories) {
     const candidate = path.resolve(root, directory, file);
     if (!isInside(root, candidate)) {
@@ -399,7 +405,7 @@ async function readInside(root, directories, file) {
     }
     try {
       const resolved = await realpath(candidate);
-      if (!isInside(root, resolved)) {
+      if (!isInside(realRoot, resolved)) {
         continue;
       }
       const metadata = await stat(resolved);

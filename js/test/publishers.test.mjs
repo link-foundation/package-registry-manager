@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -230,6 +230,30 @@ test("follows a package script that a release script runs", async () => {
   const result = await detectPublisher(root, await readWorkflows(root), "npm");
   assert.equal(result.workflow, "js.yml");
   assert.deepEqual(result.jobs, ["release"]);
+});
+
+test("follows scripts when the checkout is reached through a symlink", async () => {
+  // macOS's temporary directory is /var -> /private/var, and Windows may
+  // name it with an 8.3 short name; realpath differs from the path given.
+  const real = await repository({
+    "package.json": '{"name": "tool", "version": "1.0.0"}\n',
+    "scripts/publish.mjs": "await $`npm publish`;\n",
+    ".github/workflows/release.yml": [
+      "on: push",
+      "jobs:",
+      "  release:",
+      "    permissions:",
+      "      id-token: write",
+      "    steps:",
+      "      - run: node scripts/publish.mjs",
+      "",
+    ].join("\n"),
+  });
+  const root = `${real}-link`;
+  temporaries.push(root);
+  await symlink(real, root, "junction");
+  const result = await detectPublisher(root, await readWorkflows(root), "npm");
+  assert.equal(result.workflow, "release.yml");
 });
 
 test("recognizes the changesets/action publish sub-action", async () => {

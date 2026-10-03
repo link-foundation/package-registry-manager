@@ -241,6 +241,27 @@ fn follows_a_package_script_that_a_release_script_runs() {
     assert_eq!(result.jobs, ["release"]);
 }
 
+#[cfg(unix)]
+#[test]
+fn follows_scripts_when_the_checkout_is_reached_through_a_symlink() {
+    // macOS's temporary directory is /var -> /private/var, and Windows may
+    // name it with an 8.3 short name; the canonical path differs from the one given.
+    let temporary = repository(&[
+        ("package.json", "{\"name\": \"tool\", \"version\": \"1.0.0\"}\n"),
+        ("scripts/publish.mjs", "await $`npm publish`;\n"),
+        (
+            ".github/workflows/release.yml",
+            "on: push\njobs:\n  release:\n    permissions:\n      id-token: write\n    steps:\n      - run: node scripts/publish.mjs\n",
+        ),
+    ]);
+    let links = TempDir::new().expect("create link directory");
+    let root = links.path().join("checkout");
+    std::os::unix::fs::symlink(temporary.path(), &root).expect("link the checkout");
+    let workflows = read_workflows(&root).expect("read workflows");
+    let result = detect_publisher(&root, &workflows, Registry::Npm);
+    assert_eq!(result.workflow.as_deref(), Some("release.yml"));
+}
+
 #[test]
 fn recognizes_the_changesets_action_publish_sub_action() {
     let result = detect_publisher(
