@@ -8,6 +8,8 @@ pub mod model;
 pub mod publishers;
 #[path = "../../../rust/src/skips.rs"]
 pub mod skips;
+#[path = "../../../rust/src/tokens.rs"]
+pub mod tokens;
 #[path = "../../../rust/src/workflows.rs"]
 pub mod workflows;
 

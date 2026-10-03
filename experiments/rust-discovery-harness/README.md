@@ -7,7 +7,7 @@ tests and a JSON inspection example run anywhere.
 
 ```bash
 ./generate-publisher-tests.py      # plan-free tests of rust/tests/unit/publishers.rs
-cargo test                         # skips.rs unchanged + generated publisher tests
+cargo test                         # skips.rs and tokens.rs unchanged + generated publisher tests
 node compare.mjs [repository...]   # defaults to this repository and fixtures
 ```
 

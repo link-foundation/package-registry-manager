@@ -16,6 +16,7 @@ pub mod publishers;
 pub mod registry_state;
 pub mod setup;
 pub mod skips;
+pub mod tokens;
 pub mod workflows;
 
 pub use discovery::{inspect_repository, inspect_repository_with, InspectOptions};

@@ -16,12 +16,16 @@ use crate::automation::Automation;
 use crate::browser::{npm_prefill_script, open_in_user_browser};
 use crate::browser_options::BrowserOptions;
 use crate::flows::CLEANUP_CONDITIONS;
+use crate::model::Registry;
 use crate::model::{CommandSpec, PlanMode, SetupPlan, SetupStep, StepKind};
 use crate::npm_package::{report_pack_warnings, verify_bins, PUBLISH_REJECTED};
 use crate::plan::package_directory;
 use crate::prerequisites::two_factor_mode;
 use crate::profile::protect_legacy_profile;
 use crate::registry_state::{npm_trusted, truthy, Endpoints, Lookup, RegistryClient};
+use crate::tokens::{
+    cargo_home, read_cargo_token, report_token_secrets, TokenState, CRATES_TOKENS_URL,
+};
 
 const PREFILLED_FORMS: [&str; 2] = ["configure-trusted-publisher", "create-pending-publisher"];
 const INTERACTIVE_CHECKS: [&str; 2] = ["check-trust", "verify-trusted-publisher"];
@@ -94,6 +98,7 @@ struct Session<'a> {
     client: RegistryClient,
     conditions: BTreeSet<&'static str>,
     values: BTreeMap<String, String>,
+    token_secrets: Vec<String>,
     deferred: Vec<&'a SetupStep>,
     browser: Option<Automation>,
     temporary: Option<tempfile::TempDir>,
@@ -116,6 +121,7 @@ impl<'a> Session<'a> {
             client: RegistryClient::new(options.endpoints.clone(), options.verbose),
             conditions,
             values: BTreeMap::new(),
+            token_secrets: Vec::new(),
             deferred: Vec::new(),
             browser: None,
             temporary: None,
@@ -175,7 +181,13 @@ impl<'a> Session<'a> {
         match step.kind {
             StepKind::Check if step.command.is_some() => self.check(step).await,
             StepKind::Check if step.id == "verify-bins" => self.verify_bins().await,
+            StepKind::Check if step.id == "verify-token-revoked" => {
+                self.verify_token_revoked().await
+            }
             StepKind::Check => self.check_registry().await,
+            StepKind::Command if step.id == "delete-token-secret" => {
+                self.delete_token_secrets(step).await
+            }
             StepKind::Command => self.command(step).await,
             StepKind::Wait => self.wait(step).await,
             StepKind::Browser => self.browser_step(step).await,
@@ -262,14 +274,11 @@ impl<'a> Session<'a> {
                 }
             }
             "audit-token-secrets" => {
-                if result.code != 0 {
+                if result.code == 0 {
+                    self.token_secrets = report_token_secrets(output, &self.plan.package)?;
+                    self.toggle("token-secret-present", !self.token_secrets.is_empty());
+                } else {
                     eprintln!("warning: could not list repository secrets with gh");
-                } else if json_list(output)?
-                    .iter()
-                    .any(|item| item["name"] == "NPM_TOKEN")
-                {
-                    println!("  NPM_TOKEN is no longer needed with trusted publishing.");
-                    self.conditions.insert("token-secret-present");
                 }
             }
             "find-release-run" => {
@@ -371,6 +380,60 @@ impl<'a> Session<'a> {
             self.options.verbose,
         )
         .await
+    }
+
+    /// Delete each leftover token secret, with one confirmation each.
+    async fn delete_token_secrets(&mut self, step: &SetupStep) -> Result<()> {
+        for name in self.token_secrets.clone() {
+            self.values.insert("token_secret".to_owned(), name);
+            self.command(step).await?;
+        }
+        Ok(())
+    }
+
+    /// Confirm that crates.io rejects the first-publish token `cargo login`
+    /// stored, asking the maintainer to revoke it and re-checking up to three
+    /// times.
+    async fn verify_token_revoked(&self) -> Result<()> {
+        let token = cargo_home(
+            std::env::var_os("CARGO_HOME"),
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(PathBuf::from),
+        )
+        .and_then(|directory| read_cargo_token(&directory));
+        let Some(token) = token else {
+            eprintln!(
+                "warning: cargo holds no readable crates.io token, so its revocation cannot be verified; check {CRATES_TOKENS_URL}"
+            );
+            return Ok(());
+        };
+        let base = self
+            .options
+            .endpoints
+            .base(Registry::CratesIo)
+            .unwrap_or_default();
+        for attempt in 1..=3 {
+            match self.client.crates_token_state(&base, &token).await {
+                Some(TokenState::Revoked) => {
+                    println!("  crates.io rejects the first-publish token: it is revoked.");
+                    return Ok(());
+                }
+                None => {
+                    eprintln!(
+                        "warning: crates.io gave no clear answer about the first-publish token; check that it is revoked at {CRATES_TOKENS_URL}"
+                    );
+                    return Ok(());
+                }
+                Some(TokenState::Active) if attempt < 3 => {
+                    prompt(&format!(
+                        "crates.io still accepts the first-publish token. Revoke it at {CRATES_TOKENS_URL}, then press Enter..."
+                    ))?;
+                }
+                Some(TokenState::Active) => {}
+            }
+        }
+        bail!("the first-publish token still authenticates on crates.io; revoke it at {CRATES_TOKENS_URL}")
     }
 
     async fn command(&mut self, step: &SetupStep) -> Result<()> {
@@ -499,6 +562,12 @@ impl<'a> Session<'a> {
     }
 
     async fn browser_step(&mut self, step: &SetupStep) -> Result<()> {
+        if step.confirm && !self.options.yes {
+            println!("  {}", step.description);
+            if !is_yes(&prompt(&format!("{}? [y/N] ", step.title))?) {
+                bail!("the one-time first-publish token was declined; nothing was published");
+            }
+        }
         let fill =
             PREFILLED_FORMS.contains(&step.id.as_str()) && self.plan.trusted_publisher.is_some();
         self.open(step.url.as_deref().unwrap_or_default(), fill)
