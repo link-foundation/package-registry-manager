@@ -60,6 +60,7 @@ fn steps(job: &str) -> Vec<&str> {
 }
 
 /// The body of a step's `run: |` block, de-indented.
+#[cfg(unix)]
 fn run_script(step: &str) -> String {
     let start = step
         .find("        run: |\n")

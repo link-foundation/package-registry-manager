@@ -4,6 +4,7 @@ use std::process::Command;
 
 use browser_commander::browser::open_in_user_browser::build_open_command;
 use browser_commander::utilities::subprocess::CommandError;
+#[cfg(unix)]
 use package_registry_manager::approvals::LinkKind;
 use package_registry_manager::auth_urls::AuthUrlScanner;
 use package_registry_manager::browser::{open_in_user_browser, opener_platform, opener_succeeded};

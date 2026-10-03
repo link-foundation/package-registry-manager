@@ -486,14 +486,17 @@ fn opens_approval_links_in_the_application_chosen_with_open_with() {
         "{}",
         run.stdout
     );
-    let is_opener = |entry: &&Value| entry["argv"][0] == "xdg-open";
+    // macOS opens the chosen application with `open -a xdg-open <url>`.
+    let is_opener = |entry: &&Value| matches!(entry["argv"][0].as_str(), Some("open" | "xdg-open"));
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut opened = run.log.iter().find(is_opener).cloned();
     while opened.is_none() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(25));
         opened = read_log(&state).iter().find(is_opener).cloned();
     }
-    assert_eq!(opened.expect("opener ran")["argv"][1], url);
+    let opened = opened.expect("opener ran");
+    let argv = opened["argv"].as_array().expect("argv is an array");
+    assert!(argv.iter().any(|argument| argument == url), "{argv:?}");
 }
 
 #[test]

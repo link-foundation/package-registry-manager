@@ -142,6 +142,10 @@ test("checks Pages in every plan mode once a workflow deploys there (#16)", () =
   assert.deepEqual(ids(noSlug), []);
 });
 
+const POSIX_ONLY = {
+  skip: process.platform === "win32" && "fake tools are POSIX scripts",
+};
+
 async function runPagesSetup(site, answer) {
   const state = await mkdtemp(path.join(temporary, "state-"));
   const bin = path.join(state, "bin");
@@ -184,49 +188,65 @@ async function runPagesSetup(site, answer) {
   return { commands, lines, prompts };
 }
 
-test("enables GitHub Pages after a confirmation when it is missing (#16)", async () => {
-  const { commands, lines, prompts } = await runPagesSetup("missing", "y");
-  assert.deepEqual(commands, [
-    "gh api repos/acme/demo/pages",
-    "gh api -X POST repos/acme/demo/pages -f build_type=workflow",
-  ]);
-  assert.deepEqual(prompts, [
-    "Run `gh api -X POST repos/acme/demo/pages -f build_type=workflow`? [y/N] ",
-  ]);
-  assert.ok(
-    lines.includes(
-      "demo already publishes through trusted publishing; only the repository checks remain.",
-    ),
-    lines.join("\n"),
-  );
-  assert.ok(
-    lines.includes(
-      "  GitHub Pages is not enabled, so the workflow's deployment fails with Not Found.",
-    ),
-  );
-});
+test(
+  "enables GitHub Pages after a confirmation when it is missing (#16)",
+  POSIX_ONLY,
+  async () => {
+    const { commands, lines, prompts } = await runPagesSetup("missing", "y");
+    assert.deepEqual(commands, [
+      "gh api repos/acme/demo/pages",
+      "gh api -X POST repos/acme/demo/pages -f build_type=workflow",
+    ]);
+    assert.deepEqual(prompts, [
+      "Run `gh api -X POST repos/acme/demo/pages -f build_type=workflow`? [y/N] ",
+    ]);
+    assert.ok(
+      lines.includes(
+        "demo already publishes through trusted publishing; only the repository checks remain.",
+      ),
+      lines.join("\n"),
+    );
+    assert.ok(
+      lines.includes(
+        "  GitHub Pages is not enabled, so the workflow's deployment fails with Not Found.",
+      ),
+    );
+  },
+);
 
-test("switches a branch-built Pages site to GitHub Actions (#16)", async () => {
-  const { commands } = await runPagesSetup("legacy", "y");
-  assert.deepEqual(commands, [
-    "gh api repos/acme/demo/pages",
-    "gh api -X PUT repos/acme/demo/pages -f build_type=workflow",
-  ]);
-});
+test(
+  "switches a branch-built Pages site to GitHub Actions (#16)",
+  POSIX_ONLY,
+  async () => {
+    const { commands } = await runPagesSetup("legacy", "y");
+    assert.deepEqual(commands, [
+      "gh api repos/acme/demo/pages",
+      "gh api -X PUT repos/acme/demo/pages -f build_type=workflow",
+    ]);
+  },
+);
 
-test("leaves Pages alone when it already deploys from GitHub Actions (#16)", async () => {
-  const { commands, lines, prompts } = await runPagesSetup("workflow", "y");
-  assert.deepEqual(commands, ["gh api repos/acme/demo/pages"]);
-  assert.deepEqual(prompts, []);
-  assert.ok(
-    lines.includes(
-      "  GitHub Pages is enabled with GitHub Actions as its source.",
-    ),
-  );
-});
+test(
+  "leaves Pages alone when it already deploys from GitHub Actions (#16)",
+  POSIX_ONLY,
+  async () => {
+    const { commands, lines, prompts } = await runPagesSetup("workflow", "y");
+    assert.deepEqual(commands, ["gh api repos/acme/demo/pages"]);
+    assert.deepEqual(prompts, []);
+    assert.ok(
+      lines.includes(
+        "  GitHub Pages is enabled with GitHub Actions as its source.",
+      ),
+    );
+  },
+);
 
-test("changes nothing when enabling Pages is declined (#16)", async () => {
-  const { commands, lines } = await runPagesSetup("missing", "n");
-  assert.deepEqual(commands, ["gh api repos/acme/demo/pages"]);
-  assert.ok(lines.includes("  skipped enable-pages"));
-});
+test(
+  "changes nothing when enabling Pages is declined (#16)",
+  POSIX_ONLY,
+  async () => {
+    const { commands, lines } = await runPagesSetup("missing", "n");
+    assert.deepEqual(commands, ["gh api repos/acme/demo/pages"]);
+    assert.ok(lines.includes("  skipped enable-pages"));
+  },
+);
