@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -24,19 +25,31 @@ Global options:
   --repository <path>             Repository to inspect (default: .)
   --format <text|json>            Output format (default: text)
   --offline                       Do not look up packages on registries
-  --verbose                       Print command details and output
+  --verbose                       Print command details and output, and
+                                  list the manifests inspection skipped
 
 Plan and setup options:
   --verify-release                Also watch the release workflow and confirm
                                   that the next version has provenance
+  --workflow <file>               Trusted-publisher workflow file in
+                                  .github/workflows, when detection finds
+                                  several or the wrong one
+  --environment <name>            GitHub environment of the trusted publisher
+  --package <name>                Plan only this package, or select it for
+                                  setup when a registry has several
 
 Setup options:
-  --package <name>                Select one of multiple packages
   --dry-run                       Print the flow without running it (default)
   --execute                       Run the flow and open a visible browser
   --yes                           Confirm publishing, secret changes, and
                                   form submission in advance
   --no-browser                    Print the setup URL instead
+  --open-with <app>               Open sign-in and approval pages in this
+                                  application instead of the default browser,
+                                  such as "Google Chrome" (macOS) or firefox
+  --keep-session                  Stay signed in to npm after setup; the
+                                  session token stays in npm's user
+                                  configuration until npm logout
   --browser <default|automated>   Open sign-in and approval pages in your
                                   default browser, or in the automated
                                   profile too (default: default)
@@ -74,12 +87,16 @@ export async function main(args = process.argv.slice(2)) {
       verbose: { type: "boolean", default: false },
       offline: { type: "boolean", default: false },
       "verify-release": { type: "boolean", default: false },
+      workflow: { type: "string" },
+      environment: { type: "string" },
       "dry-run": { type: "boolean", default: false },
       registry: { type: "string", multiple: true },
       package: { type: "string" },
       execute: { type: "boolean", default: false },
       yes: { type: "boolean", default: false },
       "no-browser": { type: "boolean", default: false },
+      "open-with": { type: "string" },
+      "keep-session": { type: "boolean", default: false },
       browser: { type: "string", default: "default" },
       "browser-channel": { type: "string", default: "chrome" },
       "browser-profile": { type: "string" },
@@ -115,7 +132,9 @@ export async function main(args = process.argv.slice(2)) {
   });
 
   const repository = path.resolve(values.repository);
-  const discovered = await inspectRepository(repository);
+  const discovered = await inspectRepository(repository, {
+    includeSkipped: values.verbose,
+  });
   const inspection = values.offline
     ? discovered
     : await probeRegistryState(discovered, { verbose: values.verbose });
@@ -141,14 +160,16 @@ export async function main(args = process.argv.slice(2)) {
   });
   const planOptions = {
     verifyRelease: values["verify-release"],
+    workflow: await workflowOverride(repository, values.workflow),
+    publisherEnvironment: nonEmpty(values.environment, "--environment"),
     environment,
     browser: browserSummary(command, values, browserOptions),
   };
   if (command === "plan") {
-    const plans = buildPlans(inspection, registries, planOptions);
-    if (plans.length === 0) {
-      throw new Error("no matching package manifests were found");
-    }
+    const plans = filterPlans(
+      buildPlans(inspection, registries, planOptions),
+      values.package,
+    );
     outputPlans(plans, values.format);
     return;
   }
@@ -164,6 +185,9 @@ export async function main(args = process.argv.slice(2)) {
   if (values["no-browser"] && !values.execute) {
     throw new Error("--no-browser requires --execute");
   }
+  if (values["open-with"] !== undefined && values["no-browser"]) {
+    throw new Error("--open-with and --no-browser are mutually exclusive");
+  }
 
   const plans = buildPlans(inspection, registries, planOptions);
   const plan = selectPlan(plans, values.package);
@@ -173,6 +197,8 @@ export async function main(args = process.argv.slice(2)) {
     execute: values.execute,
     yes: values.yes,
     noBrowser: values["no-browser"],
+    openWith: nonEmpty(values["open-with"], "--open-with"),
+    keepSession: values["keep-session"],
     browser: values.browser,
     browserOptions,
     browserProfile: path.resolve(
@@ -181,6 +207,33 @@ export async function main(args = process.argv.slice(2)) {
     verbose: values.verbose,
     verifyRelease: values["verify-release"],
   });
+}
+
+async function workflowOverride(repository, workflow) {
+  if (workflow === undefined) {
+    return undefined;
+  }
+  if (!/^[\w.-]+\.ya?ml$/.test(workflow)) {
+    throw new Error(
+      "--workflow must be a workflow file name in .github/workflows, such as release.yml",
+    );
+  }
+  const file = path.join(repository, ".github/workflows", workflow);
+  const found = await stat(file).then(
+    (metadata) => metadata.isFile(),
+    () => false,
+  );
+  if (!found) {
+    throw new Error(`--workflow: .github/workflows/${workflow} does not exist`);
+  }
+  return workflow;
+}
+
+function nonEmpty(value, option) {
+  if (value !== undefined && !value.trim()) {
+    throw new Error(`${option} must not be empty`);
+  }
+  return value?.trim();
 }
 
 function browserSummary(command, values, browserOptions) {
@@ -200,6 +253,21 @@ function browserSummary(command, values, browserOptions) {
     import: browserOptions.import ?? undefined,
     attach: browserOptions.attach ?? undefined,
   };
+}
+
+/** Keeps the plans of `packageName`, or every plan without one. */
+function filterPlans(plans, packageName) {
+  if (plans.length === 0) {
+    throw new Error("no matching package manifests were found");
+  }
+  if (!packageName) {
+    return plans;
+  }
+  const named = plans.filter((plan) => plan.package.name === packageName);
+  if (named.length === 0) {
+    throw new Error(`package '${packageName}' was not found`);
+  }
+  return named;
 }
 
 function selectPlan(plans, packageName) {
@@ -252,10 +320,29 @@ function outputInspection(inspection, format) {
     process.stdout.write(
       `- ${packageInfo.registry}: ${packageInfo.name} (${details.join(", ")})\n`,
     );
+    if (packageInfo.workflow && packageInfo.publishable) {
+      process.stdout.write(`  workflow: ${publisherSummary(packageInfo)}\n`);
+    }
     for (const warning of packageInfo.warnings ?? []) {
       process.stdout.write(`  warning: ${warning}\n`);
     }
   }
+  for (const item of inspection.skipped ?? []) {
+    process.stdout.write(`skipped ${item.manifest}: ${item.reason}\n`);
+  }
+}
+
+function publisherSummary({ workflow, workflow_jobs, environment }) {
+  const details = [];
+  if (workflow_jobs?.length) {
+    details.push(
+      `${workflow_jobs.length > 1 ? "jobs" : "job"} ${workflow_jobs.join(", ")}`,
+    );
+  }
+  if (environment) {
+    details.push(`environment ${environment}`);
+  }
+  return details.length > 0 ? `${workflow} (${details.join("; ")})` : workflow;
 }
 
 function outputPlans(plans, format) {
@@ -271,6 +358,22 @@ function outputPlans(plans, format) {
     }
     if (plan.skipped_reason) {
       process.stdout.write(`  skipped: ${plan.skipped_reason}\n`);
+    }
+    if (plan.trusted_publisher) {
+      process.stdout.write(
+        `  trusted publisher: ${publisherSummary({
+          ...plan.package,
+          workflow: plan.trusted_publisher.workflow,
+          environment: plan.trusted_publisher.environment,
+          workflow_jobs:
+            plan.trusted_publisher.workflow === plan.package.workflow
+              ? plan.package.workflow_jobs
+              : undefined,
+        })}\n`,
+      );
+    }
+    for (const warning of plan.package.warnings ?? []) {
+      process.stdout.write(`  warning: ${warning}\n`);
     }
     for (const line of renderPrerequisites(plan.prerequisites ?? [])) {
       process.stdout.write(`${line}\n`);

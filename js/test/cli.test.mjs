@@ -101,6 +101,41 @@ test("plan reports registry state in JSON", async () => {
   assert.ok(dockerHub.steps.some((step) => step.id === "create-repository"));
 });
 
+test("plan --package keeps only the named package (#16)", async () => {
+  const { stdout } = await execute(process.execPath, [
+    cli,
+    "--repository",
+    fixture,
+    "--format",
+    "json",
+    "plan",
+    "--offline",
+    "--package",
+    "acme-widgets",
+  ]);
+  const plans = JSON.parse(stdout);
+  assert.deepEqual(plans.map((plan) => plan.registry).sort(), [
+    "crates-io",
+    "pypi",
+  ]);
+  assert.ok(plans.every((plan) => plan.package.name === "acme-widgets"));
+  await assert.rejects(
+    execute(process.execPath, [
+      cli,
+      "--repository",
+      fixture,
+      "plan",
+      "--offline",
+      "--package",
+      "missing",
+    ]),
+    (error) => {
+      assert.match(error.stderr, /package 'missing' was not found/);
+      return true;
+    },
+  );
+});
+
 test("rejects an unknown --browser mode", async () => {
   await assert.rejects(
     execute(
@@ -110,6 +145,34 @@ test("rejects an unknown --browser mode", async () => {
     ),
     (error) => {
       assert.match(error.stderr, /--browser must be 'default' or 'automated'/);
+      return true;
+    },
+  );
+});
+
+test("rejects --open-with together with --no-browser", async () => {
+  await assert.rejects(
+    execute(
+      process.execPath,
+      [
+        cli,
+        "--repository",
+        fixture,
+        "--open-with",
+        "firefox",
+        "--no-browser",
+        "--execute",
+        "--registry",
+        "npm",
+        "setup",
+      ],
+      { env: registryEnv },
+    ),
+    (error) => {
+      assert.match(
+        error.stderr,
+        /--open-with and --no-browser are mutually exclusive/,
+      );
       return true;
     },
   );

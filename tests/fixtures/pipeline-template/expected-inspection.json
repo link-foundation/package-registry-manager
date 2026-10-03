@@ -9,21 +9,14 @@
   "packages": [
     {
       "registry": "npm",
-      "name": "universal-example-app",
-      "version": "0.0.0",
-      "manifest": "examples/universal-app/package.json",
-      "publishable": false,
-      "problems": [
-        "package.json marks this package as private"
-      ]
-    },
-    {
-      "registry": "npm",
       "name": "pipeline-app",
       "version": "0.1.0",
       "manifest": "package.json",
       "publishable": true,
-      "workflow": "release.yml"
+      "workflow": "release.yml",
+      "workflow_jobs": [
+        "npm"
+      ]
     },
     {
       "registry": "docker-hub",

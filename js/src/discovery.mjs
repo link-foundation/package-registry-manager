@@ -4,10 +4,21 @@ import path from "node:path";
 import { CONTAINER_FILES, containerPackages } from "./containers.mjs";
 import { REGISTRIES } from "./model.mjs";
 import {
-  publishingWorkflow,
-  readWorkflows,
-  releaseWorkflow,
-} from "./workflows.mjs";
+  TRUSTED_REGISTRIES,
+  detectPublisher,
+  tokenSecretWarning,
+  tokenSecrets,
+} from "./publishers.mjs";
+import {
+  ignoreReason,
+  ignoredBy,
+  readIgnoreList,
+  referencedByWorkflow,
+  testDirectory,
+  testDirectoryReason,
+} from "./skips.mjs";
+import { pagesWorkflow } from "./pages.mjs";
+import { readWorkflows } from "./workflows.mjs";
 
 const IGNORED_DIRECTORIES = new Set([
   ".git",
@@ -30,7 +41,12 @@ const MANIFEST_NAMES = new Set([
   "composer.json",
 ]);
 
-export async function inspectRepository(repository) {
+/**
+ * Finds the packages a repository publishes. Manifests in test and example
+ * directories, or matched by the ignore list, are left out; `includeSkipped`
+ * lists them under `skipped`.
+ */
+export async function inspectRepository(repository, options = {}) {
   const root = await realpath(repository);
   const manifests = [];
   const dockerfiles = [];
@@ -41,24 +57,60 @@ export async function inspectRepository(repository) {
       path.basename(manifest) !== "setup.py" ||
       !manifests.includes(path.join(path.dirname(manifest), "pyproject.toml")),
   );
-  const coordinates = await githubCoordinates(root, preferredManifests);
   const workflows = await readWorkflows(root);
-  const packages = (
-    await Promise.all(
-      preferredManifests.map(async (manifest) =>
-        parseManifest(manifest, relativePath(root, manifest)),
-      ),
-    )
-  )
+  const ignore = await readIgnoreList(root);
+  const skipped = [];
+  const skip = (manifest, reason) => {
+    skipped.push({ manifest, reason });
+    return false;
+  };
+  const ignored = (manifest) => {
+    const pattern = ignoredBy(ignore, manifest);
+    return pattern !== null && !skip(manifest, ignoreReason(pattern));
+  };
+  // Test and example manifests stay only when a workflow publishes them.
+  const kept = (manifest, publishable) => {
+    const directory = testDirectory(manifest);
+    return (
+      directory === null ||
+      (publishable && referencedByWorkflow(workflows, manifest)) ||
+      skip(manifest, testDirectoryReason(directory))
+    );
+  };
+  const parsed = await Promise.all(
+    preferredManifests
+      .map((manifest) => [manifest, relativePath(root, manifest)])
+      .filter(([, manifest]) => !ignored(manifest))
+      .map(async ([manifestPath, manifest]) => {
+        try {
+          return await parseManifest(manifestPath, manifest);
+        } catch (error) {
+          if (testDirectory(manifest) === null) {
+            throw error;
+          }
+          return { manifest, publishable: false, invalid: true };
+        }
+      }),
+  );
+  const coordinates = await githubCoordinates(
+    root,
+    preferredManifests.filter((manifest) => {
+      const relative = relativePath(root, manifest);
+      return ignoredBy(ignore, relative) === null && !testDirectory(relative);
+    }),
+  );
+  const publishers = new Map();
+  for (const registry of TRUSTED_REGISTRIES) {
+    publishers.set(registry, await detectPublisher(root, workflows, registry));
+  }
+  const containerFiles = dockerfiles
+    .map((item) => relativePath(root, item))
+    .filter((item) => !ignored(item) && kept(item, true));
+  const packages = parsed
     .filter(Boolean)
-    .map((item) => withWorkflow(item, workflows))
-    .concat(
-      containerPackages(
-        dockerfiles.map((item) => relativePath(root, item)),
-        workflows,
-        coordinates,
-      ),
-    )
+    .filter((item) => kept(item.manifest, item.publishable))
+    .map((item) => withPublisher(item, workflows, publishers))
+    .concat(containerPackages(containerFiles, workflows, coordinates))
     .sort((left, right) => {
       const registryOrder =
         REGISTRIES.indexOf(left.registry) - REGISTRIES.indexOf(right.registry);
@@ -70,22 +122,71 @@ export async function inspectRepository(repository) {
       );
     });
 
-  return {
+  const inspection = {
     schema_version: 1,
     repository: {
       root,
       ...coordinates,
-      release_workflow: releaseWorkflow(workflows),
+      release_workflow: releaseWorkflow(publishers),
     },
     packages,
   };
+  const pages = pagesWorkflow(workflows);
+  if (pages) {
+    inspection.repository.pages_workflow = pages;
+  }
+  if (options.includeSkipped && skipped.length > 0) {
+    inspection.skipped = skipped.sort((left, right) =>
+      left.manifest.localeCompare(right.manifest),
+    );
+  }
+  return inspection;
 }
 
-function withWorkflow(item, workflows) {
-  const workflow = item.publishable
-    ? publishingWorkflow(workflows, item.registry)
-    : null;
-  return workflow ? { ...item, workflow: workflow.name } : item;
+/**
+ * Names the workflow that npm publishes from, or else the first registry's,
+ * when exactly one workflow file publishes it with an OIDC token.
+ */
+function releaseWorkflow(publishers) {
+  for (const registry of TRUSTED_REGISTRIES) {
+    const workflow = publishers.get(registry)?.workflow;
+    if (workflow) {
+      return workflow;
+    }
+  }
+  return null;
+}
+
+function withPublisher(item, workflows, publishers) {
+  const publisher = item.publishable ? publishers.get(item.registry) : null;
+  if (!publisher) {
+    return item;
+  }
+  const result = { ...item };
+  if (publisher.workflow) {
+    result.workflow = publisher.workflow;
+  }
+  if (publisher.jobs.length > 0) {
+    result.workflow_jobs = publisher.jobs;
+  }
+  if (publisher.environment) {
+    result.environment = publisher.environment;
+  }
+  if (publisher.candidates.length > 1) {
+    result.workflow_candidates = publisher.candidates;
+  }
+  const secrets = tokenSecrets(workflows, item.registry);
+  const warnings = [
+    ...publisher.warnings,
+    ...secrets.map((secret) => tokenSecretWarning(item.registry, secret)),
+  ];
+  if (warnings.length > 0) {
+    result.warnings = [...(item.warnings ?? []), ...warnings];
+  }
+  if (secrets.length > 0) {
+    result.token_secrets = [...new Set(secrets.map((item) => item.secret))];
+  }
+  return result;
 }
 
 async function collectManifests(directory, manifests, dockerfiles) {
@@ -108,7 +209,7 @@ async function collectManifests(directory, manifests, dockerfiles) {
 }
 
 async function parseManifest(manifestPath, manifest) {
-  const contents = await readFile(manifestPath, "utf8");
+  const contents = await readManifest(manifestPath);
   const filename = path.basename(manifestPath);
   switch (filename) {
     case "package.json":
@@ -264,6 +365,11 @@ function packageInfo(
   return result;
 }
 
+// Editors on Windows may save a byte order mark; npm and Cargo accept it.
+async function readManifest(manifest) {
+  return (await readFile(manifest, "utf8")).replace(/^\uFEFF/, "");
+}
+
 function parseJson(contents, manifest) {
   try {
     return JSON.parse(contents);
@@ -316,7 +422,7 @@ async function githubCoordinates(root, manifests) {
 
   for (const manifest of manifests) {
     const filename = path.basename(manifest);
-    contents = await readFile(manifest, "utf8");
+    contents = await readManifest(manifest);
     let repository;
     if (filename === "package.json") {
       const metadata = parseJson(contents, relativePath(root, manifest));

@@ -3,7 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use package_registry_manager::{
-    build_plans_for, inspect_repository, Inspection, PlanMode, Registry, SetupPlan,
+    build_plans_for, inspect_repository, inspect_repository_with, InspectOptions, Inspection,
+    Package, PlanMode, Registry, SetupPlan, Skipped,
 };
 use tempfile::TempDir;
 
@@ -37,9 +38,46 @@ fn copy_tree(source: &Path, destination: &Path) {
 }
 
 #[test]
-fn plans_no_actionable_steps_for_unpublishable_packages() {
+fn skips_the_example_app_listing_it_only_when_asked() {
     let (_temporary, root) = fixture();
     let inspection = inspect_repository(&root).expect("inspect fixture");
+    assert_eq!(inspection.skipped, [] as [Skipped; 0]);
+    assert!(inspection
+        .packages
+        .iter()
+        .all(|package| !package.manifest.starts_with("examples/")));
+    let verbose = inspect_repository_with(
+        &root,
+        InspectOptions {
+            include_skipped: true,
+        },
+    )
+    .expect("inspect fixture");
+    assert_eq!(
+        verbose.skipped,
+        [Skipped {
+            manifest: "examples/universal-app/package.json".to_owned(),
+            reason: "under examples/, a test or example directory, and no workflow publishes it"
+                .to_owned(),
+        }]
+    );
+    assert_eq!(verbose.packages, inspection.packages);
+}
+
+#[test]
+fn plans_no_actionable_steps_for_unpublishable_packages() {
+    let (_temporary, root) = fixture();
+    let mut inspection = inspect_repository(&root).expect("inspect fixture");
+    inspection.packages.insert(
+        0,
+        Package::new(
+            Registry::Npm,
+            "universal-example-app".to_owned(),
+            Some("0.0.0".to_owned()),
+            "apps/universal-app/package.json".to_owned(),
+        )
+        .unpublishable("package.json marks this package as private"),
+    );
     let plans = build_plans_for(&inspection, &BTreeSet::from([Registry::Npm]));
     let private = plans
         .iter()

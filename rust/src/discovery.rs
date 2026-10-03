@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -7,8 +8,16 @@ use serde_json::Value as JsonValue;
 use toml::Value as TomlValue;
 
 use crate::containers::{container_packages, CONTAINER_FILES};
-use crate::model::{Inspection, Package, Registry, RepositoryInfo};
-use crate::workflows::{publishing_workflow, read_workflows, release_workflow, Workflow};
+use crate::model::{Inspection, Package, Registry, RepositoryInfo, Skipped};
+use crate::pages::pages_workflow;
+use crate::publishers::{
+    detect_publisher, token_secret_warning, token_secrets, Publisher, TRUSTED_REGISTRIES,
+};
+use crate::skips::{
+    ignore_reason, ignored_by, read_ignore_list, referenced_by_workflow, test_directory,
+    test_directory_reason,
+};
+use crate::workflows::{read_workflows, Workflow};
 
 const IGNORED_DIRECTORIES: &[&str] = &[
     ".git",
@@ -19,8 +28,21 @@ const IGNORED_DIRECTORIES: &[&str] = &[
     "vendor",
 ];
 
+/// Options that shape repository inspection.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InspectOptions {
+    /// List the manifests that inspection left out under `skipped`.
+    pub include_skipped: bool,
+}
+
 /// Inspect a repository without running package-manager commands.
 pub fn inspect_repository(root: &Path) -> Result<Inspection> {
+    inspect_repository_with(root, InspectOptions::default())
+}
+
+/// Inspect a repository with explicit options. Manifests in test and example
+/// directories, or matched by the ignore list, are left out.
+pub fn inspect_repository_with(root: &Path, options: InspectOptions) -> Result<Inspection> {
     let root = root
         .canonicalize()
         .with_context(|| format!("repository does not exist: {}", root.display()))?;
@@ -33,16 +55,55 @@ pub fn inspect_repository(root: &Path) -> Result<Inspection> {
             || !path.with_file_name("pyproject.toml").is_file()
     });
 
-    let (github_owner, github_repository) = github_coordinates(&root, &manifests)?;
     let workflows = read_workflows(&root)?;
-    let mut packages = manifests
+    let ignore = read_ignore_list(&root)?;
+    let mut skipped = Vec::new();
+    let ignored = |manifest: &str, skipped: &mut Vec<Skipped>| {
+        ignored_by(&ignore, manifest).is_some_and(|pattern| {
+            skipped.push(Skipped {
+                manifest: manifest.to_owned(),
+                reason: ignore_reason(pattern),
+            });
+            true
+        })
+    };
+    let mut parsed = Vec::new();
+    for path in &manifests {
+        let relative = relative_path(path, &root);
+        if ignored(&relative, &mut skipped) {
+            continue;
+        }
+        match parse_manifest(path, &root) {
+            Ok(item) => parsed.extend(item),
+            // An unparsable fixture is skipped like any other fixture.
+            Err(_) if test_directory(&relative).is_some() => {
+                kept(&workflows, &relative, false, &mut skipped);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let coordinate_manifests = manifests
         .iter()
-        .filter_map(|path| parse_manifest(path, &root).transpose())
-        .map(|item| item.map(|item| with_workflow(item, &workflows)))
-        .collect::<Result<Vec<_>>>()?;
+        .filter(|path| {
+            let relative = relative_path(path, &root);
+            ignored_by(&ignore, &relative).is_none() && test_directory(&relative).is_none()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let (github_owner, github_repository) = github_coordinates(&root, &coordinate_manifests)?;
+    let publishers = TRUSTED_REGISTRIES
+        .iter()
+        .map(|registry| (*registry, detect_publisher(&root, &workflows, *registry)))
+        .collect::<BTreeMap<_, _>>();
+    let mut packages = parsed
+        .into_iter()
+        .filter(|item| kept(&workflows, &item.manifest, item.publishable, &mut skipped))
+        .map(|item| with_publisher(item, &workflows, &publishers))
+        .collect::<Vec<_>>();
     let dockerfiles = dockerfiles
         .iter()
         .map(|path| relative_path(path, &root))
+        .filter(|item| !ignored(item, &mut skipped) && kept(&workflows, item, true, &mut skipped))
         .collect::<Vec<_>>();
     packages.extend(container_packages(
         &dockerfiles,
@@ -57,22 +118,73 @@ pub fn inspect_repository(root: &Path) -> Result<Inspection> {
             &right.name,
         ))
     });
+    if options.include_skipped {
+        skipped.sort_by(|left, right| left.manifest.cmp(&right.manifest));
+    } else {
+        skipped.clear();
+    }
     Ok(Inspection {
         schema_version: 1,
         repository: RepositoryInfo {
             root: root.to_string_lossy().into_owned(),
             github_owner,
             github_repository,
-            release_workflow: release_workflow(&workflows),
+            release_workflow: TRUSTED_REGISTRIES
+                .iter()
+                .find_map(|registry| publishers[registry].workflow.clone()),
+            pages_workflow: pages_workflow(&workflows),
         },
         packages,
+        skipped,
     })
 }
 
-fn with_workflow(mut item: Package, workflows: &[Workflow]) -> Package {
-    if item.publishable {
-        item.workflow =
-            publishing_workflow(workflows, item.registry).map(|workflow| workflow.name.clone());
+/// Keep a manifest outside test and example directories, or one inside them
+/// that a workflow publishes; record why others are skipped.
+fn kept(
+    workflows: &[Workflow],
+    manifest: &str,
+    publishable: bool,
+    skipped: &mut Vec<Skipped>,
+) -> bool {
+    let Some(directory) = test_directory(manifest) else {
+        return true;
+    };
+    if publishable && referenced_by_workflow(workflows, manifest) {
+        return true;
+    }
+    skipped.push(Skipped {
+        manifest: manifest.to_owned(),
+        reason: test_directory_reason(directory),
+    });
+    false
+}
+
+fn with_publisher(
+    mut item: Package,
+    workflows: &[Workflow],
+    publishers: &BTreeMap<Registry, Publisher>,
+) -> Package {
+    let Some(publisher) = publishers.get(&item.registry).filter(|_| item.publishable) else {
+        return item;
+    };
+    item.workflow.clone_from(&publisher.workflow);
+    item.workflow_jobs.clone_from(&publisher.jobs);
+    item.environment.clone_from(&publisher.environment);
+    if publisher.candidates.len() > 1 {
+        item.workflow_candidates.clone_from(&publisher.candidates);
+    }
+    let secrets = token_secrets(workflows, item.registry);
+    item.warnings.extend(publisher.warnings.iter().cloned());
+    item.warnings.extend(
+        secrets
+            .iter()
+            .map(|secret| token_secret_warning(item.registry, secret)),
+    );
+    for secret in secrets {
+        if !item.token_secrets.contains(&secret.secret) {
+            item.token_secrets.push(secret.secret);
+        }
     }
     item
 }
@@ -123,30 +235,41 @@ fn is_manifest(path: &Path) -> bool {
     )
 }
 
+/// Read a manifest without the byte order mark that editors on Windows may
+/// save; npm and Cargo accept it.
+fn read_manifest(path: &Path) -> Result<String> {
+    let mut contents = fs::read_to_string(path)
+        .with_context(|| format!("cannot read manifest {}", path.display()))?;
+    if contents.starts_with('\u{feff}') {
+        contents.drain(..'\u{feff}'.len_utf8());
+    }
+    Ok(contents)
+}
+
 fn parse_manifest(path: &Path, root: &Path) -> Result<Option<Package>> {
     let relative = relative_path(path, root);
-    let contents = fs::read_to_string(path)
-        .with_context(|| format!("cannot read manifest {}", path.display()))?;
+    let contents = read_manifest(path)?;
+    let contents = contents.as_str();
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
 
     match name {
-        "package.json" => parse_npm(&contents, relative),
-        "Cargo.toml" => parse_cargo(&contents, relative),
-        "pyproject.toml" => parse_pyproject(&contents, relative),
-        "setup.py" => Ok(Some(parse_setup_py(&contents, relative))),
-        "go.mod" => Ok(Some(parse_go(&contents, relative))),
-        "pom.xml" => Ok(Some(parse_maven(&contents, relative))),
-        "build.gradle" | "build.gradle.kts" => Ok(Some(parse_gradle(&contents, relative))),
-        "composer.json" => parse_composer(&contents, relative),
+        "package.json" => parse_npm(contents, relative),
+        "Cargo.toml" => parse_cargo(contents, relative),
+        "pyproject.toml" => parse_pyproject(contents, relative),
+        "setup.py" => Ok(Some(parse_setup_py(contents, relative))),
+        "go.mod" => Ok(Some(parse_go(contents, relative))),
+        "pom.xml" => Ok(Some(parse_maven(contents, relative))),
+        "build.gradle" | "build.gradle.kts" => Ok(Some(parse_gradle(contents, relative))),
+        "composer.json" => parse_composer(contents, relative),
         _ if matches!(
             path.extension().and_then(|extension| extension.to_str()),
             Some("csproj" | "fsproj" | "vbproj")
         ) =>
         {
-            Ok(Some(parse_dotnet(&contents, path, relative)))
+            Ok(Some(parse_dotnet(contents, path, relative)))
         }
         _ => Ok(None),
     }
@@ -350,7 +473,7 @@ fn github_coordinates(
     }
 
     for manifest in manifests {
-        let contents = fs::read_to_string(manifest)?;
+        let contents = read_manifest(manifest)?;
         let repository = match manifest.file_name().and_then(|name| name.to_str()) {
             Some("package.json") => {
                 let value: JsonValue = serde_json::from_str(&contents)?;

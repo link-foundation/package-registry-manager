@@ -23,13 +23,10 @@ fn is_yaml(name: &str) -> bool {
     })
 }
 
+// Container registries; npm, crates.io, and PyPI use the job-aware detection
+// in `publishers`.
 const fn publish_pattern(registry: Registry) -> Option<&'static str> {
     match registry {
-        Registry::Npm => Some(r"\bnpm (?:stage )?publish\b|\bchangeset publish\b"),
-        Registry::CratesIo => Some(r"\bcargo publish\b|rust-lang/crates-io-auth-action"),
-        Registry::PyPi => {
-            Some(r"pypa/gh-action-pypi-publish|\btwine upload\b|\buv publish\b|\bpoetry publish\b")
-        }
         Registry::DockerHub => Some(r"(?i)\bDOCKER_?HUB_|\bdocker\.io/|hub\.docker\.com"),
         Registry::Ghcr => Some(r"\bghcr\.io\b"),
         _ => None,
@@ -61,18 +58,6 @@ pub fn publishing_workflow(workflows: &[Workflow], registry: Registry) -> Option
     workflows
         .iter()
         .find(|workflow| pattern.is_match(&workflow.contents))
-}
-
-/// Keep the historical npm-first release workflow heuristic.
-#[must_use]
-pub fn release_workflow(workflows: &[Workflow]) -> Option<String> {
-    publishing_workflow(workflows, Registry::Npm)
-        .or_else(|| {
-            workflows
-                .iter()
-                .find(|workflow| workflow.name.contains("release"))
-        })
-        .map(|workflow| workflow.name.clone())
 }
 
 /// Report whether a workflow grants `packages: write` to its token.

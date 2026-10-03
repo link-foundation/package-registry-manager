@@ -105,8 +105,26 @@ waits for completion. `--browser default`, the default, opens them in the
 user's default browser (`open` on macOS, `xdg-open` on Linux, the URL handler
 on Windows), where the maintainer is usually already signed in and only
 approves. `--browser automated` opens them in the automation profile instead.
-If the web login is not completed and npm falls back to its legacy `Username:`
-prompt, the run stops and asks to re-run for a fresh login link.
+Before npm starts, the CLI names the default browser it found (`defaults
+read` of the LaunchServices handlers on macOS, `xdg-settings get
+default-web-browser` on Linux, the `https` URL association on Windows), and
+each link is printed as `Opening <url> in Firefox, your default browser`.
+`--open-with <app>` opens the links in another application instead (`open -a
+<app>` on macOS, `<app> <url>` elsewhere); it cannot be combined with
+`--no-browser`.
+
+npm's login and approval links stay valid for about 5 minutes, so every link
+is printed with its deadline, such as `Sign in within about 5 minutes (until
+14:05).`; approval links add a reminder that npm asks for the 2FA code on the
+page. When a link expires (npm falls back to its legacy `Username:` prompt or
+reports `Invalid response from web login endpoint`), the CLI asks npm for a
+fresh link, up to 3 links in total, and then stops with a message to re-run
+when you are ready to approve within 5 minutes.
+
+The npm session the CLI opened is signed out at the end of the run.
+`--keep-session` keeps it instead: the token stays in npm's user configuration
+until `npm logout`, and the next run reuses it while `npm whoami` succeeds, so
+setting up several packages one after another needs one sign-in.
 
 The automation profile is only needed to fill a form, such as the npm
 trusted-publisher fallback. Do not pass a normal browser profile to
@@ -200,27 +218,38 @@ The CLI looks the package up on the registry and chooses a mode:
 | --- | --- | --- |
 | `bootstrap` | the package does not exist | sign in, first publish, attach trusted publisher |
 | `attach` | the package exists without trusted publishing | sign in, attach trusted publisher |
-| `complete` | the latest version came from a trusted publisher | nothing |
+| `complete` | the latest version came from a trusted publisher | nothing, except the [GitHub Pages checks](#github-pages) |
 
 A bootstrap run:
 
 1. Validates `package.json` and checks the npm session with `npm whoami`.
-2. Signs in with `npm login --auth-type=web` only when needed. The CLI opens
-   the printed login URL in the default browser, where the maintainer is
-   usually already signed in and approves, completing 2FA if asked.
-3. Checks out the default branch into a temporary worktree, runs
-   `npm pack --ignore-scripts`, and lists every file with the packed and
-   unpacked size.
+2. Checks out the default branch into a temporary worktree, runs
+   `npm pack --ignore-scripts`, lists every file with the packed and
+   unpacked size, installs the tarball into a scratch directory, and runs
+   each bin with `--version`.
+3. Signs in with `npm login --auth-type=web` only when needed, right before
+   publishing, so the approval links do not expire while packing. The CLI
+   opens the printed login URL in the default browser, where the maintainer
+   is usually already signed in and approves, completing 2FA if asked. It
+   then checks that the account has 2FA turned on.
 4. After confirmation, publishes that tarball once with
    `npm publish --auth-type=web`. npm asks for 2FA in the browser.
 5. Waits until the registry serves the version.
 6. Attaches the trusted publisher with
-   `npx -y npm@latest trust github <package> --repo <owner/repo> --file <workflow>`.
+   `npx -y npm@^11.10 trust github <package> --repo <owner/repo> --file <workflow>`.
    If that command fails, the CLI opens the package's access page and prefills
    the trusted publisher form instead.
-7. Confirms the trust with `npm trust list`, then deletes a leftover
-   `NPM_TOKEN` repository secret after confirmation.
-8. Signs npm out and removes the temporary worktree.
+7. Confirms the trust with `npm trust list`, then lists the repository
+   secrets and deletes each leftover `NPM_TOKEN`/`NPM_AUTH_TOKEN` that no
+   workflow reads any more, one confirmation each.
+8. Signs npm out (unless `--keep-session`) and removes the temporary
+   worktree, then explains that every later version is published by the
+   trusted workflow.
+
+The trusted publisher is the workflow file whose job runs `npm publish` (or
+`npm`/`pnpm`/`yarn` publishing through a script), not a workflow that merely
+mentions npm. When several workflows publish, `--workflow <file>` chooses
+one.
 
 Add `--verify-release` to also dispatch the release workflow, watch it with
 `gh run watch`, and confirm that the next version was published with
@@ -238,9 +267,13 @@ The CLI keeps that token as short-lived as possible: it runs
 `cargo publish --dry-run`, opens the token page, lets `cargo login` read the
 token directly from the terminal, publishes once from a temporary worktree of
 the default branch, and then opens the token page again so the maintainer can
-revoke it. It then opens the crate's trusted publisher settings and runs
-`cargo logout`. An existing crate goes straight to the trusted publisher
-settings. See the Cargo
+revoke it. That one token is a maintainer-approved exception: creating it
+asks for confirmation first, and before the run continues the CLI checks with
+`GET https://crates.io/api/v1/me/tokens` that crates.io rejects it, asking
+again until it is revoked. It then opens the crate's trusted publisher
+settings, deletes leftover `CARGO_TOKEN`/`CARGO_REGISTRY_TOKEN` repository
+secrets after confirmation, and runs `cargo logout`. An existing crate goes
+straight to the trusted publisher settings. See the Cargo
 [publishing reference](https://doc.rust-lang.org/cargo/reference/publishing.html).
 
 ### PyPI
@@ -311,7 +344,7 @@ The CLIs intentionally use the same options and JSON schema:
 | `--format text\|json` | Human or machine-readable output |
 | `--verbose` | Enable command and browser tracing |
 | `--registry <name>` | Restrict `plan`, or select exactly one registry for `setup` |
-| `--package <name>` | Disambiguate multiple packages for one registry |
+| `--package <name>` | Plan only this package, or select it for `setup` when a registry has several |
 | `--offline` | Skip the public registry lookups; unknown state keeps every conditional step |
 | `--dry-run` | Print the whole setup flow without running it; the default |
 | `--execute` | Run the setup flow and open the browser |
@@ -326,6 +359,10 @@ The CLIs intentionally use the same options and JSON schema:
 | `--browser-attach snapshot[:<profile>]\|extension` | Fill forms in a temporary copy of your profile, or in your running browser through the Browser Commander extension |
 | `--browser-pref <key=value>` | Set a preference in the automated profile; may be repeated |
 | `--browser-restriction <name>` | Add a launch restriction or preset, such as `no-extensions`; may be repeated |
+| `--open-with <app>` | Open sign-in and approval URLs with this browser application instead of the default browser |
+| `--keep-session` | Keep the npm sign-in after a first publish, so the next package needs no new sign-in |
+| `--workflow <file>` | Trusted-publisher workflow in `.github/workflows`, when detection finds several or the wrong one |
+| `--environment <name>` | GitHub environment of the trusted publisher |
 
 Registry aliases such as `cargo`, `python`, `go`, `dotnet`, `maven`, and
 `composer`, `docker`, and `ghcr-io` are accepted. Canonical JSON values are
@@ -338,10 +375,42 @@ a test server with `PACKAGE_REGISTRY_MANAGER_NPM_REGISTRY`,
 `PACKAGE_REGISTRY_MANAGER_CRATES_IO_API`, `PACKAGE_REGISTRY_MANAGER_PYPI_API`,
 and `PACKAGE_REGISTRY_MANAGER_DOCKER_HUB_API`.
 
-The repository coordinates come from `.git/config`. npm workflow selection
-prefers a sorted `.github/workflows/*.yml` file containing `npm publish` and
-falls back to a filename containing `release`. Missing metadata is never
-invented: npm execution reports exactly which repository identity is absent.
+The repository coordinates come from `.git/config`. The trusted-publisher
+workflow is the one whose job actually publishes the package (see
+[npm trusted publishing](#npm-trusted-publishing)); `--workflow` overrides it.
+Missing metadata is never invented: npm execution reports exactly which
+repository identity is absent.
+
+Manifests inside `tests`, `test`, `fixtures`, `__fixtures__`, `__tests__`, or
+`examples` directories are skipped unless a workflow mentions their directory,
+so test fixtures are never planned as packages. List more paths to skip as
+glob patterns (`*`, `**`, `?`) relative to the repository root in an `ignore`
+array of `.package-registry-manager.json`:
+
+```json
+{ "ignore": ["experiments/**", "packages/internal-*"] }
+```
+
+With `--verbose`, the inspection lists every skipped manifest and its reason
+under `skipped`.
+
+### GitHub Pages
+
+When a workflow deploys with `actions/configure-pages`,
+`actions/upload-pages-artifact`, or `actions/deploy-pages`, every plan ends
+with repository checks, even when the package is already complete:
+
+1. `check-pages` reads the site with `gh api repos/{owner}/{repo}/pages`.
+2. `enable-pages` runs only when Pages is not enabled (the API answers 404,
+   which makes the deployment fail with "Get Pages site failed ... Not
+   Found"). After a confirmation it creates the site with GitHub Actions as its
+   source: `gh api -X POST repos/{owner}/{repo}/pages -f build_type=workflow`.
+3. `use-pages-workflow` runs only when Pages builds from a branch. After a
+   confirmation it switches the source with the same request as `PUT`.
+
+Both changes need repository administrator rights. When `gh` is refused, the
+tool prints a warning with the `https://github.com/{owner}/{repo}/settings/pages`
+link instead of failing, so the source can be set by hand.
 
 ## Architecture
 

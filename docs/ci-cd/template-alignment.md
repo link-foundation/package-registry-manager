@@ -25,7 +25,7 @@ The full tracked trees were compared against these upstream snapshots:
 | Supply-chain checks | pinned third-party actions, CodeQL, dependency review, cargo-audit, npm audit, secretlint, actionlint, and zizmor | Adopted at repository scope so one policy covers both packages. |
 | Timeouts and concurrency | step budgets, job backstops, matrix-specific cancellation groups, non-cancellable writers | Adopted; write jobs share one serialization group. |
 | Release metadata | `rust/changelog.d/` and synchronized package versions | Adapted to one product release train rather than two competing version sources. |
-| Registry publication | crates.io and npm publication with availability verification | Adopted; npm removes deprecated auth configuration, verifies npm's OIDC-compatible minimum version, and uses `NPM_TOKEN` only as a first-publication fallback. |
+| Registry publication | crates.io and npm publication with availability verification | Adapted to trusted publishing (OIDC) only: no `CARGO_TOKEN`, `CARGO_REGISTRY_TOKEN` or `NPM_TOKEN` secret. crates.io uses the hash-pinned `rust-lang/crates-io-auth-action`; npm removes deprecated auth configuration and verifies npm's OIDC-compatible minimum version. A crate or package that does not exist yet is skipped with a bootstrap warning (`package-registry-manager setup --registry crates-io\|npm --execute`), without blocking the other registries. |
 | GitHub Pages and desktop artifacts | Root workflows, Rust output under `rust/target/` | Adapted because these are repository products rather than npm-package files. |
 
 ## Deliberately not copied

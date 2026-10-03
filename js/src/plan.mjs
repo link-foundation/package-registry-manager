@@ -6,7 +6,9 @@ import {
   npmFlow,
   pypiFlow,
 } from "./flows.mjs";
+import { pagesSteps } from "./pages.mjs";
 import { planPrerequisites } from "./prerequisites.mjs";
+import { TRUSTED_REGISTRIES } from "./publishers.mjs";
 
 const FLOWS = new Map([
   ["npm", npmFlow],
@@ -21,7 +23,9 @@ const FLOWS = new Map([
  * release-verification steps to flows that support them. With
  * `options.environment` (from `probeEnvironment`) npm trust runs through the
  * npm that the local Node.js supports, and each plan lists its prerequisites;
- * `options.browser` describes where browser pages open.
+ * `options.browser` describes where browser pages open. `options.workflow`
+ * and `options.publisherEnvironment` override the detected trusted-publisher
+ * workflow file and GitHub environment.
  */
 export function buildPlans(inspection, selected = [], options = {}) {
   const registries = new Set(selected);
@@ -150,12 +154,23 @@ function flowPlan(inspection, packageInfo, options) {
     github_owner && github_repository
       ? `${github_owner}/${github_repository}`
       : null;
+  const trusted = TRUSTED_REGISTRIES.includes(packageInfo.registry);
   const workflow =
-    packageInfo.workflow ?? inspection.repository.release_workflow;
+    (trusted ? options.workflow : null) ?? packageInfo.workflow ?? null;
+  const environment = trusted
+    ? (options.publisherEnvironment ?? packageInfo.environment ?? null)
+    : null;
+  if (trusted && !workflow && packageInfo.workflow_candidates?.length > 1) {
+    return {
+      ...basePlan(inspection, packageInfo, []),
+      skipped_reason: `several workflows publish to ${packageInfo.registry} (${packageInfo.workflow_candidates.join(", ")}); pass --workflow <file> to choose the trusted publisher`,
+    };
+  }
   const context = {
     directory: packageDirectory(packageInfo.manifest),
     slug,
     workflow,
+    environment,
     verifyRelease: Boolean(options.verifyRelease),
     trustNpm: options.environment?.trustNpm,
   };
@@ -165,6 +180,11 @@ function flowPlan(inspection, packageInfo, options) {
     steps = [];
   } else if (mode === "attach") {
     steps = steps.filter((item) => !BOOTSTRAP_CONDITIONS.has(item.when));
+  }
+  // Pages readiness belongs to the repository, so it is checked in every mode.
+  const pages = inspection.repository.pages_workflow;
+  if (slug && pages) {
+    steps = steps.concat(pagesSteps(slug, pages));
   }
   const plan = basePlan(inspection, packageInfo, steps);
   if (mode) {
@@ -178,17 +198,16 @@ function flowPlan(inspection, packageInfo, options) {
   if (prerequisites.length > 0) {
     plan.prerequisites = prerequisites;
   }
-  if (
-    slug &&
-    workflow &&
-    ["npm", "crates-io", "pypi"].includes(packageInfo.registry)
-  ) {
+  if (slug && workflow && trusted) {
     plan.trusted_publisher = {
       provider: "github-actions",
       organization: github_owner,
       repository: github_repository,
       workflow,
     };
+    if (environment) {
+      plan.trusted_publisher.environment = environment;
+    }
     if (packageInfo.registry === "pypi") {
       plan.trusted_publisher.project = packageInfo.name;
     }

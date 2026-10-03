@@ -111,6 +111,19 @@ pub struct Package {
     /// The GitHub Actions workflow file that publishes this package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
+    /// The jobs of `workflow` that publish this package.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflow_jobs: Vec<String>,
+    /// The GitHub environment of the publishing jobs, when they share one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    /// Workflow files that all publish this package, when detection cannot
+    /// choose one; `--workflow` picks the trusted publisher among them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflow_candidates: Vec<String>,
+    /// Long-lived registry token secrets that workflows still read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub token_secrets: Vec<String>,
     /// Whether the registry already has the package; unset when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exists_on_registry: Option<bool>,
@@ -137,6 +150,10 @@ impl Package {
             problems: Vec::new(),
             warnings: Vec::new(),
             workflow: None,
+            workflow_jobs: Vec::new(),
+            environment: None,
+            workflow_candidates: Vec::new(),
+            token_secrets: Vec::new(),
             exists_on_registry: None,
             trusted_publishing: None,
         }
@@ -157,6 +174,9 @@ pub struct RepositoryInfo {
     pub github_owner: Option<String>,
     pub github_repository: Option<String>,
     pub release_workflow: Option<String>,
+    /// The workflow that deploys to GitHub Pages, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages_workflow: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +184,18 @@ pub struct Inspection {
     pub schema_version: u8,
     pub repository: RepositoryInfo,
     pub packages: Vec<Package>,
+    /// Manifests left out of `packages`; listed only when asked for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<Skipped>,
+}
+
+/// A manifest that inspection left out, such as a test fixture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Skipped {
+    /// Manifest path relative to the repository root.
+    pub manifest: String,
+    /// Why the manifest was left out.
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

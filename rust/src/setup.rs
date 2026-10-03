@@ -9,22 +9,33 @@ use regex::Regex;
 use serde_json::Value;
 use tokio::sync::mpsc::unbounded_channel;
 
+use crate::approvals::{
+    approval_deadline, next_link, oidc_release_note, LinkKind, APPROVAL_ATTEMPTS, TWO_FACTOR_HINT,
+};
 use crate::auth_urls::{
     node_options_with_shim, resolve_program, run_interactive, write_tty_shim, CommandOutput,
 };
 use crate::automation::Automation;
 use crate::browser::{npm_prefill_script, open_in_user_browser};
 use crate::browser_options::BrowserOptions;
+use crate::default_browser::{detect_default_browser, open_with_command};
 use crate::flows::CLEANUP_CONDITIONS;
+use crate::model::Registry;
 use crate::model::{CommandSpec, PlanMode, SetupPlan, SetupStep, StepKind};
 use crate::npm_package::{report_pack_warnings, verify_bins, PUBLISH_REJECTED};
+use crate::pages::{pages_change_warning, report_pages, PagesState, PAGES_CHANGES};
 use crate::plan::package_directory;
 use crate::prerequisites::two_factor_mode;
 use crate::profile::protect_legacy_profile;
 use crate::registry_state::{npm_trusted, truthy, Endpoints, Lookup, RegistryClient};
+use crate::tokens::{
+    cargo_home, read_cargo_token, report_token_secrets, TokenState, CRATES_TOKENS_URL,
+};
 
 const PREFILLED_FORMS: [&str; 2] = ["configure-trusted-publisher", "create-pending-publisher"];
 const INTERACTIVE_CHECKS: [&str; 2] = ["check-trust", "verify-trusted-publisher"];
+/// Checks whose failure is an answer, so their output is not echoed.
+const QUIET_CHECKS: [&str; 2] = ["check-sign-in", "check-pages"];
 
 /// Where `--browser` opens URLs that need no automation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -49,6 +60,11 @@ pub struct ExecuteOptions<'a> {
     pub execute: bool,
     pub yes: bool,
     pub no_browser: bool,
+    /// Application that opens sign-in and approval links instead of the
+    /// default browser (`--open-with`).
+    pub open_with: Option<&'a str>,
+    /// Keep the npm session after setup instead of signing out (`--keep-session`).
+    pub keep_session: bool,
     pub verbose: bool,
     /// Registry API base URLs for lookups and polling.
     pub endpoints: Endpoints,
@@ -71,11 +87,18 @@ pub async fn execute_plan(plan: &SetupPlan, options: &ExecuteOptions<'_>) -> Res
         );
     }
     if plan.mode == Some(PlanMode::Complete) {
+        let remaining = if plan.steps.is_empty() {
+            "nothing to do."
+        } else {
+            "only the repository checks remain."
+        };
         println!(
-            "{} already publishes through trusted publishing; nothing to do.",
+            "{} already publishes through trusted publishing; {remaining}",
             plan.package.name
         );
-        return Ok(());
+        if plan.steps.is_empty() {
+            return Ok(());
+        }
     }
     if !options.execute {
         println!("Dry run only. Re-run with --execute to run these steps and open the registry.");
@@ -85,7 +108,11 @@ pub async fn execute_plan(plan: &SetupPlan, options: &ExecuteOptions<'_>) -> Res
     let mut session = Session::new(plan, options);
     let result = session.run().await;
     session.cleanup().await;
-    result
+    result?;
+    if let Some(prefill) = &plan.trusted_publisher {
+        println!("\n{}", oidc_release_note(&prefill.workflow));
+    }
+    Ok(())
 }
 
 struct Session<'a> {
@@ -94,10 +121,15 @@ struct Session<'a> {
     client: RegistryClient,
     conditions: BTreeSet<&'static str>,
     values: BTreeMap<String, String>,
+    token_secrets: Vec<String>,
     deferred: Vec<&'a SetupStep>,
     browser: Option<Automation>,
     temporary: Option<tempfile::TempDir>,
     shim: Option<(tempfile::TempDir, PathBuf)>,
+    /// The default browser's name, when detected.
+    browser_name: Option<&'static str>,
+    /// Whether the default browser was already looked up.
+    browser_detected: bool,
 }
 
 #[allow(clippy::future_not_send)] // Browser Commander's native CDP adapter is intentionally !Sync.
@@ -116,10 +148,13 @@ impl<'a> Session<'a> {
             client: RegistryClient::new(options.endpoints.clone(), options.verbose),
             conditions,
             values: BTreeMap::new(),
+            token_secrets: Vec::new(),
             deferred: Vec::new(),
             browser: None,
             temporary: None,
             shim: None,
+            browser_name: None,
+            browser_detected: false,
         }
     }
 
@@ -155,7 +190,13 @@ impl<'a> Session<'a> {
 
     async fn cleanup(&mut self) {
         for step in std::mem::take(&mut self.deferred) {
-            if step.when.as_deref().is_some_and(|when| self.holds(when)) {
+            if step.id == "sign-out" && self.keeps_session(step) {
+                println!(
+                    "Keeping the npm session (--keep-session): its token stays in npm's user \
+                     configuration until you run npm logout, and the next run reuses it while \
+                     npm whoami succeeds."
+                );
+            } else if step.when.as_deref().is_some_and(|when| self.holds(when)) {
                 println!("==> {}", step.title);
                 match self.run_process(step, true).await {
                     Ok(result) if result.code == 0 => {}
@@ -171,11 +212,23 @@ impl<'a> Session<'a> {
         self.shim = None;
     }
 
+    fn keeps_session(&self, step: &SetupStep) -> bool {
+        self.options.keep_session
+            && step.when.as_deref().is_some_and(|when| self.holds(when))
+            && program(step) == "npm"
+    }
+
     async fn run_step(&mut self, step: &SetupStep) -> Result<()> {
         match step.kind {
             StepKind::Check if step.command.is_some() => self.check(step).await,
             StepKind::Check if step.id == "verify-bins" => self.verify_bins().await,
+            StepKind::Check if step.id == "verify-token-revoked" => {
+                self.verify_token_revoked().await
+            }
             StepKind::Check => self.check_registry().await,
+            StepKind::Command if step.id == "delete-token-secret" => {
+                self.delete_token_secrets(step).await
+            }
             StepKind::Command => self.command(step).await,
             StepKind::Wait => self.wait(step).await,
             StepKind::Browser => self.browser_step(step).await,
@@ -262,15 +315,17 @@ impl<'a> Session<'a> {
                 }
             }
             "audit-token-secrets" => {
-                if result.code != 0 {
+                if result.code == 0 {
+                    self.token_secrets = report_token_secrets(output, &self.plan.package)?;
+                    self.toggle("token-secret-present", !self.token_secrets.is_empty());
+                } else {
                     eprintln!("warning: could not list repository secrets with gh");
-                } else if json_list(output)?
-                    .iter()
-                    .any(|item| item["name"] == "NPM_TOKEN")
-                {
-                    println!("  NPM_TOKEN is no longer needed with trusted publishing.");
-                    self.conditions.insert("token-secret-present");
                 }
+            }
+            "check-pages" => {
+                let state = report_pages(&result, &self.plan.repository);
+                self.toggle("pages-missing", state == Some(PagesState::Missing));
+                self.toggle("pages-legacy", state == Some(PagesState::Legacy));
             }
             "find-release-run" => {
                 let runs = if result.code == 0 {
@@ -373,6 +428,60 @@ impl<'a> Session<'a> {
         .await
     }
 
+    /// Delete each leftover token secret, with one confirmation each.
+    async fn delete_token_secrets(&mut self, step: &SetupStep) -> Result<()> {
+        for name in self.token_secrets.clone() {
+            self.values.insert("token_secret".to_owned(), name);
+            self.command(step).await?;
+        }
+        Ok(())
+    }
+
+    /// Confirm that crates.io rejects the first-publish token `cargo login`
+    /// stored, asking the maintainer to revoke it and re-checking up to three
+    /// times.
+    async fn verify_token_revoked(&self) -> Result<()> {
+        let token = cargo_home(
+            std::env::var_os("CARGO_HOME"),
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(PathBuf::from),
+        )
+        .and_then(|directory| read_cargo_token(&directory));
+        let Some(token) = token else {
+            eprintln!(
+                "warning: cargo holds no readable crates.io token, so its revocation cannot be verified; check {CRATES_TOKENS_URL}"
+            );
+            return Ok(());
+        };
+        let base = self
+            .options
+            .endpoints
+            .base(Registry::CratesIo)
+            .unwrap_or_default();
+        for attempt in 1..=3 {
+            match self.client.crates_token_state(&base, &token).await {
+                Some(TokenState::Revoked) => {
+                    println!("  crates.io rejects the first-publish token: it is revoked.");
+                    return Ok(());
+                }
+                None => {
+                    eprintln!(
+                        "warning: crates.io gave no clear answer about the first-publish token; check that it is revoked at {CRATES_TOKENS_URL}"
+                    );
+                    return Ok(());
+                }
+                Some(TokenState::Active) if attempt < 3 => {
+                    prompt(&format!(
+                        "crates.io still accepts the first-publish token. Revoke it at {CRATES_TOKENS_URL}, then press Enter..."
+                    ))?;
+                }
+                Some(TokenState::Active) => {}
+            }
+        }
+        bail!("the first-publish token still authenticates on crates.io; revoke it at {CRATES_TOKENS_URL}")
+    }
+
     async fn command(&mut self, step: &SetupStep) -> Result<()> {
         if step.confirm && !self.options.yes {
             let rendered = render(&self.expand(command_of(step)?));
@@ -408,6 +517,10 @@ impl<'a> Session<'a> {
                 "attach-trusted-publisher" => {
                     eprintln!("warning: npm trust failed; falling back to the browser form");
                     self.conditions.insert("trust-cli-failed");
+                    return Ok(());
+                }
+                id if PAGES_CHANGES.contains(&id) => {
+                    eprintln!("{}", pages_change_warning(&self.plan.repository));
                     return Ok(());
                 }
                 "trigger-release" => {
@@ -499,6 +612,12 @@ impl<'a> Session<'a> {
     }
 
     async fn browser_step(&mut self, step: &SetupStep) -> Result<()> {
+        if step.confirm && !self.options.yes {
+            println!("  {}", step.description);
+            if !is_yes(&prompt(&format!("{}? [y/N] ", step.title))?) {
+                bail!("the one-time first-publish token was declined; nothing was published");
+            }
+        }
         let fill =
             PREFILLED_FORMS.contains(&step.id.as_str()) && self.plan.trusted_publisher.is_some();
         self.open(step.url.as_deref().unwrap_or_default(), fill)
@@ -548,10 +667,17 @@ impl<'a> Session<'a> {
             return Ok(());
         }
         if !automate && self.options.browser == BrowserMode::Default {
-            println!("Opening {url} in your default browser");
-            if let Err(error) = open_in_user_browser(url).await {
+            let app = self.options.open_with;
+            let label = self.default_browser_label();
+            println!("Opening {url} in {}", app.unwrap_or(&label));
+            let opened = match app {
+                Some(app) => self.open_with(url, app).await,
+                None => open_in_user_browser(url).await,
+            };
+            if let Err(error) = opened {
                 eprintln!(
-                    "warning: could not open your default browser ({error:#}); open the URL yourself"
+                    "warning: could not open {} ({error:#}); open the URL yourself",
+                    app.unwrap_or("your default browser")
                 );
             }
             return Ok(());
@@ -570,6 +696,49 @@ impl<'a> Session<'a> {
             browser.goto(url).await?;
         }
         Ok(())
+    }
+
+    async fn open_with(&self, url: &str, app: &str) -> Result<()> {
+        let command = open_with_command(url, app, std::env::consts::OS)?;
+        if self.options.verbose {
+            eprintln!("+ {}", render(&command));
+        }
+        // Like the default browser's opener, a slow application keeps running.
+        let opener = tokio::spawn(async move {
+            StreamingRunner::from_argv(resolve_program(&command.program), &command.args)
+                .collect()
+                .await
+        });
+        match tokio::time::timeout(Duration::from_secs(5), opener).await {
+            Err(_) => Ok(()),
+            Ok(joined) => match joined?? {
+                result if result.code == 0 => Ok(()),
+                result => bail!("{app} exited with code {}", result.code),
+            },
+        }
+    }
+
+    /// Names the default browser once per run, so maintainers know where to
+    /// look. Runs before npm starts, while no link is waiting to be opened.
+    async fn detect_default_browser(&mut self) {
+        let options = self.options;
+        if options.no_browser
+            || options.open_with.is_some()
+            || options.browser != BrowserMode::Default
+        {
+            return;
+        }
+        if !self.browser_detected {
+            self.browser_name = detect_default_browser(options.verbose).await;
+            self.browser_detected = true;
+        }
+    }
+
+    fn default_browser_label(&self) -> String {
+        self.browser_name.map_or_else(
+            || "your default browser".to_owned(),
+            |name| format!("{name}, your default browser"),
+        )
     }
 
     fn cwd(&self, step: &SetupStep) -> PathBuf {
@@ -601,7 +770,7 @@ impl<'a> Session<'a> {
             .collect()
             .await
             .with_context(|| format!("failed to run {}", command.program))?;
-        if self.options.verbose || (result.code != 0 && step.id != "check-sign-in") {
+        if self.options.verbose || (result.code != 0 && !QUIET_CHECKS.contains(&step.id.as_str())) {
             io::stdout().write_all(result.stdout.to_string().as_bytes())?;
             io::stderr().write_all(result.stderr.to_string().as_bytes())?;
         }
@@ -610,13 +779,38 @@ impl<'a> Session<'a> {
             stdout: result.stdout.to_string(),
             stderr: result.stderr.to_string(),
             legacy_login: false,
+            approval_expired: false,
         })
     }
 
+    /// Run a step's command with the terminal. npm's links expire after about
+    /// 5 minutes, so an npm step that ends on an expired link is run again for
+    /// a fresh one.
     async fn run_process(&mut self, step: &SetupStep, mirror: bool) -> Result<CommandOutput> {
         let (command, cwd) = self.prepare(step)?;
-        let mut env = BTreeMap::new();
         let npm = matches!(command.program.as_str(), "npm" | "npx");
+        if !npm {
+            return self.run_once(&command, &cwd, mirror, false).await;
+        }
+        self.detect_default_browser().await;
+        for attempt in 1.. {
+            let result = self.run_once(&command, &cwd, mirror, true).await?;
+            match next_link(&result, attempt, APPROVAL_ATTEMPTS)? {
+                Some(message) => println!("{message}"),
+                None => return Ok(result),
+            }
+        }
+        unreachable!("next_link fails after the last attempt")
+    }
+
+    async fn run_once(
+        &mut self,
+        command: &CommandSpec,
+        cwd: &Path,
+        mirror: bool,
+        npm: bool,
+    ) -> Result<CommandOutput> {
+        let mut env = BTreeMap::new();
         if npm {
             if self.shim.is_none() {
                 self.shim = Some(write_tty_shim()?);
@@ -631,24 +825,20 @@ impl<'a> Session<'a> {
         }
         let (sender, mut receiver) = unbounded_channel();
         let (result, ()) = tokio::join!(
-            run_interactive(&command, &cwd, &env, mirror, Some(sender), npm),
+            run_interactive(command, cwd, &env, mirror, Some(sender), npm, npm),
             async {
-                while let Some(url) = receiver.recv().await {
+                while let Some((url, kind)) = receiver.recv().await {
+                    println!("{}", approval_deadline(kind, chrono::Local::now().time()));
+                    if kind == LinkKind::Approve {
+                        println!("{TWO_FACTOR_HINT}");
+                    }
                     if let Err(error) = self.open(&url, false).await {
                         eprintln!("warning: could not open {url}: {error:#}");
                     }
                 }
             }
         );
-        let result = result?;
-        if result.legacy_login {
-            println!();
-            bail!(
-                "the browser login was not completed in time, so npm fell back to its legacy \
-                 username prompt; re-run the command to get a fresh login link"
-            );
-        }
-        Ok(result)
+        result
     }
 
     fn expand(&self, command: &CommandSpec) -> CommandSpec {

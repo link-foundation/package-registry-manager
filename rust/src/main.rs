@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use clap::{Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use lino_arguments::Parser;
 use package_registry_manager::browser_options::{
     parse_browser_options, BrowserArgs, BrowserOptions,
@@ -18,7 +18,9 @@ use package_registry_manager::registry_state::{Endpoints, RegistryClient};
 use package_registry_manager::setup::{
     default_browser_profile, execute_plan, BrowserMode, ExecuteOptions,
 };
-use package_registry_manager::{inspect_repository, Inspection, PlanMode, Registry, SetupPlan};
+use package_registry_manager::{
+    inspect_repository_with, InspectOptions, Inspection, Package, PlanMode, Registry, SetupPlan,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -32,7 +34,8 @@ struct Args {
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
 
-    /// Print commands and their output. Disabled by default.
+    /// Print commands and their output, and list the manifests inspection
+    /// skipped. Disabled by default.
     #[arg(long, global = true)]
     verbose: bool,
 
@@ -57,6 +60,13 @@ enum Commands {
         /// Also watch the release workflow and confirm that the next version has provenance.
         #[arg(long)]
         verify_release: bool,
+
+        /// Plan only the packages with this name.
+        #[arg(long)]
+        package: Option<String>,
+
+        #[command(flatten)]
+        publisher: PublisherArgs,
     },
     /// Bootstrap or attach trusted publishing for one package.
     Setup {
@@ -79,6 +89,9 @@ enum Commands {
         #[arg(long)]
         verify_release: bool,
 
+        #[command(flatten)]
+        publisher: PublisherArgs,
+
         /// Confirm publishing, secret changes, and form submission in advance.
         #[arg(long, requires = "execute")]
         yes: bool,
@@ -86,6 +99,16 @@ enum Commands {
         /// Print the setup URL instead of starting a browser.
         #[arg(long, requires = "execute")]
         no_browser: bool,
+
+        /// Open sign-in and approval pages in this application instead of the
+        /// default browser, such as "Google Chrome" (macOS) or firefox.
+        #[arg(long, value_name = "APP", conflicts_with = "no_browser")]
+        open_with: Option<String>,
+
+        /// Stay signed in to npm after setup; the session token stays in npm's
+        /// user configuration until npm logout.
+        #[arg(long)]
+        keep_session: bool,
 
         /// Installed browser channel: chrome, chromium, brave, msedge,
         /// msedge-beta, msedge-dev, or msedge-canary.
@@ -131,6 +154,48 @@ enum Commands {
     },
 }
 
+/// Overrides for the detected trusted publisher.
+#[derive(Debug, Clone, ClapArgs)]
+struct PublisherArgs {
+    /// Trusted-publisher workflow file in .github/workflows, when detection
+    /// finds several or the wrong one.
+    #[arg(long, value_name = "FILE")]
+    workflow: Option<String>,
+
+    /// GitHub environment of the trusted publisher.
+    #[arg(long, value_name = "NAME")]
+    environment: Option<String>,
+}
+
+impl PublisherArgs {
+    fn workflow(&self, repository: &std::path::Path) -> Result<Option<String>> {
+        let Some(workflow) = &self.workflow else {
+            return Ok(None);
+        };
+        let name = regex::Regex::new(r"^[A-Za-z0-9_.-]+\.ya?ml$").expect("valid expression");
+        if !name.is_match(workflow) {
+            bail!(
+                "--workflow must be a workflow file name in .github/workflows, such as release.yml"
+            );
+        }
+        if !repository
+            .join(".github/workflows")
+            .join(workflow)
+            .is_file()
+        {
+            bail!("--workflow: .github/workflows/{workflow} does not exist");
+        }
+        Ok(Some(workflow.clone()))
+    }
+
+    fn environment(&self) -> Result<Option<String>> {
+        match self.environment.as_deref().map(str::trim) {
+            Some("") => bail!("--environment must not be empty"),
+            environment => Ok(environment.map(str::to_owned)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum OutputFormat {
     Text,
@@ -141,7 +206,12 @@ enum OutputFormat {
 async fn main() -> Result<()> {
     let args = Args::parse();
     let endpoints = Endpoints::from_env();
-    let discovered = inspect_repository(&args.repository)?;
+    let discovered = inspect_repository_with(
+        &args.repository,
+        InspectOptions {
+            include_skipped: args.verbose,
+        },
+    )?;
     let inspection = if args.offline {
         discovered
     } else {
@@ -170,9 +240,13 @@ async fn main() -> Result<()> {
         Commands::Plan {
             registry: _,
             verify_release,
+            package,
+            publisher,
         } => {
             let options = PlanOptions {
                 verify_release,
+                workflow: publisher.workflow(&args.repository)?,
+                publisher_environment: publisher.environment()?,
                 endpoints,
                 environment: Some(environment),
                 browser: BrowserDisplay {
@@ -181,10 +255,10 @@ async fn main() -> Result<()> {
                     ..BrowserDisplay::default()
                 },
             };
-            let plans = build_plans_with(&inspection, &selected, &options);
-            if plans.is_empty() {
-                bail!("no matching package manifests were found");
-            }
+            let plans = filter_plans(
+                build_plans_with(&inspection, &selected, &options),
+                package.as_deref(),
+            )?;
             output_plans(&plans, args.format)
         }
         Commands::Setup {
@@ -193,8 +267,11 @@ async fn main() -> Result<()> {
             dry_run: _,
             execute,
             verify_release,
+            publisher,
             yes,
             no_browser,
+            open_with,
+            keep_session,
             browser,
             browser_channel,
             browser_executable,
@@ -204,6 +281,10 @@ async fn main() -> Result<()> {
             browser_pref,
             browser_restriction,
         } => {
+            let open_with = open_with.map(|app| app.trim().to_owned());
+            if open_with.as_deref().is_some_and(str::is_empty) {
+                bail!("--open-with must not be empty");
+            }
             let browser_options = parse_browser_options(&BrowserArgs {
                 channel: browser_channel,
                 executable: browser_executable,
@@ -221,6 +302,8 @@ async fn main() -> Result<()> {
             };
             let options = PlanOptions {
                 verify_release,
+                workflow: publisher.workflow(&args.repository)?,
+                publisher_environment: publisher.environment()?,
                 endpoints,
                 environment: Some(environment),
                 browser: browser_display(no_browser, browser, &browser_options, &profile),
@@ -238,6 +321,8 @@ async fn main() -> Result<()> {
                     execute,
                     yes,
                     no_browser,
+                    open_with: open_with.as_deref(),
+                    keep_session,
                     verbose: args.verbose,
                     endpoints: options.endpoints,
                     poll_interval: Duration::from_secs(5),
@@ -279,6 +364,24 @@ fn parse_registry(value: &str) -> Result<Registry, String> {
     value
         .parse()
         .map_err(|error: anyhow::Error| error.to_string())
+}
+
+/// Keep the plans of `package`, or every plan without one.
+fn filter_plans(plans: Vec<SetupPlan>, package: Option<&str>) -> Result<Vec<SetupPlan>> {
+    if plans.is_empty() {
+        bail!("no matching package manifests were found");
+    }
+    let Some(package) = package else {
+        return Ok(plans);
+    };
+    let named: Vec<SetupPlan> = plans
+        .into_iter()
+        .filter(|plan| plan.package.name == package)
+        .collect();
+    if named.is_empty() {
+        bail!("package '{package}' was not found");
+    }
+    Ok(named)
 }
 
 fn select_plan<'a>(plans: &'a [SetupPlan], package: Option<&str>) -> Result<&'a SetupPlan> {
@@ -340,14 +443,54 @@ fn output_inspection(inspection: &Inspection, format: OutputFormat) -> Result<()
                     package.name,
                     details.join(", ")
                 )?;
+                if let (Some(workflow), true) = (&package.workflow, package.publishable) {
+                    writeln!(
+                        output,
+                        "  workflow: {}",
+                        publisher_summary(
+                            workflow,
+                            &package.workflow_jobs,
+                            package.environment.as_deref()
+                        )
+                    )?;
+                }
                 for warning in &package.warnings {
                     writeln!(output, "  warning: {warning}")?;
                 }
+            }
+            for item in &inspection.skipped {
+                writeln!(output, "skipped {}: {}", item.manifest, item.reason)?;
             }
             write_stdout(&output)?;
         }
     }
     Ok(())
+}
+
+/// Describe a trusted-publisher workflow with its jobs and environment.
+fn publisher_summary(workflow: &str, jobs: &[String], environment: Option<&str>) -> String {
+    let mut details = Vec::new();
+    if !jobs.is_empty() {
+        let label = if jobs.len() > 1 { "jobs" } else { "job" };
+        details.push(format!("{label} {}", jobs.join(", ")));
+    }
+    if let Some(environment) = environment {
+        details.push(format!("environment {environment}"));
+    }
+    if details.is_empty() {
+        workflow.to_owned()
+    } else {
+        format!("{workflow} ({})", details.join("; "))
+    }
+}
+
+/// The detected jobs, unless `--workflow` chose a different workflow file.
+fn trusted_jobs<'a>(package: &'a Package, workflow: &str) -> &'a [String] {
+    if package.workflow.as_deref() == Some(workflow) {
+        &package.workflow_jobs
+    } else {
+        &[]
+    }
 }
 
 fn output_plans(plans: &[SetupPlan], format: OutputFormat) -> Result<()> {
@@ -368,6 +511,21 @@ fn output_plans(plans: &[SetupPlan], format: OutputFormat) -> Result<()> {
                 }
                 if let Some(reason) = &plan.skipped_reason {
                     writeln!(output, "  skipped: {reason}")?;
+                }
+                if let Some(publisher) = &plan.trusted_publisher {
+                    let jobs = trusted_jobs(&plan.package, &publisher.workflow);
+                    writeln!(
+                        output,
+                        "  trusted publisher: {}",
+                        publisher_summary(
+                            &publisher.workflow,
+                            jobs,
+                            publisher.environment.as_deref()
+                        )
+                    )?;
+                }
+                for warning in &plan.package.warnings {
+                    writeln!(output, "  warning: {warning}")?;
                 }
                 for line in render_prerequisites(&plan.prerequisites) {
                     writeln!(output, "{line}")?;
