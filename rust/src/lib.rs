@@ -1,10 +1,12 @@
 //! Repository discovery and package-registry setup planning.
 
+pub mod approvals;
 pub mod auth_urls;
 pub mod automation;
 pub mod browser;
 pub mod browser_options;
 pub mod containers;
+pub mod default_browser;
 pub mod discovery;
 pub mod flows;
 pub mod model;

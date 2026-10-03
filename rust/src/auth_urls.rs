@@ -11,7 +11,11 @@ use regex::Regex;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::approvals::{LinkKind, EXPIRED_APPROVAL};
 use crate::model::CommandSpec;
+
+/// How much of npm's stderr is kept to recognize an expired approval.
+const STDERR_TAIL: usize = 4096;
 
 /// Preloaded into npm so it treats piped stdout as a terminal.
 ///
@@ -33,7 +37,7 @@ pub const ANSI_PATTERN: &str = r"\x1b\[[0-9;?]*[ -/]*[@-~]";
 #[derive(Debug)]
 pub struct AuthUrlScanner {
     pending: String,
-    expect_url: bool,
+    expect_url: Option<LinkKind>,
     legacy_login: bool,
     seen: BTreeSet<String>,
     prompt: Regex,
@@ -56,11 +60,11 @@ impl AuthUrlScanner {
         let compile = |pattern: &str| Regex::new(pattern).expect("static pattern must compile");
         Self {
             pending: String::new(),
-            expect_url: false,
+            expect_url: None,
             legacy_login: false,
             seen: BTreeSet::new(),
-            prompt: compile(r"(?i)^(?:Login at|Authenticate your account at):?$"),
-            inline: compile(r"(?i)(?:Login at|Authenticate your account at):?\s+(https?://\S+)"),
+            prompt: compile(r"(?i)^(Login at|Authenticate your account at):?$"),
+            inline: compile(r"(?i)(Login at|Authenticate your account at):?\s+(https?://\S+)"),
             ansi: compile(ANSI_PATTERN),
             url: compile(r"^https?://\S+$"),
             legacy: compile(r"(?i)^Username:"),
@@ -82,6 +86,15 @@ impl AuthUrlScanner {
 
     /// Feed a chunk of output; returns URLs not reported before.
     pub fn push(&mut self, chunk: &str) -> Vec<String> {
+        self.push_links(chunk)
+            .into_iter()
+            .map(|(url, _)| url)
+            .collect()
+    }
+
+    /// Feed a chunk of output; returns links not reported before, each with
+    /// whether it signs in or approves.
+    pub fn push_links(&mut self, chunk: &str) -> Vec<(String, LinkKind)> {
         self.pending.push_str(chunk);
         let mut lines = self
             .pending
@@ -92,9 +105,9 @@ impl AuthUrlScanner {
         let mut found = Vec::new();
         for raw in lines {
             self.detect_legacy(&raw);
-            if let Some(url) = self.scan_line(&raw) {
+            if let Some((url, kind)) = self.scan_line(&raw) {
                 if self.seen.insert(url.clone()) {
-                    found.push(url);
+                    found.push((url, kind));
                 }
             }
         }
@@ -103,22 +116,30 @@ impl AuthUrlScanner {
         found
     }
 
-    fn scan_line(&mut self, raw: &str) -> Option<String> {
+    fn scan_line(&mut self, raw: &str) -> Option<(String, LinkKind)> {
         let cleaned = self.ansi.replace_all(raw, "");
         let line = cleaned.trim();
         if let Some(captures) = self.inline.captures(line) {
-            self.expect_url = false;
-            return Some(captures[1].to_owned());
+            self.expect_url = None;
+            return Some((captures[2].to_owned(), link_kind(&captures[1])));
         }
-        if self.prompt.is_match(line) {
-            self.expect_url = true;
-        } else if self.expect_url && self.url.is_match(line) {
-            self.expect_url = false;
-            return Some(line.to_owned());
+        if let Some(captures) = self.prompt.captures(line) {
+            self.expect_url = Some(link_kind(&captures[1]));
+        } else if let Some(kind) = self.expect_url.filter(|_| self.url.is_match(line)) {
+            self.expect_url = None;
+            return Some((line.to_owned(), kind));
         } else if !line.is_empty() {
-            self.expect_url = false;
+            self.expect_url = None;
         }
         None
+    }
+}
+
+fn link_kind(label: &str) -> LinkKind {
+    if label.to_ascii_lowercase().starts_with("login") {
+        LinkKind::Login
+    } else {
+        LinkKind::Approve
     }
 }
 
@@ -153,6 +174,8 @@ pub struct CommandOutput {
     pub stderr: String,
     /// The command was stopped at npm's legacy `Username:` prompt.
     pub legacy_login: bool,
+    /// The watched stderr reported that npm's approval session expired.
+    pub approval_expired: bool,
 }
 
 /// Resolve a program on `PATH`, including Windows `PATHEXT` launchers such as
@@ -182,15 +205,18 @@ pub fn resolve_program(program: &str) -> OsString {
 /// prompts (`cargo login`, `gh secret set`) keep working. This is the one
 /// subprocess not run through command-stream, whose argument-vector runner
 /// only pipes or closes stdin. Web-authentication
-/// URLs are sent to `urls`. With `stop_on_legacy_login` the command is killed
+/// links are sent to `urls`. With `stop_on_legacy_login` the command is killed
 /// at npm's legacy `Username:` prompt and the output has `legacy_login` set.
+/// With `watch_stderr` stderr is piped, mirrored, and checked for npm's
+/// expired-approval error, which sets `approval_expired`.
 pub async fn run_interactive(
     command: &CommandSpec,
     cwd: &Path,
     env: &BTreeMap<String, String>,
     mirror: bool,
-    urls: Option<UnboundedSender<String>>,
+    urls: Option<UnboundedSender<(String, LinkKind)>>,
     stop_on_legacy_login: bool,
+    watch_stderr: bool,
 ) -> Result<CommandOutput> {
     let mut child = tokio::process::Command::new(resolve_program(&command.program))
         .args(&command.args)
@@ -198,9 +224,17 @@ pub async fn run_interactive(
         .envs(env)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(if watch_stderr {
+            Stdio::piped()
+        } else {
+            Stdio::inherit()
+        })
         .spawn()
         .with_context(|| format!("failed to run {}", command.program))?;
+    let stderr = child
+        .stderr
+        .take()
+        .map(|stderr| tokio::spawn(watch(stderr)));
     let mut stdout = child.stdout.take().context("stdout is not piped")?;
     let mut scanner = AuthUrlScanner::new();
     let mut captured = Vec::new();
@@ -217,10 +251,10 @@ pub async fn run_interactive(
             terminal.write_all(chunk)?;
             terminal.flush()?;
         }
-        let found = scanner.push(&String::from_utf8_lossy(chunk));
+        let found = scanner.push_links(&String::from_utf8_lossy(chunk));
         if let Some(sender) = &urls {
-            for url in found {
-                let _ = sender.send(url);
+            for link in found {
+                let _ = sender.send(link);
             }
         }
         if stop_on_legacy_login && scanner.legacy_login() {
@@ -229,15 +263,44 @@ pub async fn run_interactive(
         }
     }
     if let Some(sender) = &urls {
-        for url in scanner.push("\n") {
-            let _ = sender.send(url);
+        for link in scanner.push_links("\n") {
+            let _ = sender.send(link);
         }
     }
     let status = child.wait().await?;
+    let stderr = match stderr {
+        Some(task) => task.await??,
+        None => String::new(),
+    };
+    let expired = Regex::new(EXPIRED_APPROVAL).expect("static pattern must compile");
     Ok(CommandOutput {
         code: status.code().unwrap_or(1),
         stdout: String::from_utf8_lossy(&captured).into_owned(),
-        stderr: String::new(),
+        approval_expired: expired.is_match(&stderr),
+        stderr,
         legacy_login: stop_on_legacy_login && scanner.legacy_login(),
     })
+}
+
+/// Mirrors a piped stderr to the terminal and returns its last
+/// [`STDERR_TAIL`] bytes without ANSI escape sequences.
+async fn watch(mut stderr: tokio::process::ChildStderr) -> Result<String> {
+    let mut tail = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = stderr.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        let mut terminal = std::io::stderr().lock();
+        terminal.write_all(&buffer[..read])?;
+        terminal.flush()?;
+        tail.extend_from_slice(&buffer[..read]);
+        let excess = tail.len().saturating_sub(STDERR_TAIL);
+        tail.drain(..excess);
+    }
+    let ansi = Regex::new(ANSI_PATTERN).expect("static pattern must compile");
+    Ok(ansi
+        .replace_all(&String::from_utf8_lossy(&tail), "")
+        .into_owned())
 }
