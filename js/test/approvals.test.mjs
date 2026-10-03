@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { exec } from "command-stream";
+
 import {
   APPROVAL_ATTEMPTS,
   approvalDeadline,
@@ -139,6 +141,27 @@ test("names the default browser on every platform", async () => {
       },
     }),
     undefined,
+  );
+});
+
+test("reads the default browser from command-stream's captured output", async () => {
+  // command-stream captures stdout as a string-like object, not a string;
+  // the macOS parser walks it character by character.
+  const lsHandlers =
+    '(\n    {\n    LSHandlerRoleAll = "org.mozilla.firefox";\n    LSHandlerURLScheme = https;\n}\n)';
+  const run = () =>
+    exec(
+      process.execPath,
+      ["-e", `console.log(${JSON.stringify(lsHandlers)})`],
+      {
+        capture: true,
+        mirror: false,
+        stdin: "ignore",
+      },
+    );
+  assert.equal(
+    await detectDefaultBrowser({ platform: "darwin", run }),
+    "Firefox",
   );
 });
 

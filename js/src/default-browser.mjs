@@ -120,9 +120,9 @@ export async function detectDefaultBrowser({
       return undefined;
     }
     // Without any handler entry, macOS answers with an error and uses Safari.
-    return browserName(
-      defaultBrowserId(result.code === 0 ? result.stdout : "", platform),
-    );
+    // command-stream captures stdout as a string-like object, not a string.
+    const output = result.code === 0 ? String(result.stdout ?? "") : "";
+    return browserName(defaultBrowserId(output, platform));
   } catch (error) {
     if (verbose) {
       console.error(`could not detect the default browser: ${error.message}`);
