@@ -1,11 +1,14 @@
-// Stand-in for node, npm, npx, cargo, git, gh, and the default-browser openers
-// (open, xdg-open) in the end-to-end bootstrap tests of both implementations.
+// Stand-in for node, npm, npx, cargo, git, gh, the default-browser openers
+// (open, xdg-open), and the default-browser queries (defaults, xdg-settings,
+// both answering Firefox) in the end-to-end tests of both implementations.
 // It records every argument vector and keeps just enough state (session,
 // trusted publisher) for a resumed run to behave like the real tools.
 // Scenarios: FAKE_TFA=off (no 2FA), FAKE_PACK_WARNINGS (npm drops the bin
 // while packing), FAKE_BIN_FAILS (the installed bin exits 1), and
 // FAKE_RELEASE_RUN=failed-publish (the last release failed with E404), and
-// FAKE_SECRETS (comma-separated repository secret names; default NPM_TOKEN).
+// FAKE_SECRETS (comma-separated repository secret names; default NPM_TOKEN),
+// FAKE_LEGACY_LOGIN=<n> (the first n web logins fall back to Username:), and
+// FAKE_EXPIRED_PUBLISH=<n> (the first n publish approvals expire).
 const fs = require("node:fs");
 const path = require("node:path");
 const tool = path.basename(__filename);
@@ -26,6 +29,18 @@ log({
 });
 const command = args.join(" ");
 const sidecar = (tarball) => tarball + ".json";
+// Counts the calls of a scenario and reports whether this one still fails.
+const failsAgain = (scenario) => {
+  const file = state + "/" + scenario + ".count";
+  const count = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : 0;
+  fs.writeFileSync(file, String(count + 1));
+  return count < Number(process.env[scenario] || 0);
+};
+if (tool === "xdg-settings") console.log("firefox.desktop");
+if (tool === "defaults")
+  console.log(
+    '(\n    {\n    LSHandlerRoleAll = "org.mozilla.firefox";\n    LSHandlerURLScheme = https;\n}\n)',
+  );
 if (tool === "node" && args[0] === "--version")
   console.log(process.env.FAKE_NODE_VERSION || "v20.19.4");
 if (tool === "npm") {
@@ -46,7 +61,7 @@ if (tool === "npm") {
   if (args[0] === "login") {
     console.log("Login at:");
     console.log("https://www.npmjs.com/login?next=/login/cli/fake");
-    if (process.env.FAKE_LEGACY_LOGIN) {
+    if (failsAgain("FAKE_LEGACY_LOGIN")) {
       // npm's fallback when the web login fails: a prompt without a newline.
       process.stdout.write("Username: ");
       setTimeout(() => process.exit(1), 60000);
@@ -87,6 +102,10 @@ if (tool === "npm") {
   if (args[0] === "publish") {
     console.log("Authenticate your account at:");
     console.log("https://www.npmjs.com/auth/cli/fake");
+    if (failsAgain("FAKE_EXPIRED_PUBLISH")) {
+      console.error("npm error Invalid response from web login endpoint");
+      process.exit(1);
+    }
   }
   if (args[0] === "pkg") console.log("{}");
   if (args[0] === "install") {

@@ -21,6 +21,7 @@ import { inspectRepository } from "../src/discovery.mjs";
 import { buildPlans } from "../src/plan.mjs";
 import { probePackage, registryEndpoint } from "../src/registry-state.mjs";
 import { executePlan } from "../src/setup.mjs";
+import { TWO_FACTOR_HINT } from "../src/approvals.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let temporary;
@@ -68,15 +69,15 @@ test("plans a bootstrap for a package missing from npm", async () => {
       "validate-package",
       "check-registry",
       "check-sign-in",
-      "sign-in",
-      "check-2fa",
-      "enable-2fa",
-      "verify-2fa",
       "fetch-default-branch",
       "prepare-worktree",
       "pack",
       "test-install",
       "verify-bins",
+      "sign-in",
+      "check-2fa",
+      "enable-2fa",
+      "verify-2fa",
       "first-publish",
       "wait-for-registry",
       "check-trust",
@@ -276,7 +277,16 @@ const FAKE_TOOL = path.resolve(
 async function installFakeTools(directory) {
   const bin = path.join(directory, "bin");
   await mkdir(bin, { recursive: true });
-  for (const tool of ["npm", "npx", "git", "gh", "open", "xdg-open"]) {
+  for (const tool of [
+    "npm",
+    "npx",
+    "git",
+    "gh",
+    "open",
+    "xdg-open",
+    "defaults",
+    "xdg-settings",
+  ]) {
     const file = path.join(bin, tool);
     await writeFile(
       file,
@@ -357,12 +367,12 @@ test(
     assert.deepEqual(commands, [
       "npm pkg get name version repository",
       "npm whoami",
-      "npm login --auth-type=web --browser=false",
-      "npm profile get --json",
       "git fetch origin HEAD",
       `git worktree add --detach ${worktree} FETCH_HEAD`,
       `npm pack --ignore-scripts --json --pack-destination ${destination}`,
       `npm install --no-save --no-package-lock --no-audit --no-fund --ignore-scripts --prefix ${destination}/install ${destination}/pipeline-app-0.1.0.tgz`,
+      "npm login --auth-type=web --browser=false",
+      "npm profile get --json",
       `npm publish ${destination}/pipeline-app-0.1.0.tgz --access public --auth-type=web --browser=false --provenance=false`,
       "npx -y npm@^11.10 trust list pipeline-app --json",
       "gh run list --repo acme/pipeline-app --workflow release.yml --limit 1 --json databaseId,conclusion,status,url",
@@ -385,6 +395,22 @@ test(
       lines.includes("Open https://www.npmjs.com/login?next=/login/cli/fake"),
     );
     assert.ok(lines.includes("Open https://www.npmjs.com/auth/cli/fake"));
+    assert.ok(
+      lines.some((line) =>
+        /^Sign in within about 5 minutes \(until \d\d:\d\d\)\.$/.test(line),
+      ),
+    );
+    assert.ok(
+      lines.some((line) => /^Approve within about 5 minutes/.test(line)),
+    );
+    assert.ok(lines.includes(TWO_FACTOR_HINT));
+    assert.ok(
+      lines.some((line) =>
+        line.includes(
+          "Future releases publish from release.yml through trusted publishing; no login is needed.",
+        ),
+      ),
+    );
     assert.ok(
       lines.some((line) => line.includes("pipeline-app-0.1.0.tgz: 120 bytes")),
     );
@@ -453,7 +479,7 @@ test(
     });
     assert.ok(
       lines.includes(
-        "Opening https://www.npmjs.com/login?next=/login/cli/fake in your default browser",
+        "Opening https://www.npmjs.com/login?next=/login/cli/fake in Firefox, your default browser",
       ),
     );
     // The opener is detached, so wait for it to record its arguments.
@@ -472,31 +498,126 @@ test(
   },
 );
 
+const POSIX_ONLY = {
+  skip: process.platform === "win32" && "fake tools are POSIX scripts",
+};
+
+const signInSteps = (plan) => {
+  plan.steps = plan.steps.filter((step) =>
+    ["check-sign-in", "sign-in", "sign-out"].includes(step.id),
+  );
+  return plan;
+};
+const missing = { exists_on_registry: false, trusted_publishing: false };
+
 test(
-  "stops npm's legacy username prompt with a clear message",
-  { skip: process.platform === "win32" && "fake tools are POSIX scripts" },
+  "requests a fresh login link when npm falls back to its username prompt (#17)",
+  POSIX_ONLY,
   async () => {
-    const state = await mkdtemp(path.join(temporary, "state-"));
-    process.env.FAKE_STATE = state;
-    process.env.FAKE_LEGACY_LOGIN = "1";
-    await installFakeTools(state);
-    const plan = await npmPlan({
-      exists_on_registry: false,
-      trusted_publishing: false,
-    });
-    plan.steps = plan.steps.filter((step) =>
-      ["check-sign-in", "sign-in"].includes(step.id),
-    );
+    await freshState();
+    const plan = signInSteps(await npmPlan(missing));
     const started = Date.now();
-    try {
-      await assert.rejects(
-        runWithFakeTools(plan, () => ({})),
-        /browser login was not completed .* re-run the command to get a fresh login link/,
-      );
-    } finally {
-      delete process.env.FAKE_LEGACY_LOGIN;
-    }
+    const { lines, log } = await withEnv({ FAKE_LEGACY_LOGIN: "2" }, () =>
+      runWithFakeTools(plan, () => ({})),
+    );
     assert.ok(Date.now() - started < 20_000, "the prompt is not awaited");
+    const logins = log.filter((entry) => entry.argv[1] === "login");
+    assert.equal(logins.length, 3);
+    for (const attempt of [2, 3]) {
+      assert.ok(
+        lines.some((line) =>
+          line.includes(
+            `npm fell back to its legacy username prompt); requesting a fresh one (attempt ${attempt} of 3)`,
+          ),
+        ),
+        lines.join("\n"),
+      );
+    }
+    assert.ok(log.some((entry) => entry.argv[1] === "logout"));
+  },
+);
+
+test(
+  "gives up after three expired login links with a clear message (#17)",
+  POSIX_ONLY,
+  async () => {
+    await freshState();
+    const plan = signInSteps(await npmPlan(missing));
+    await withEnv({ FAKE_LEGACY_LOGIN: "3" }, () =>
+      assert.rejects(
+        runWithFakeTools(plan, () => ({})),
+        /the browser link expired 3 times \(npm fell back to its legacy username prompt\); re-run the command when you are ready to approve within 5 minutes/,
+      ),
+    );
+  },
+);
+
+test(
+  "re-runs npm publish with a fresh approval link once one expired (#17)",
+  POSIX_ONLY,
+  async () => {
+    await freshState();
+    const plan = await npmPlan(missing);
+    // Publish from the repository itself, without packing first.
+    plan.steps = plan.steps
+      .filter((step) => ["sign-in", "first-publish"].includes(step.id))
+      .map((step) => ({ ...step, cwd: "." }));
+    const { lines, log } = await withEnv({ FAKE_EXPIRED_PUBLISH: "1" }, () =>
+      runWithFakeTools(plan, () => null),
+    );
+    const publishes = log.filter((entry) => entry.argv[1] === "publish");
+    assert.equal(publishes.length, 2);
+    assert.ok(
+      lines.some((line) =>
+        line.includes(
+          "npm's approval session ended); requesting a fresh one (attempt 2 of 3)",
+        ),
+      ),
+      lines.join("\n"),
+    );
+  },
+);
+
+test(
+  "keeps the npm session with --keep-session (#17)",
+  POSIX_ONLY,
+  async () => {
+    const state = await freshState();
+    const plan = signInSteps(await npmPlan(missing));
+    const { lines, log } = await runWithFakeTools(plan, () => ({}), {
+      keepSession: true,
+    });
+    assert.equal(
+      log.some((entry) => entry.argv[1] === "logout"),
+      false,
+    );
+    assert.ok(lines.some((line) => line.startsWith("Keeping the npm session")));
+    assert.equal(await readFile(path.join(state, "session"), "utf8"), "");
+  },
+);
+
+test(
+  "opens approval links in the application chosen with --open-with (#17)",
+  POSIX_ONLY,
+  async () => {
+    const state = await freshState();
+    const plan = signInSteps(await npmPlan(missing));
+    const url = "https://www.npmjs.com/login?next=/login/cli/fake";
+    const { lines, log } = await runWithFakeTools(plan, () => ({}), {
+      noBrowser: false,
+      browser: "default",
+      openWith: "xdg-open",
+    });
+    assert.ok(lines.includes(`Opening ${url} in xdg-open`), lines.join("\n"));
+    const opener = (entry) => ["open", "xdg-open"].includes(entry.argv[0]);
+    let opened = log.find(opener);
+    for (let attempt = 0; attempt < 200 && !opened; attempt += 1) {
+      opened = (await readLog(state)).find(opener);
+      if (!opened) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    assert.ok(opened.argv.includes(url));
   },
 );
 
@@ -525,10 +646,6 @@ async function freshState() {
   return state;
 }
 
-const POSIX_ONLY = {
-  skip: process.platform === "win32" && "fake tools are POSIX scripts",
-};
-
 test(
   "opens the npm 2FA settings and stops before publishing while 2FA is off",
   POSIX_ONLY,
@@ -555,7 +672,7 @@ test(
       commands.filter((item) => item === "npm profile get --json").length,
       2,
     );
-    for (const prefix of ["npm pack", "npm publish", "npx"]) {
+    for (const prefix of ["npm publish", "npx"]) {
       assert.equal(
         commands.some((item) => item.startsWith(prefix)),
         false,

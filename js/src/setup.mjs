@@ -12,8 +12,19 @@ import {
   runInteractive,
   writeTtyShim,
 } from "./auth-urls.mjs";
+import {
+  approvalDeadline,
+  TWO_FACTOR_HINT,
+  trustedReleaseNote,
+  withFreshLinks,
+} from "./approvals.mjs";
 import { connectAutomation } from "./automation.mjs";
-import { npmPrefillScript, openInUserBrowser } from "./browser.mjs";
+import {
+  detachedRunner,
+  npmPrefillScript,
+  openInUserBrowser,
+} from "./browser.mjs";
+import { detectDefaultBrowser, openWithCommand } from "./default-browser.mjs";
 import { CLEANUP_CONDITIONS } from "./flows.mjs";
 import { packageDirectory } from "./plan.mjs";
 import { twoFactorMode } from "./prerequisites.mjs";
@@ -69,6 +80,9 @@ export async function executePlan(plan, options) {
   } finally {
     await session.cleanup();
   }
+  if (plan.trusted_publisher?.workflow) {
+    console.log(`\n${trustedReleaseNote(plan.trusted_publisher.workflow)}`);
+  }
 }
 
 class SetupSession {
@@ -104,7 +118,11 @@ class SetupSession {
 
   async cleanup() {
     for (const step of this.deferred) {
-      if (this.conditions.has(step.when)) {
+      if (step.id === "sign-out" && this.keepsSession(step)) {
+        console.log(
+          "Keeping the npm session (--keep-session): its token stays in npm's user configuration until you run npm logout, and the next run reuses it while npm whoami succeeds.",
+        );
+      } else if (this.conditions.has(step.when)) {
         this.log(`==> ${step.title}`);
         const result = await this.runProcess(step, true);
         if (result.code !== 0) {
@@ -120,6 +138,14 @@ class SetupSession {
         await rm(directory, { recursive: true, force: true });
       }
     }
+  }
+
+  keepsSession(step) {
+    return (
+      Boolean(this.options.keepSession) &&
+      this.conditions.has(step.when) &&
+      step.command?.program === "npm"
+    );
   }
 
   async runStep(step) {
@@ -512,12 +538,18 @@ class SetupSession {
       return;
     }
     if (!automate && this.options.browser !== "automated") {
-      console.log(`Opening ${url} in your default browser`);
+      const app = this.options.openWith;
+      console.log(`Opening ${url} in ${app ?? this.defaultBrowserLabel()}`);
       try {
-        await openInUserBrowser(url);
+        if (app) {
+          const { program, args } = openWithCommand(url, app);
+          await detachedRunner()(program, args);
+        } else {
+          await openInUserBrowser(url);
+        }
       } catch (error) {
         console.error(
-          `warning: could not open your default browser (${error.message}); open the URL yourself`,
+          `warning: could not open ${app ?? "your default browser"} (${error.message}); open the URL yourself`,
         );
       }
       return;
@@ -528,6 +560,24 @@ class SetupSession {
       verbose: this.options.verbose,
     });
     await this.automation.goto(url);
+  }
+
+  /**
+   * Names the default browser once per run, so maintainers know where to look.
+   * Runs before npm starts: links are opened from a synchronous output callback.
+   */
+  async detectDefaultBrowser() {
+    const { noBrowser, browser, openWith, verbose } = this.options;
+    if (noBrowser || openWith || browser === "automated") {
+      return;
+    }
+    this.browserName ??= (await detectDefaultBrowser({ verbose })) ?? "";
+  }
+
+  defaultBrowserLabel() {
+    return this.browserName
+      ? `${this.browserName}, your default browser`
+      : "your default browser";
   }
 
   cwd(step) {
@@ -571,6 +621,7 @@ class SetupSession {
     let env = process.env;
     const npm = ["npm", "npx"].includes(command.program);
     if (npm) {
+      await this.detectDefaultBrowser();
       this.shim ??= await writeTtyShim();
       env = {
         ...process.env,
@@ -580,24 +631,27 @@ class SetupSession {
         ),
       };
     }
-    const result = await runInteractive(command, {
-      cwd,
-      env,
-      mirror,
-      stopOnLegacyLogin: npm,
-      onUrl: (url) => {
-        this.open(url).catch((error) =>
-          console.error(`warning: could not open ${url}: ${error.message}`),
-        );
-      },
-    });
-    if (result.legacyLogin) {
-      process.stdout.write("\n");
-      throw new Error(
-        "the browser login was not completed in time, so npm fell back to its legacy username prompt; re-run the command to get a fresh login link",
-      );
+    const run = () =>
+      runInteractive(command, {
+        cwd,
+        env,
+        mirror,
+        stopOnLegacyLogin: npm,
+        watchStderr: npm,
+        onUrl: (url, kind) => this.openLink(url, kind),
+      });
+    // npm's links expire after about 5 minutes; ask npm for a fresh one.
+    return npm ? withFreshLinks(run) : run();
+  }
+
+  openLink(url, kind) {
+    console.log(approvalDeadline(kind));
+    if (kind === "approve") {
+      console.log(TWO_FACTOR_HINT);
     }
-    return result;
+    this.open(url).catch((error) =>
+      console.error(`warning: could not open ${url}: ${error.message}`),
+    );
   }
 
   expand(command) {

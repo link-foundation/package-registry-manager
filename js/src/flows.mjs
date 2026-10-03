@@ -258,21 +258,6 @@ export function npmFlow(packageInfo, context) {
       "Ask npm which account is signed in.",
       { command: command("npm", ["whoami"]) },
     ),
-    step(
-      "sign-in",
-      "Sign in to npm in the browser",
-      "command",
-      "Start a web login; the tool opens the printed URL in your default browser, where you are usually already signed in and only approve. No token is created or read by the tool.",
-      {
-        command: command("npm", [
-          "login",
-          "--auth-type=web",
-          "--browser=false",
-        ]),
-        when: "signed-out",
-      },
-    ),
-    ...twoFactorSteps(),
     ...worktreeSteps(),
     step(
       "pack",
@@ -319,6 +304,23 @@ export function npmFlow(packageInfo, context) {
       "Compare the bin entries of the packed package.json with package.json and run each installed bin with --version.",
       { when: "package-missing" },
     ),
+    // Sign in right before publishing, so the sign-in, publish, and trust
+    // approvals happen together and npm can skip repeated 2FA prompts.
+    step(
+      "sign-in",
+      "Sign in to npm in the browser",
+      "command",
+      "Start a web login; the tool opens the printed URL in your default browser, where you are usually already signed in and only approve. No token is created or read by the tool.",
+      {
+        command: command("npm", [
+          "login",
+          "--auth-type=web",
+          "--browser=false",
+        ]),
+        when: "signed-out",
+      },
+    ),
+    ...twoFactorSteps(),
     step(
       "first-publish",
       "Publish the first version",

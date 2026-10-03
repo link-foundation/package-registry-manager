@@ -43,6 +43,12 @@ Setup options:
   --yes                           Confirm publishing, secret changes, and
                                   form submission in advance
   --no-browser                    Print the setup URL instead
+  --open-with <app>               Open sign-in and approval pages in this
+                                  application instead of the default browser,
+                                  such as "Google Chrome" (macOS) or firefox
+  --keep-session                  Stay signed in to npm after setup; the
+                                  session token stays in npm's user
+                                  configuration until npm logout
   --browser <default|automated>   Open sign-in and approval pages in your
                                   default browser, or in the automated
                                   profile too (default: default)
@@ -88,6 +94,8 @@ export async function main(args = process.argv.slice(2)) {
       execute: { type: "boolean", default: false },
       yes: { type: "boolean", default: false },
       "no-browser": { type: "boolean", default: false },
+      "open-with": { type: "string" },
+      "keep-session": { type: "boolean", default: false },
       browser: { type: "string", default: "default" },
       "browser-channel": { type: "string", default: "chrome" },
       "browser-profile": { type: "string" },
@@ -176,6 +184,9 @@ export async function main(args = process.argv.slice(2)) {
   if (values["no-browser"] && !values.execute) {
     throw new Error("--no-browser requires --execute");
   }
+  if (values["open-with"] !== undefined && values["no-browser"]) {
+    throw new Error("--open-with and --no-browser are mutually exclusive");
+  }
 
   const plans = buildPlans(inspection, registries, planOptions);
   const plan = selectPlan(plans, values.package);
@@ -185,6 +196,8 @@ export async function main(args = process.argv.slice(2)) {
     execute: values.execute,
     yes: values.yes,
     noBrowser: values["no-browser"],
+    openWith: nonEmpty(values["open-with"], "--open-with"),
+    keepSession: values["keep-session"],
     browser: values.browser,
     browserOptions,
     browserProfile: path.resolve(
