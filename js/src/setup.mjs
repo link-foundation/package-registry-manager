@@ -19,6 +19,7 @@ import { packageDirectory } from "./plan.mjs";
 import { twoFactorMode } from "./prerequisites.mjs";
 import { protectLegacyProfile } from "./profile.mjs";
 import { getJson, probePackage } from "./registry-state.mjs";
+import { reportTokenSecrets, verifyTokenRevoked } from "./tokens.mjs";
 
 export { defaultBrowserProfile } from "./profile.mjs";
 
@@ -127,9 +128,17 @@ class SetupSession {
         if (step.id === "check-registry") {
           return this.checkRegistry();
         }
+        if (step.id === "verify-token-revoked") {
+          return verifyTokenRevoked((message) => this.prompt(message), {
+            ...this.options,
+            env: this.options.env ?? process.env,
+          });
+        }
         return step.id === "verify-bins" ? this.verifyBins() : this.check(step);
       case "command":
-        return this.command(step);
+        return step.id === "delete-token-secret"
+          ? this.deleteTokenSecrets(step)
+          : this.command(step);
       case "wait":
         return this.wait(step);
       case "browser":
@@ -213,14 +222,14 @@ class SetupSession {
       case "audit-token-secrets":
         if (result.code !== 0) {
           console.error("warning: could not list repository secrets with gh");
-        } else if (
-          JSON.parse(output || "[]").some((item) => item.name === "NPM_TOKEN")
-        ) {
-          console.log(
-            "  NPM_TOKEN is no longer needed with trusted publishing.",
-          );
-          this.conditions.add("token-secret-present");
+          return;
         }
+        this.tokenSecrets = reportTokenSecrets(output, this.plan.package);
+        toggle(
+          this.conditions,
+          "token-secret-present",
+          this.tokenSecrets.length > 0,
+        );
         return;
       case "find-release-run": {
         const [run] = result.code === 0 ? JSON.parse(output || "[]") : [];
@@ -348,6 +357,14 @@ class SetupSession {
     }
   }
 
+  /** Deletes each leftover token secret, with one confirmation each. */
+  async deleteTokenSecrets(step) {
+    for (const name of this.tokenSecrets ?? []) {
+      this.values.token_secret = name;
+      await this.command(step);
+    }
+  }
+
   async command(step) {
     if (step.confirm && !this.options.yes) {
       const rendered = render(this.expand(step.command));
@@ -439,6 +456,15 @@ class SetupSession {
   }
 
   async browser(step) {
+    if (step.confirm && !this.options.yes) {
+      console.log(`  ${step.description}`);
+      const answer = await this.prompt(`${step.title}? [y/N] `);
+      if (!/^(?:y|yes)$/i.test(answer)) {
+        throw new Error(
+          "the one-time first-publish token was declined; nothing was published",
+        );
+      }
+    }
     // Only a form the tool fills needs the automated profile.
     const fill = PREFILLED_FORMS.has(step.id) && this.plan.trusted_publisher;
     await this.open(step.url, Boolean(fill));

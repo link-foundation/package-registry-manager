@@ -4,6 +4,7 @@ import {
   registryEndpoint,
   registryStateUrl,
 } from "./registry-state.mjs";
+import { CRATES_TOKENS_URL, tokenSecretSteps } from "./tokens.mjs";
 
 /** Step conditions that only hold while a package is not yet published. */
 export const BOOTSTRAP_CONDITIONS = new Set([
@@ -409,41 +410,7 @@ export function npmFlow(packageInfo, context) {
         "Confirm that npm lists the GitHub Actions trusted publisher.",
         { command: trustList, when: "trust-missing" },
       ),
-      step(
-        "audit-token-secrets",
-        "Look for a leftover NPM_TOKEN secret",
-        "check",
-        "Trusted publishing makes long-lived npm tokens unnecessary.",
-        {
-          command: command("gh", [
-            "secret",
-            "list",
-            "--repo",
-            context.slug,
-            "--json",
-            "name",
-          ]),
-          cwd: ".",
-        },
-      ),
-      step(
-        "delete-token-secret",
-        "Delete the NPM_TOKEN secret",
-        "command",
-        "Remove the unused long-lived token secret from the repository.",
-        {
-          command: command("gh", [
-            "secret",
-            "delete",
-            "NPM_TOKEN",
-            "--repo",
-            context.slug,
-          ]),
-          when: "token-secret-present",
-          cwd: ".",
-          confirm: true,
-        },
-      ),
+      ...tokenSecretSteps(packageInfo, context.slug),
       step(
         "rerun-release",
         "Re-run the failed release jobs",
@@ -483,7 +450,7 @@ export function npmFlow(packageInfo, context) {
 export function cratesFlow(packageInfo, context) {
   const name = packageInfo.name;
   const api = registryStateUrl(packageInfo);
-  return [
+  const steps = [
     step(
       "validate-package",
       "Validate the crate",
@@ -495,16 +462,20 @@ export function cratesFlow(packageInfo, context) {
     ...worktreeSteps(),
     step(
       "create-publish-token",
-      "Create a first-publish token",
+      "Create a one-time first-publish token",
       "browser",
-      `crates.io requires an API token for a crate's first upload. Create one limited to the publish-new scope and the crate name ${name}, with a short expiry; paste it only into cargo login in the next step.`,
-      { url: "https://crates.io/settings/tokens/new", when: "package-missing" },
+      `A one-time exception that needs your approval: crates.io has no token-free first publish (no pending publisher as on PyPI), so the first upload needs an API token. Create one limited to the publish-new scope and the crate name ${name}, expiring in a day; paste it only into cargo login in the next step. It is revoked, and the revocation verified, before setup ends.`,
+      {
+        url: "https://crates.io/settings/tokens/new",
+        when: "package-missing",
+        confirm: true,
+      },
     ),
     step(
       "sign-in",
       "Sign cargo in",
       "command",
-      "cargo reads the token from the terminal; the tool never sees it.",
+      "cargo reads the token from the terminal, so it is never typed into the tool.",
       { command: command("cargo", ["login"]), when: "package-missing" },
     ),
     step(
@@ -531,7 +502,17 @@ export function cratesFlow(packageInfo, context) {
       "Revoke the first-publish token",
       "browser",
       "Revoke the token created for the first publish; it is no longer needed.",
-      { url: "https://crates.io/settings/tokens", when: "package-missing" },
+      { url: CRATES_TOKENS_URL, when: "package-missing" },
+    ),
+    step(
+      "verify-token-revoked",
+      "Verify the first-publish token is revoked",
+      "check",
+      "Send the token cargo stored to crates.io, which must reject it; the token is never printed.",
+      {
+        url: `${registryEndpoint("crates-io")}/me/tokens`,
+        when: "package-missing",
+      },
     ),
     step(
       "configure-trusted-publisher",
@@ -543,6 +524,11 @@ export function cratesFlow(packageInfo, context) {
         when: "trust-missing",
       },
     ),
+  ];
+  if (context.slug) {
+    steps.push(...tokenSecretSteps(packageInfo, context.slug));
+  }
+  steps.push(
     step(
       "sign-out",
       "Sign cargo out",
@@ -551,7 +537,8 @@ export function cratesFlow(packageInfo, context) {
       { command: command("cargo", ["logout"]), when: "tool-signed-in" },
     ),
     removeWorktreeStep(),
-  ];
+  );
+  return steps;
 }
 
 export function pypiFlow(packageInfo, context) {
@@ -615,6 +602,9 @@ export function pypiFlow(packageInfo, context) {
       },
     ),
   );
+  if (context.slug) {
+    steps.push(...tokenSecretSteps(packageInfo, context.slug));
+  }
   return steps;
 }
 

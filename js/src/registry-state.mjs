@@ -1,4 +1,5 @@
-const USER_AGENT =
+/** Identifies the tool to registry APIs, as crates.io asks of clients. */
+export const USER_AGENT =
   "package-registry-manager (+https://github.com/link-foundation/package-registry-manager)";
 
 const ENDPOINTS = {

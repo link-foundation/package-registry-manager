@@ -1,10 +1,11 @@
-// Stand-in for node, npm, npx, git, gh, and the default-browser openers
+// Stand-in for node, npm, npx, cargo, git, gh, and the default-browser openers
 // (open, xdg-open) in the end-to-end bootstrap tests of both implementations.
 // It records every argument vector and keeps just enough state (session,
 // trusted publisher) for a resumed run to behave like the real tools.
 // Scenarios: FAKE_TFA=off (no 2FA), FAKE_PACK_WARNINGS (npm drops the bin
 // while packing), FAKE_BIN_FAILS (the installed bin exits 1), and
-// FAKE_RELEASE_RUN=failed-publish (the last release failed with E404).
+// FAKE_RELEASE_RUN=failed-publish (the last release failed with E404), and
+// FAKE_SECRETS (comma-separated repository secret names; default NPM_TOKEN).
 const fs = require("node:fs");
 const path = require("node:path");
 const tool = path.basename(__filename);
@@ -108,6 +109,13 @@ if (tool === "npm") {
     }
   }
 }
+if (tool === "cargo") {
+  // cargo login stores the token it reads from the terminal in CARGO_HOME.
+  const credentials = path.join(process.env.CARGO_HOME, "credentials.toml");
+  if (args[0] === "login")
+    fs.writeFileSync(credentials, '[registry]\ntoken = "cio-fake"\n');
+  if (args[0] === "logout") fs.rmSync(credentials, { force: true });
+}
 if (tool === "npx") {
   if (command.includes("trust github")) set("trusted", true);
   if (command.includes("trust list") && flag("trusted"))
@@ -131,7 +139,13 @@ if (tool === "git") {
 }
 if (tool === "gh") {
   if (command.startsWith("secret list"))
-    console.log(JSON.stringify([{ name: "NPM_TOKEN" }]));
+    console.log(
+      JSON.stringify(
+        (process.env.FAKE_SECRETS ?? "NPM_TOKEN")
+          .split(",")
+          .map((name) => ({ name })),
+      ),
+    );
   if (command === "auth status --json hosts")
     console.log(
       JSON.stringify({
