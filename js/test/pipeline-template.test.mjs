@@ -33,8 +33,36 @@ after(async () => {
   await rm(temporary, { recursive: true, force: true });
 });
 
+test("skips the example app, listing it only when asked", async () => {
+  const inspection = await inspectRepository(repository);
+  assert.equal(inspection.skipped, undefined);
+  assert.equal(
+    inspection.packages.some((item) => item.manifest.startsWith("examples/")),
+    false,
+  );
+  const verbose = await inspectRepository(repository, {
+    includeSkipped: true,
+  });
+  assert.deepEqual(verbose.skipped, [
+    {
+      manifest: "examples/universal-app/package.json",
+      reason:
+        "under examples/, a test or example directory, and no workflow publishes it",
+    },
+  ]);
+  assert.deepEqual(verbose.packages, inspection.packages);
+});
+
 test("plans no actionable steps for unpublishable packages", async () => {
   const inspection = await inspectRepository(repository);
+  inspection.packages.unshift({
+    registry: "npm",
+    name: "universal-example-app",
+    version: "0.0.0",
+    manifest: "apps/universal-app/package.json",
+    publishable: false,
+    problems: ["package.json marks this package as private"],
+  });
   const plans = buildPlans(inspection, ["npm"]);
   const privatePlan = plans.find(
     (plan) => plan.package.name === "universal-example-app",

@@ -375,6 +375,7 @@ export function npmFlow(packageInfo, context) {
             context.slug,
             "--file",
             context.workflow,
+            ...(context.environment ? ["--env", context.environment] : []),
             "--allow-publish",
             "--yes",
             "--browser=false",

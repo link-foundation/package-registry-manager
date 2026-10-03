@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -24,11 +25,16 @@ Global options:
   --repository <path>             Repository to inspect (default: .)
   --format <text|json>            Output format (default: text)
   --offline                       Do not look up packages on registries
-  --verbose                       Print command details and output
+  --verbose                       Print command details and output, and
+                                  list the manifests inspection skipped
 
 Plan and setup options:
   --verify-release                Also watch the release workflow and confirm
                                   that the next version has provenance
+  --workflow <file>               Trusted-publisher workflow file in
+                                  .github/workflows, when detection finds
+                                  several or the wrong one
+  --environment <name>            GitHub environment of the trusted publisher
 
 Setup options:
   --package <name>                Select one of multiple packages
@@ -74,6 +80,8 @@ export async function main(args = process.argv.slice(2)) {
       verbose: { type: "boolean", default: false },
       offline: { type: "boolean", default: false },
       "verify-release": { type: "boolean", default: false },
+      workflow: { type: "string" },
+      environment: { type: "string" },
       "dry-run": { type: "boolean", default: false },
       registry: { type: "string", multiple: true },
       package: { type: "string" },
@@ -115,7 +123,9 @@ export async function main(args = process.argv.slice(2)) {
   });
 
   const repository = path.resolve(values.repository);
-  const discovered = await inspectRepository(repository);
+  const discovered = await inspectRepository(repository, {
+    includeSkipped: values.verbose,
+  });
   const inspection = values.offline
     ? discovered
     : await probeRegistryState(discovered, { verbose: values.verbose });
@@ -141,6 +151,8 @@ export async function main(args = process.argv.slice(2)) {
   });
   const planOptions = {
     verifyRelease: values["verify-release"],
+    workflow: await workflowOverride(repository, values.workflow),
+    publisherEnvironment: nonEmpty(values.environment, "--environment"),
     environment,
     browser: browserSummary(command, values, browserOptions),
   };
@@ -181,6 +193,33 @@ export async function main(args = process.argv.slice(2)) {
     verbose: values.verbose,
     verifyRelease: values["verify-release"],
   });
+}
+
+async function workflowOverride(repository, workflow) {
+  if (workflow === undefined) {
+    return undefined;
+  }
+  if (!/^[\w.-]+\.ya?ml$/.test(workflow)) {
+    throw new Error(
+      "--workflow must be a workflow file name in .github/workflows, such as release.yml",
+    );
+  }
+  const file = path.join(repository, ".github/workflows", workflow);
+  const found = await stat(file).then(
+    (metadata) => metadata.isFile(),
+    () => false,
+  );
+  if (!found) {
+    throw new Error(`--workflow: .github/workflows/${workflow} does not exist`);
+  }
+  return workflow;
+}
+
+function nonEmpty(value, option) {
+  if (value !== undefined && !value.trim()) {
+    throw new Error(`${option} must not be empty`);
+  }
+  return value?.trim();
 }
 
 function browserSummary(command, values, browserOptions) {
@@ -252,10 +291,29 @@ function outputInspection(inspection, format) {
     process.stdout.write(
       `- ${packageInfo.registry}: ${packageInfo.name} (${details.join(", ")})\n`,
     );
+    if (packageInfo.workflow && packageInfo.publishable) {
+      process.stdout.write(`  workflow: ${publisherSummary(packageInfo)}\n`);
+    }
     for (const warning of packageInfo.warnings ?? []) {
       process.stdout.write(`  warning: ${warning}\n`);
     }
   }
+  for (const item of inspection.skipped ?? []) {
+    process.stdout.write(`skipped ${item.manifest}: ${item.reason}\n`);
+  }
+}
+
+function publisherSummary({ workflow, workflow_jobs, environment }) {
+  const details = [];
+  if (workflow_jobs?.length) {
+    details.push(
+      `${workflow_jobs.length > 1 ? "jobs" : "job"} ${workflow_jobs.join(", ")}`,
+    );
+  }
+  if (environment) {
+    details.push(`environment ${environment}`);
+  }
+  return details.length > 0 ? `${workflow} (${details.join("; ")})` : workflow;
 }
 
 function outputPlans(plans, format) {
@@ -271,6 +329,22 @@ function outputPlans(plans, format) {
     }
     if (plan.skipped_reason) {
       process.stdout.write(`  skipped: ${plan.skipped_reason}\n`);
+    }
+    if (plan.trusted_publisher) {
+      process.stdout.write(
+        `  trusted publisher: ${publisherSummary({
+          ...plan.package,
+          workflow: plan.trusted_publisher.workflow,
+          environment: plan.trusted_publisher.environment,
+          workflow_jobs:
+            plan.trusted_publisher.workflow === plan.package.workflow
+              ? plan.package.workflow_jobs
+              : undefined,
+        })}\n`,
+      );
+    }
+    for (const warning of plan.package.warnings ?? []) {
+      process.stdout.write(`  warning: ${warning}\n`);
     }
     for (const line of renderPrerequisites(plan.prerequisites ?? [])) {
       process.stdout.write(`${line}\n`);

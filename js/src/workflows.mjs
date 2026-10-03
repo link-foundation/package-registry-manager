@@ -1,13 +1,9 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
+// Container registries; npm, crates.io, and PyPI use the job-aware detection
+// in publishers.mjs.
 const PUBLISH_PATTERNS = new Map([
-  ["npm", /\bnpm (?:stage )?publish\b|\bchangeset publish\b/],
-  ["crates-io", /\bcargo publish\b|rust-lang\/crates-io-auth-action/],
-  [
-    "pypi",
-    /pypa\/gh-action-pypi-publish|\btwine upload\b|\buv publish\b|\bpoetry publish\b/,
-  ],
   ["docker-hub", /\bDOCKER_?HUB_|\bdocker\.io\/|hub\.docker\.com/i],
   ["ghcr", /\bghcr\.io\b/],
 ]);
@@ -39,15 +35,6 @@ export function publishingWorkflow(workflows, registry) {
   return pattern
     ? (workflows.find((workflow) => pattern.test(workflow.contents)) ?? null)
     : null;
-}
-
-/** Keeps the historical npm-first release workflow heuristic. */
-export function releaseWorkflow(workflows) {
-  return (
-    publishingWorkflow(workflows, "npm")?.name ??
-    workflows.find((workflow) => workflow.name.includes("release"))?.name ??
-    null
-  );
 }
 
 /** Reports whether a workflow grants `packages: write` to its token. */
