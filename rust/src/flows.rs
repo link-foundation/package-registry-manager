@@ -20,6 +20,8 @@ pub struct FlowContext<'a> {
     pub slug: Option<String>,
     /// Release workflow file name, when known.
     pub workflow: Option<String>,
+    /// GitHub environment the trusted publisher is bound to, when any.
+    pub environment: Option<String>,
     /// Append the release-verification steps.
     pub verify_release: bool,
     /// Registry API base URLs.
@@ -337,6 +339,13 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
         )
         .command("npx", &trust_list)]);
         steps.extend(release_run_steps(context, workflow));
+        let mut trust_args = vec![
+            "-y", trust_npm, "trust", "github", name, "--repo", slug, "--file", workflow,
+        ];
+        if let Some(environment) = context.environment.as_deref() {
+            trust_args.extend(["--env", environment]);
+        }
+        trust_args.extend(["--allow-publish", "--yes", "--browser=false"]);
         steps.extend([
             step(
                 "attach-trusted-publisher",
@@ -344,23 +353,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
                 StepKind::Command,
                 format!("Trust the release workflow to publish through OIDC with {trust_npm}, run through npx; npm trust needs npm 11.10 or newer and account-level 2FA."),
             )
-            .command(
-                "npx",
-                &[
-                    "-y",
-                    trust_npm,
-                    "trust",
-                    "github",
-                    name,
-                    "--repo",
-                    slug,
-                    "--file",
-                    workflow,
-                    "--allow-publish",
-                    "--yes",
-                    "--browser=false",
-                ],
-            )
+            .command("npx", &trust_args)
             .when("trust-missing"),
         ]);
     }
