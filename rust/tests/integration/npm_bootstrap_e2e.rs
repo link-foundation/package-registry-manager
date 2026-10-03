@@ -1,6 +1,6 @@
 //! End-to-end npm bootstrap through the binary, with Node.js stand-ins for
-//! node, npm, npx, git, gh, and the default-browser openers on PATH and a mock
-//! registry.
+//! node, npm, npx, git, gh, the default-browser openers, and the default-browser
+//! queries on PATH and a mock registry.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use package_registry_manager::approvals::TWO_FACTOR_HINT;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -39,7 +40,17 @@ fn install_fake_tools(node: &Path, state: &Path) -> PathBuf {
     let script = fs::read_to_string(fixtures.join("fake-tools/fake-tool.cjs")).expect("fake tool");
     let bin = state.join("bin");
     fs::create_dir_all(&bin).expect("create fake bin");
-    for tool in ["node", "npm", "npx", "git", "gh", "open", "xdg-open"] {
+    for tool in [
+        "node",
+        "npm",
+        "npx",
+        "git",
+        "gh",
+        "open",
+        "xdg-open",
+        "defaults",
+        "xdg-settings",
+    ] {
         let file = bin.join(tool);
         fs::write(&file, format!("#!{}\n{script}", node.display())).expect("write fake tool");
         fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).expect("chmod fake tool");
@@ -163,21 +174,26 @@ fn published_registry() -> MockRegistry {
     })
 }
 
+/// A registry where `pipeline-app` appears once the tool polls for the
+/// published version.
+fn bootstrap_registry() -> MockRegistry {
+    let published = Arc::new(AtomicBool::new(false));
+    MockRegistry::start(move |path| {
+        if path.ends_with("/pipeline-app/0.1.0") {
+            published.store(true, Ordering::SeqCst);
+        }
+        (path.starts_with("/npm/pipeline-app/") && published.load(Ordering::SeqCst))
+            .then(|| r#"{"version":"0.1.0"}"#.to_owned())
+    })
+}
+
 #[test]
 fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
     let temporary = TempDir::new().expect("create temporary directory");
     let Some((repository, state)) = prepare(&temporary) else {
         return;
     };
-    let published = Arc::new(AtomicBool::new(false));
-    let seen = Arc::clone(&published);
-    let registry = MockRegistry::start(move |path| {
-        if path.ends_with("/pipeline-app/0.1.0") {
-            seen.store(true, Ordering::SeqCst);
-        }
-        (path.starts_with("/npm/pipeline-app/") && seen.load(Ordering::SeqCst))
-            .then(|| r#"{"version":"0.1.0"}"#.to_owned())
-    });
+    let registry = bootstrap_registry();
 
     let run = run_setup(&repository, &state, &registry);
     let commands = run.commands();
@@ -199,14 +215,14 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
         [
             "npm pkg get name version repository".to_owned(),
             "npm whoami".to_owned(),
-            "npm login --auth-type=web --browser=false".to_owned(),
-            "npm profile get --json".to_owned(),
             "git fetch origin HEAD".to_owned(),
             format!("git worktree add --detach {worktree} FETCH_HEAD"),
             format!("npm pack --ignore-scripts --json --pack-destination {destination}"),
             format!(
                 "npm install --no-save --no-package-lock --no-audit --no-fund --ignore-scripts --prefix {destination}/install {destination}/pipeline-app-0.1.0.tgz"
             ),
+            "npm login --auth-type=web --browser=false".to_owned(),
+            "npm profile get --json".to_owned(),
             format!(
                 "npm publish {destination}/pipeline-app-0.1.0.tgz --access public --auth-type=web --browser=false --provenance=false"
             ),
@@ -247,8 +263,21 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
     for line in [
         "Open https://www.npmjs.com/login?next=/login/cli/fake",
         "Open https://www.npmjs.com/auth/cli/fake",
+        TWO_FACTOR_HINT,
+        "Future releases publish from release.yml through trusted publishing; no login is needed.",
     ] {
         assert!(run.stdout.lines().any(|output| output == line), "{line}");
+    }
+    for action in ["Sign in", "Approve"] {
+        assert!(
+            run.stdout.lines().any(|line| {
+                line.strip_prefix(action)
+                    .and_then(|rest| rest.strip_prefix(" within about 5 minutes (until "))
+                    .is_some_and(|rest| rest.len() == 7 && rest.ends_with(")."))
+            }),
+            "{action} deadline\n{}",
+            run.stdout
+        );
     }
     assert!(run.stdout.contains("pipeline-app-0.1.0.tgz: 120 bytes"));
     for line in [
@@ -302,7 +331,7 @@ fn opens_npm_web_authentication_urls_in_the_default_browser() {
     assert!(
         run.stdout
             .lines()
-            .any(|line| line == format!("Opening {url} in your default browser")),
+            .any(|line| line == format!("Opening {url} in Firefox, your default browser")),
         "{}",
         run.stdout
     );
@@ -319,7 +348,7 @@ fn opens_npm_web_authentication_urls_in_the_default_browser() {
 }
 
 #[test]
-fn stops_the_legacy_username_prompt_with_a_clear_message() {
+fn requests_a_fresh_login_link_when_npm_falls_back_to_its_username_prompt() {
     let temporary = TempDir::new().expect("create temporary directory");
     let Some((repository, state)) = prepare(&temporary) else {
         return;
@@ -331,16 +360,159 @@ fn stops_the_legacy_username_prompt_with_a_clear_message() {
         &state,
         &registry,
         &["--no-browser"],
-        &[("FAKE_LEGACY_LOGIN", "1")],
+        &[("FAKE_LEGACY_LOGIN", "2")],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(started.elapsed() < Duration::from_secs(40), "not awaited");
+    let commands = step_commands(&read_log(&state));
+    let logins = commands
+        .iter()
+        .filter(|command| command.starts_with("npm login"))
+        .count();
+    assert_eq!(logins, 3);
+    for attempt in [2, 3] {
+        let message = format!(
+            "npm fell back to its legacy username prompt); requesting a fresh one (attempt {attempt} of 3)."
+        );
+        assert!(stdout.contains(&message), "{message}\n{stdout}");
+    }
+    assert!(commands.iter().any(|command| command == "npm logout"));
+}
+
+#[test]
+fn gives_up_after_three_expired_login_links_with_a_clear_message() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let registry = published_registry();
+    let started = Instant::now();
+    let output = setup_command(
+        &repository,
+        &state,
+        &registry,
+        &["--no-browser"],
+        &[("FAKE_LEGACY_LOGIN", "3")],
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success());
     assert!(
-        stderr.contains("the browser login was not completed in time")
-            && stderr.contains("re-run the command to get a fresh login link"),
+        stderr.contains(
+            "the browser link expired 3 times (npm fell back to its legacy username prompt); re-run the command when you are ready to approve within 5 minutes"
+        ),
         "{stderr}"
     );
-    assert!(started.elapsed() < Duration::from_secs(40), "not awaited");
+    assert!(started.elapsed() < Duration::from_secs(60), "not awaited");
+}
+
+#[test]
+fn reruns_npm_publish_with_a_fresh_approval_link_once_one_expired() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let registry = bootstrap_registry();
+    let output = setup_command(
+        &repository,
+        &state,
+        &registry,
+        &["--no-browser"],
+        &[("FAKE_EXPIRED_PUBLISH", "1")],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let publishes = step_commands(&read_log(&state))
+        .iter()
+        .filter(|command| command.starts_with("npm publish"))
+        .count();
+    assert_eq!(publishes, 2);
+    assert!(
+        stdout.contains("npm's approval session ended); requesting a fresh one (attempt 2 of 3)."),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn keeps_the_npm_session_with_keep_session() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let registry = published_registry();
+    let run = run_setup_with(
+        &repository,
+        &state,
+        &registry,
+        &["--no-browser", "--keep-session"],
+    );
+    assert!(!run.commands().iter().any(|command| command == "npm logout"));
+    assert!(
+        run.stdout
+            .lines()
+            .any(|line| line.starts_with("Keeping the npm session")),
+        "{}",
+        run.stdout
+    );
+    assert!(state.join("session").exists(), "still signed in");
+}
+
+#[test]
+fn opens_approval_links_in_the_application_chosen_with_open_with() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let registry = published_registry();
+    let run = run_setup_with(
+        &repository,
+        &state,
+        &registry,
+        &["--browser", "default", "--open-with", "xdg-open"],
+    );
+    let url = "https://www.npmjs.com/login?next=/login/cli/fake";
+    assert!(
+        run.stdout
+            .lines()
+            .any(|line| line == format!("Opening {url} in xdg-open")),
+        "{}",
+        run.stdout
+    );
+    let is_opener = |entry: &&Value| entry["argv"][0] == "xdg-open";
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut opened = run.log.iter().find(is_opener).cloned();
+    while opened.is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+        opened = read_log(&state).iter().find(is_opener).cloned();
+    }
+    assert_eq!(opened.expect("opener ran")["argv"][1], url);
+}
+
+#[test]
+fn rejects_open_with_together_with_no_browser() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let output = setup_command(
+        &repository,
+        &state,
+        &missing_registry(),
+        &["--no-browser", "--open-with", "firefox"],
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--open-with"), "{stderr}");
+    assert!(read_log(&state).is_empty(), "nothing runs");
 }
 
 /// A registry where `pipeline-app` is missing, for runs that stop before the
@@ -390,7 +562,7 @@ fn opens_the_npm_2fa_settings_and_stops_before_publishing_while_2fa_is_off() {
             .count(),
         2
     );
-    for prefix in ["npm pack", "npm publish", "npx"] {
+    for prefix in ["npm publish", "npx"] {
         assert!(
             !commands.iter().any(|command| command.starts_with(prefix)),
             "{prefix}"
@@ -496,4 +668,49 @@ fn reruns_the_release_npm_refused_before_trust_and_watches_the_rerun() {
         "the re-run is watched instead of a new dispatch"
     );
     assert!(stdout.contains("E404/invalid-publisher"), "{stdout}");
+}
+
+#[test]
+fn enables_github_pages_for_a_workflow_that_deploys_there() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    fs::write(
+        repository.join(".github/workflows/docs.yml"),
+        "on: push\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/deploy-pages@v5\n",
+    )
+    .expect("write Pages workflow");
+    let registry = published_registry();
+    let output = setup_command(
+        &repository,
+        &state,
+        &registry,
+        &["--no-browser"],
+        &[("FAKE_PAGES", "missing")],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let commands = step_commands(&read_log(&state));
+    let pages = commands
+        .iter()
+        .filter(|command| command.starts_with("gh api"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pages,
+        [
+            "gh api repos/acme/pipeline-app/pages",
+            "gh api -X POST repos/acme/pipeline-app/pages -f build_type=workflow",
+        ]
+    );
+    assert!(
+        stdout.contains(
+            "  GitHub Pages is not enabled, so the workflow's deployment fails with Not Found."
+        ),
+        "{stdout}"
+    );
 }

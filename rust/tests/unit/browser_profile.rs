@@ -4,6 +4,7 @@ use std::process::Command;
 
 use browser_commander::browser::open_in_user_browser::build_open_command;
 use browser_commander::utilities::subprocess::CommandError;
+use package_registry_manager::approvals::LinkKind;
 use package_registry_manager::auth_urls::AuthUrlScanner;
 use package_registry_manager::browser::{open_in_user_browser, opener_platform, opener_succeeded};
 use package_registry_manager::profile::{
@@ -234,13 +235,60 @@ async fn stops_npm_at_its_legacy_username_prompt() {
         false,
         Some(sender),
         true,
+        false,
     )
     .await
     .expect("run");
     assert!(output.legacy_login);
     assert!(started.elapsed() < Duration::from_secs(20), "not awaited");
     assert_eq!(
-        receiver.recv().await.as_deref(),
-        Some("https://www.npmjs.com/login?next=/login/cli/1")
+        receiver.recv().await,
+        Some((
+            "https://www.npmjs.com/login?next=/login/cli/1".to_owned(),
+            LinkKind::Login
+        ))
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn notices_an_expired_approval_on_stderr() {
+    use package_registry_manager::approvals::expired_approval;
+    use package_registry_manager::auth_urls::run_interactive;
+    use package_registry_manager::model::CommandSpec;
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let command = CommandSpec {
+        program: "sh".to_owned(),
+        args: vec![
+            "-c".to_owned(),
+            "printf 'Authenticate your account at:\\nhttps://www.npmjs.com/auth/cli/1\\n'; printf '\\033[31mnpm error\\033[0m Invalid response from web login endpoint\\n' >&2; exit 1"
+                .to_owned(),
+        ],
+    };
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let output = run_interactive(
+        &command,
+        temporary.path(),
+        &std::collections::BTreeMap::new(),
+        false,
+        Some(sender),
+        true,
+        true,
+    )
+    .await
+    .expect("run");
+    assert_eq!(output.code, 1);
+    assert!(output.approval_expired);
+    assert_eq!(
+        expired_approval(&output),
+        Some("npm's approval session ended")
+    );
+    assert_eq!(
+        receiver.recv().await,
+        Some((
+            "https://www.npmjs.com/auth/cli/1".to_owned(),
+            LinkKind::Approve
+        ))
     );
 }

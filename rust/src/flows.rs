@@ -247,16 +247,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
             "Ask npm which account is signed in.",
         )
         .command("npm", &["whoami"]),
-        step(
-            "sign-in",
-            "Sign in to npm in the browser",
-            StepKind::Command,
-            "Start a web login; the tool opens the printed URL in your default browser, where you are usually already signed in and only approve. No token is created or read by the tool.",
-        )
-        .command("npm", &["login", "--auth-type=web", "--browser=false"])
-        .when("signed-out"),
     ];
-    steps.extend(two_factor_steps());
     steps.extend(worktree_steps());
     steps.extend([
         step(
@@ -300,6 +291,19 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
             "Compare the bin entries of the packed package.json with package.json and run each installed bin with --version.",
         )
         .when("package-missing"),
+        // Sign in right before publishing, so the sign-in, publish, and trust
+        // approvals happen together and npm can skip repeated 2FA prompts.
+        step(
+            "sign-in",
+            "Sign in to npm in the browser",
+            StepKind::Command,
+            "Start a web login; the tool opens the printed URL in your default browser, where you are usually already signed in and only approve. No token is created or read by the tool.",
+        )
+        .command("npm", &["login", "--auth-type=web", "--browser=false"])
+        .when("signed-out"),
+    ]);
+    steps.extend(two_factor_steps());
+    steps.extend([
         step(
             "first-publish",
             "Publish the first version",

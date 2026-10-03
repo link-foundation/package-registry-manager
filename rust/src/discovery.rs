@@ -9,6 +9,7 @@ use toml::Value as TomlValue;
 
 use crate::containers::{container_packages, CONTAINER_FILES};
 use crate::model::{Inspection, Package, Registry, RepositoryInfo, Skipped};
+use crate::pages::pages_workflow;
 use crate::publishers::{
     detect_publisher, token_secret_warning, token_secrets, Publisher, TRUSTED_REGISTRIES,
 };
@@ -131,6 +132,7 @@ pub fn inspect_repository_with(root: &Path, options: InspectOptions) -> Result<I
             release_workflow: TRUSTED_REGISTRIES
                 .iter()
                 .find_map(|registry| publishers[registry].workflow.clone()),
+            pages_workflow: pages_workflow(&workflows),
         },
         packages,
         skipped,

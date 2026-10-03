@@ -174,6 +174,9 @@ pub struct RepositoryInfo {
     pub github_owner: Option<String>,
     pub github_repository: Option<String>,
     pub release_workflow: Option<String>,
+    /// The workflow that deploys to GitHub Pages, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages_workflow: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

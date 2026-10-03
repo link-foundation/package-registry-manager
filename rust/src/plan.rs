@@ -7,6 +7,7 @@ use crate::model::{
     Inspection, Package, PlanMode, Registry, SetupPlan, SetupStep, StepKind,
     TrustedPublisherPrefill,
 };
+use crate::pages::pages_steps;
 use crate::prerequisites::{plan_prerequisites, BrowserDisplay, Environment};
 use crate::publishers::TRUSTED_REGISTRIES;
 use crate::registry_state::Endpoints;
@@ -214,7 +215,7 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
         _ => ghcr_flow,
     };
     let mode = plan_mode(package);
-    let steps = match mode {
+    let mut steps = match mode {
         Some(PlanMode::Complete) => Vec::new(),
         Some(PlanMode::Attach) => flow(package, &context)
             .into_iter()
@@ -226,6 +227,10 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
             .collect(),
         _ => flow(package, &context),
     };
+    // Pages readiness belongs to the repository, so it is checked in every mode.
+    if let (Some(slug), Some(pages)) = (&context.slug, &repository.pages_workflow) {
+        steps.extend(pages_steps(slug, pages));
+    }
     let mut plan = base_plan(inspection, package, steps);
     plan.mode = mode;
     plan.prerequisites = plan_prerequisites(&plan, options.environment.as_ref(), &options.browser);

@@ -96,6 +96,16 @@ enum Commands {
         #[arg(long, requires = "execute")]
         no_browser: bool,
 
+        /// Open sign-in and approval pages in this application instead of the
+        /// default browser, such as "Google Chrome" (macOS) or firefox.
+        #[arg(long, value_name = "APP", conflicts_with = "no_browser")]
+        open_with: Option<String>,
+
+        /// Stay signed in to npm after setup; the session token stays in npm's
+        /// user configuration until npm logout.
+        #[arg(long)]
+        keep_session: bool,
+
         /// Installed browser channel: chrome, chromium, brave, msedge,
         /// msedge-beta, msedge-dev, or msedge-canary.
         #[arg(long, default_value = "chrome")]
@@ -255,6 +265,8 @@ async fn main() -> Result<()> {
             publisher,
             yes,
             no_browser,
+            open_with,
+            keep_session,
             browser,
             browser_channel,
             browser_executable,
@@ -264,6 +276,10 @@ async fn main() -> Result<()> {
             browser_pref,
             browser_restriction,
         } => {
+            let open_with = open_with.map(|app| app.trim().to_owned());
+            if open_with.as_deref().is_some_and(str::is_empty) {
+                bail!("--open-with must not be empty");
+            }
             let browser_options = parse_browser_options(&BrowserArgs {
                 channel: browser_channel,
                 executable: browser_executable,
@@ -300,6 +316,8 @@ async fn main() -> Result<()> {
                     execute,
                     yes,
                     no_browser,
+                    open_with: open_with.as_deref(),
+                    keep_session,
                     verbose: args.verbose,
                     endpoints: options.endpoints,
                     poll_interval: Duration::from_secs(5),

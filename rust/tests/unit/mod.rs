@@ -1,6 +1,8 @@
+mod approvals;
 mod browser_options;
 mod browser_profile;
 mod npm_bootstrap;
+mod pages;
 mod pipeline_template;
 mod prerequisites;
 mod publishers;
