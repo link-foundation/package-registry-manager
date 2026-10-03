@@ -8,6 +8,7 @@ use crate::model::{
     TrustedPublisherPrefill,
 };
 use crate::prerequisites::{plan_prerequisites, BrowserDisplay, Environment};
+use crate::publishers::TRUSTED_REGISTRIES;
 use crate::registry_state::Endpoints;
 
 /// Options that shape setup plans.
@@ -23,6 +24,10 @@ pub struct PlanOptions {
     pub environment: Option<Environment>,
     /// Where browser pages open, for the prerequisites.
     pub browser: BrowserDisplay,
+    /// Trusted-publisher workflow file that overrides the detected one.
+    pub workflow: Option<String>,
+    /// GitHub environment of the trusted publisher, overriding the detected one.
+    pub publisher_environment: Option<String>,
 }
 
 /// Build setup plans for every publishable package found during inspection.
@@ -165,14 +170,35 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
         .github_owner
         .as_deref()
         .zip(repository.github_repository.as_deref());
-    let workflow = package
+    let trusted = TRUSTED_REGISTRIES.contains(&package.registry);
+    let workflow = options
         .workflow
         .clone()
-        .or_else(|| repository.release_workflow.clone());
+        .filter(|_| trusted)
+        .or_else(|| package.workflow.clone());
+    let environment = if trusted {
+        options
+            .publisher_environment
+            .clone()
+            .or_else(|| package.environment.clone())
+    } else {
+        None
+    };
+    if trusted && workflow.is_none() && package.workflow_candidates.len() > 1 {
+        return SetupPlan {
+            skipped_reason: Some(format!(
+                "several workflows publish to {} ({}); pass --workflow <file> to choose the trusted publisher",
+                package.registry,
+                package.workflow_candidates.join(", ")
+            )),
+            ..base_plan(inspection, package, Vec::new())
+        };
+    }
     let context = FlowContext {
         directory: package_directory(&package.manifest),
         slug: owner_repo.map(|(owner, name)| format!("{owner}/{name}")),
         workflow: workflow.clone(),
+        environment: environment.clone(),
         verify_release: options.verify_release,
         endpoints: &options.endpoints,
         trust_npm: options
@@ -203,20 +229,13 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
     let mut plan = base_plan(inspection, package, steps);
     plan.mode = mode;
     plan.prerequisites = plan_prerequisites(&plan, options.environment.as_ref(), &options.browser);
-    if let (Some((owner, name)), Some(workflow), true) = (
-        owner_repo,
-        workflow,
-        matches!(
-            package.registry,
-            Registry::Npm | Registry::CratesIo | Registry::PyPi
-        ),
-    ) {
+    if let (Some((owner, name)), Some(workflow), true) = (owner_repo, workflow, trusted) {
         plan.trusted_publisher = Some(TrustedPublisherPrefill {
             provider: "github-actions".to_owned(),
             organization: owner.to_owned(),
             repository: name.to_owned(),
             workflow,
-            environment: None,
+            environment,
             project: (package.registry == Registry::PyPi).then(|| package.name.clone()),
         });
     }

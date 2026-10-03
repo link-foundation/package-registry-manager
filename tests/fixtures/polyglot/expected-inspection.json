@@ -13,7 +13,10 @@
       "version": "1.2.3",
       "manifest": "package.json",
       "publishable": true,
-      "workflow": "publish.yml"
+      "workflow": "publish.yml",
+      "workflow_jobs": [
+        "publish"
+      ]
     },
     {
       "registry": "crates-io",

@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::model::{Inspection, Package, Registry};
+use crate::tokens::{token_state, TokenState};
 
 const USER_AGENT: &str =
     "package-registry-manager (+https://github.com/link-foundation/package-registry-manager)";
@@ -208,6 +209,41 @@ impl RegistryClient {
                     eprintln!("GET {url} failed: {error}");
                 }
                 Lookup::Unknown
+            }
+        }
+    }
+
+    /// Ask crates.io whether a token still authenticates, through an
+    /// endpoint only the website session may use. The token is sent only to
+    /// `base` and never printed; `None` when the answer is unclear.
+    pub async fn crates_token_state(&self, base: &str, token: &str) -> Option<TokenState> {
+        let url = format!("{base}/me/tokens");
+        let response = self
+            .client
+            .get(&url)
+            .header("accept", "application/json")
+            .header("authorization", token)
+            .send()
+            .await;
+        match response {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                if self.verbose {
+                    eprintln!("GET {url} -> {status}");
+                }
+                let body = response
+                    .bytes()
+                    .await
+                    .ok()
+                    .and_then(|body| serde_json::from_slice(&body).ok())
+                    .unwrap_or(Value::Null);
+                token_state(status, &body)
+            }
+            Err(error) => {
+                if self.verbose {
+                    eprintln!("GET {url} failed: {error}");
+                }
+                None
             }
         }
     }

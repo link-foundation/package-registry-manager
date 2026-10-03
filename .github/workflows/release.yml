@@ -45,12 +45,11 @@ env:
   # flakes on GitHub-hosted runners, including curl HTTP/2 framing failures.
   CARGO_NET_RETRY: '10'
   CARGO_HTTP_MULTIPLEXING: 'false'
-  # The crates.io credentials are deliberately *not* declared here. A
-  # workflow-level `env:` is inherited by every job, including the
-  # `pull_request` jobs that compile and run branch code (`build.rs`, proc
-  # macros, tests), so a workflow-level publish token is readable by any branch
-  # pull request. They are declared on the two publish steps instead, which are
-  # the only steps that need them.
+  # There are no long-lived crates.io or npm tokens in this workflow (issue
+  # #16): both registries are published with trusted publishing (OIDC). The
+  # short-lived crates.io token is minted by rust-lang/crates-io-auth-action
+  # inside the two release jobs and handed only to their publish steps, so it is
+  # never visible to the `pull_request` jobs that compile and run branch code.
   # Optional: set repository variable DOCKERHUB_IMAGE to namespace/image to publish Docker Hub releases.
   DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
 
@@ -122,27 +121,38 @@ jobs:
       - name: Check required documentation
         run: bash scripts/check-required-docs.sh
 
-  # === RELEASE PREFLIGHT - prove the credentials can publish (issues #163, #167) ===
+  # === RELEASE PREFLIGHT - decide per registry whether this run can publish (issues #163, #167, #16) ===
   # Principle 16: a non-empty secret proves nothing (an expired token is
   # non-empty), and a login proves authentication, not authorisation -- so
-  # scripts/preflight-credentials.sh probes with an attempted write. In
-  # release mode a refused credential fails the run here, before the matrix
-  # spends a minute; in report mode (pull requests -- a fork has no
-  # publishing secrets) the same probes annotate without blocking, which is
-  # why the publishing jobs gate on `result == 'success'` rather than on the
-  # run being green.
+  # rust/scripts/preflight-credentials.sh probes Docker Hub with an attempted
+  # write. crates.io and npm use trusted publishing (OIDC), which can only
+  # publish new versions of a package that already exists, so for them the
+  # probe is whether the package exists (`bootstrap` otherwise).
+  #
+  # Every registry gets its own verdict (job outputs `crates`, `npm`,
+  # `docker`) and every publishing job gates on its own verdict being `ok`: a
+  # refused or not-yet-bootstrapped registry skips only its own publication,
+  # never the GitHub release or the other registries (issue #16). The job
+  # itself succeeds in both modes; in report mode (pull requests -- a fork has
+  # no publishing secrets) the same probes only annotate. This job holds no
+  # `id-token: write`: it runs branch code on pull requests.
   release-preflight:
     name: Release Preflight
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
+    outputs:
+      crates: ${{ steps.probe.outputs.crates }}
+      npm: ${{ steps.probe.outputs.npm }}
+      docker: ${{ steps.probe.outputs.docker }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
 
-      - name: Probe every release credential
+      - name: Probe every release registry
+        id: probe
         env:
           PREFLIGHT_MODE: >-
             ${{
@@ -151,8 +161,6 @@ jobs:
                 (github.event_name == 'workflow_dispatch' && github.event.inputs.release_mode == 'instant')
               ) && 'release' || 'report'
             }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
           DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -893,6 +901,10 @@ jobs:
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     permissions:
       contents: write
+      # crates.io trusted publishing (issue #16): rust-lang/crates-io-auth-action
+      # exchanges this job's OIDC token for a short-lived crates.io token that
+      # only the publish step receives. No long-lived crates.io secret exists.
+      id-token: write
     steps:
       # This job pushes the version bump commit and tag back to `main`, so the
       # checkout credentials have to stay in `.git/config` (no
@@ -946,12 +958,40 @@ jobs:
         if: steps.check.outputs.should_release == 'true' && steps.check.outputs.crate_published != 'true'
         run: rust-script rust/scripts/check-crate-size.rs
 
-      - name: Publish to Crates.io
+      - name: Check crates.io trusted publishing readiness
+        id: crates-io
         if: steps.check.outputs.should_release == 'true' && steps.check.outputs.crate_published != 'true'
+        env:
+          PREFLIGHT_CRATES: ${{ needs.release-preflight.outputs.crates }}
+        run: |
+          # Trusted publishing can only publish new versions of a crate that
+          # already exists. A missing crate (or a preflight with no verdict)
+          # skips crates.io only: the GitHub release, npm and Docker go ahead.
+          case "$PREFLIGHT_CRATES" in
+            ok)
+              echo "publish=true" >> "$GITHUB_OUTPUT"
+              echo "crates.io: the crate exists; publishing with trusted publishing (OIDC)"
+              ;;
+            bootstrap)
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::crates.io publication skipped: the crate is not on crates.io yet and trusted publishing cannot create it. Publish the first version once from a maintainer machine with: package-registry-manager setup --registry crates-io --execute (then configure the crates.io trusted publisher for this repository and .github/workflows/release.yml)"
+              ;;
+            *)
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::crates.io publication skipped this run: release preflight verdict is '${PREFLIGHT_CRATES:-missing}' (see the Release Preflight job)"
+              ;;
+          esac
+
+      - name: Authenticate to crates.io with trusted publishing
+        id: crates-io-auth
+        if: steps.check.outputs.should_release == 'true' && steps.check.outputs.crate_published != 'true' && steps.crates-io.outputs.publish == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: Publish to Crates.io
+        if: steps.check.outputs.should_release == 'true' && steps.check.outputs.crate_published != 'true' && steps.crates-io.outputs.publish == 'true'
         id: publish-crate
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}
-          CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
         run: rust-script rust/scripts/publish-crate.rs
 
       - name: Wait for Crate availability on Crates.io
@@ -974,9 +1014,12 @@ jobs:
         if: |
           steps.check.outputs.should_release == 'true' && (
             steps.check.outputs.crate_published == 'true' ||
-            steps.publish-crate.outputs.publish_result == 'success'
+            steps.publish-crate.outputs.publish_result == 'success' ||
+            steps.crates-io.outputs.publish == 'false'
           )
         id: dockerhub
+        env:
+          PREFLIGHT_DOCKER: ${{ needs.release-preflight.outputs.docker }}
         run: |
           disable_dockerhub() {
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -993,6 +1036,12 @@ jobs:
             exit 0
           fi
 
+          if [ "$PREFLIGHT_DOCKER" != "ok" ]; then
+            echo "::warning::Docker Hub publication skipped this run: release preflight verdict is '${PREFLIGHT_DOCKER:-missing}' (see the Release Preflight job)"
+            disable_dockerhub "Docker Hub publishing disabled: the credential could not be proven to push ${DOCKERHUB_IMAGE}"
+            exit 0
+          fi
+
           echo "enabled=true" >> "$GITHUB_OUTPUT"
           echo "docker_hub_url=https://hub.docker.com/r/${DOCKERHUB_IMAGE}" >> "$GITHUB_OUTPUT"
 
@@ -1001,7 +1050,8 @@ jobs:
         if: |
           steps.check.outputs.should_release == 'true' && (
             steps.check.outputs.crate_published == 'true' ||
-            steps.publish-crate.outputs.publish_result == 'success'
+            steps.publish-crate.outputs.publish_result == 'success' ||
+            steps.crates-io.outputs.publish == 'false'
           )
         run: |
           release_version="${{ steps.version.outputs.new_version }}"
@@ -1014,7 +1064,8 @@ jobs:
         if: |
           steps.check.outputs.should_release == 'true' && (
             steps.check.outputs.crate_published == 'true' ||
-            steps.publish-crate.outputs.publish_result == 'success'
+            steps.publish-crate.outputs.publish_result == 'success' ||
+            steps.crates-io.outputs.publish == 'false'
           )
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1058,6 +1109,10 @@ jobs:
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     permissions:
       contents: write
+      # crates.io trusted publishing (issue #16): rust-lang/crates-io-auth-action
+      # exchanges this job's OIDC token for a short-lived crates.io token that
+      # only the publish step receives. No long-lived crates.io secret exists.
+      id-token: write
     steps:
       # This job pushes the version bump commit and tag back to `main`, so the
       # checkout credentials have to stay in `.git/config` (no
@@ -1098,12 +1153,40 @@ jobs:
         if: steps.version.outputs.version_committed == 'true' || steps.version.outputs.already_released == 'true'
         run: rust-script rust/scripts/check-crate-size.rs
 
+      - name: Check crates.io trusted publishing readiness
+        id: crates-io
+        if: (steps.version.outputs.version_committed == 'true' || steps.version.outputs.already_released == 'true')
+        env:
+          PREFLIGHT_CRATES: ${{ needs.release-preflight.outputs.crates }}
+        run: |
+          # Trusted publishing can only publish new versions of a crate that
+          # already exists. A missing crate (or a preflight with no verdict)
+          # skips crates.io only: the GitHub release, npm and Docker go ahead.
+          case "$PREFLIGHT_CRATES" in
+            ok)
+              echo "publish=true" >> "$GITHUB_OUTPUT"
+              echo "crates.io: the crate exists; publishing with trusted publishing (OIDC)"
+              ;;
+            bootstrap)
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::crates.io publication skipped: the crate is not on crates.io yet and trusted publishing cannot create it. Publish the first version once from a maintainer machine with: package-registry-manager setup --registry crates-io --execute (then configure the crates.io trusted publisher for this repository and .github/workflows/release.yml)"
+              ;;
+            *)
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::crates.io publication skipped this run: release preflight verdict is '${PREFLIGHT_CRATES:-missing}' (see the Release Preflight job)"
+              ;;
+          esac
+
+      - name: Authenticate to crates.io with trusted publishing
+        id: crates-io-auth
+        if: (steps.version.outputs.version_committed == 'true' || steps.version.outputs.already_released == 'true') && steps.crates-io.outputs.publish == 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
       - name: Publish to Crates.io
-        if: steps.version.outputs.version_committed == 'true' || steps.version.outputs.already_released == 'true'
+        if: (steps.version.outputs.version_committed == 'true' || steps.version.outputs.already_released == 'true') && steps.crates-io.outputs.publish == 'true'
         id: publish-crate
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}
-          CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
         run: rust-script rust/scripts/publish-crate.rs
 
       - name: Wait for Crate availability on Crates.io
@@ -1123,9 +1206,13 @@ jobs:
       - name: Configure Docker Hub publishing
         if: |
           (steps.version.outputs.version_committed == 'true' ||
-            steps.version.outputs.already_released == 'true') &&
-          steps.publish-crate.outputs.publish_result == 'success'
+            steps.version.outputs.already_released == 'true') && (
+            steps.publish-crate.outputs.publish_result == 'success' ||
+            steps.crates-io.outputs.publish == 'false'
+          )
         id: dockerhub
+        env:
+          PREFLIGHT_DOCKER: ${{ needs.release-preflight.outputs.docker }}
         run: |
           disable_dockerhub() {
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -1142,14 +1229,22 @@ jobs:
             exit 0
           fi
 
+          if [ "$PREFLIGHT_DOCKER" != "ok" ]; then
+            echo "::warning::Docker Hub publication skipped this run: release preflight verdict is '${PREFLIGHT_DOCKER:-missing}' (see the Release Preflight job)"
+            disable_dockerhub "Docker Hub publishing disabled: the credential could not be proven to push ${DOCKERHUB_IMAGE}"
+            exit 0
+          fi
+
           echo "enabled=true" >> "$GITHUB_OUTPUT"
           echo "docker_hub_url=https://hub.docker.com/r/${DOCKERHUB_IMAGE}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         if: |
           (steps.version.outputs.version_committed == 'true' ||
-            steps.version.outputs.already_released == 'true') &&
-          steps.publish-crate.outputs.publish_result == 'success'
+            steps.version.outputs.already_released == 'true') && (
+            steps.publish-crate.outputs.publish_result == 'success' ||
+            steps.crates-io.outputs.publish == 'false'
+          )
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCKER_HUB_URL: ${{ steps.dockerhub.outputs.docker_hub_url }}
@@ -1166,13 +1261,18 @@ jobs:
 
   # Publish the colocated npm package after the shared release commit has
   # synchronized both manifests. npm trusted publishing uses the workflow's
-  # OIDC identity; NPM_TOKEN remains a first-publication bootstrap fallback.
+  # OIDC identity only -- there is no NPM_TOKEN fallback (issue #16). Trusted
+  # publishing cannot create a package, so the job runs only when the release
+  # preflight found the package on npm (`npm == 'ok'`); otherwise the
+  # preflight annotates the run with the bootstrap command
+  # (`package-registry-manager setup --registry npm --execute`).
   javascript-release:
     name: Publish JavaScript package
     needs: [javascript, auto-release, manual-release, release-preflight]
     if: |
       !cancelled() &&
       needs.release-preflight.result == 'success' &&
+      needs.release-preflight.outputs.npm == 'ok' &&
       needs.javascript.result == 'success' &&
       (needs.auto-release.result == 'success' || needs.manual-release.result == 'success')
     runs-on: ubuntu-24.04
@@ -1208,8 +1308,6 @@ jobs:
 
       - name: Publish and verify npm package
         id: publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: node js/scripts/publish-to-npm.mjs
 
   # Build each architecture on a native runner. Publishing by digest lets both
@@ -1220,6 +1318,7 @@ jobs:
     if: |
       !cancelled() &&
       needs.release-preflight.result == 'success' &&
+      needs.release-preflight.outputs.docker == 'ok' &&
       (needs.auto-release.result == 'success' || needs.manual-release.result == 'success') &&
       (needs.auto-release.outputs.docker_enabled == 'true' || needs.manual-release.outputs.docker_enabled == 'true')
     strategy:
@@ -1288,6 +1387,7 @@ jobs:
     if: |
       !cancelled() &&
       needs.release-preflight.result == 'success' &&
+      needs.release-preflight.outputs.docker == 'ok' &&
       needs.docker-publish.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1391,10 +1491,15 @@ jobs:
   # deployment path so repositories configured with "GitHub Actions" as their
   # Pages source fail this job if Pages cannot deploy.
   #
-  # One-time setup: in the repository's Settings -> Pages, set Source to
-  # "GitHub Actions". Without this, the first run fails on actions/deploy-pages
-  # with "Get Pages site failed" / "Failed to create deployment". This cannot be
-  # configured from a workflow. See README.md "Deploying API documentation".
+  # One-time setup: GitHub Pages must be enabled with "GitHub Actions" as its
+  # source (Settings -> Pages, or
+  # `gh api -X POST repos/OWNER/REPO/pages -f build_type=workflow`). The first
+  # step asks the Pages API whether that is the case; when Pages is disabled
+  # (404) or built from a branch, the job emits a ::warning:: with the command
+  # and skips the build and deployment instead of failing on
+  # actions/deploy-pages with "Get Pages site failed" (issue #16). The check
+  # does not use configure-pages' `enablement: true`, which needs a token with
+  # repository administration rights the workflow token does not have.
   deploy-docs:
     name: Deploy Rust Documentation
     needs: [build]
@@ -1417,12 +1522,45 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Check whether GitHub Pages is enabled
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          site_json="$RUNNER_TEMP/pages-site.json"
+          status="$(curl --silent --show-error --output "$site_json" --write-out '%{http_code}' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "$GH_API_URL/repos/$REPOSITORY/pages")"
+          enable_hint="gh api -X POST repos/$REPOSITORY/pages -f build_type=workflow"
+          if [[ "$status" == 200 ]]; then
+            build_type="$(sed -n 's/.*"build_type"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$site_json" | head -n 1)"
+            if [[ "$build_type" == workflow ]]; then
+              echo "enabled=true" >> "$GITHUB_OUTPUT"
+              echo "GitHub Pages is enabled with GitHub Actions as its source"
+            else
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::Documentation deployment skipped: GitHub Pages builds from '${build_type:-unknown}', not GitHub Actions. Set Settings -> Pages -> Source to GitHub Actions, or run: gh api -X PUT repos/$REPOSITORY/pages -f build_type=workflow"
+            fi
+          elif [[ "$status" == 404 ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Documentation deployment skipped: GitHub Pages is not enabled for $REPOSITORY. Enable it once with GitHub Actions as the source: $enable_hint (or Settings -> Pages -> Source: GitHub Actions)"
+          else
+            echo "::error::GitHub Pages capability check returned HTTP ${status:-no status}"
+            exit 1
+          fi
+
       - uses: actions/checkout@v6
+        if: steps.pages.outputs.enabled == 'true'
         with:
           persist-credentials: false
           ref: main
 
       - name: Setup Rust
+        if: steps.pages.outputs.enabled == 'true'
         uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-10-01
         with:
           # The `stable` ref is what supplied the action's default toolchain;
@@ -1430,12 +1568,14 @@ jobs:
           toolchain: stable
 
       - name: Build documentation
+        if: steps.pages.outputs.enabled == 'true'
         # Defense in depth: same fail-closed flags as the lint job's gate.
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --manifest-path rust/Cargo.toml --no-deps --all-features
 
       - name: Generate Pages root index
+        if: steps.pages.outputs.enabled == 'true'
         run: |
           # rustdoc emits target/doc/<crate>/index.html but no root index.html,
           # which makes the GitHub Pages root URL return 404. Redirect the root
@@ -1447,6 +1587,7 @@ jobs:
           touch rust/target/doc/.nojekyll
 
       - name: Add desktop download page
+        if: steps.pages.outputs.enabled == 'true'
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -1455,18 +1596,22 @@ jobs:
             docs/download/index.html > rust/target/doc/download/index.html
 
       - name: Configure GitHub Pages
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/configure-pages@v6
 
       - name: Verify site tree
+        if: steps.pages.outputs.enabled == 'true'
         run: find rust/target/doc -maxdepth 2 -print
 
       - name: Upload GitHub Pages artifact
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/upload-pages-artifact@v5
         with:
           path: rust/target/doc
           include-hidden-files: true
 
       - name: Deploy to GitHub Pages
+        if: steps.pages.outputs.enabled == 'true'
         id: deployment
         uses: actions/deploy-pages@v5
 

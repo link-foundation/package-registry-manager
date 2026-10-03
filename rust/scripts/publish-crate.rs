@@ -8,11 +8,20 @@
 //! - Single-language: Cargo.toml in repository root
 //! - Multi-language: Cargo.toml in rust/ subfolder
 //!
-//! Usage: rust-script scripts/publish-crate.rs [--token <token>] [--rust-root <path>]
+//! Usage: rust-script scripts/publish-crate.rs [--rust-root <path>]
 //!
-//! Environment variables (checked in order of priority):
-//!   - CARGO_REGISTRY_TOKEN: Cargo's native crates.io token (preferred)
-//!   - CARGO_TOKEN: Alternative token name for backwards compatibility
+//! Authentication (issue #16): crates.io trusted publishing. In CI,
+//! rust-lang/crates-io-auth-action exchanges the job's OIDC token for a
+//! short-lived crates.io token, which the publish step receives as
+//! CARGO_REGISTRY_TOKEN -- Cargo's native variable, read by `cargo publish`
+//! itself. The token is never put on the command line (where it would be
+//! visible in the process list) and there is no long-lived CARGO_TOKEN
+//! fallback. Trusted publishing only publishes new versions of an existing
+//! crate; the first version is published once from a maintainer's machine:
+//!   package-registry-manager setup --registry crates-io --execute
+//!
+//! Environment variables:
+//!   - CARGO_REGISTRY_TOKEN: the short-lived trusted-publishing token
 //!
 //! Outputs (written to GITHUB_OUTPUT):
 //!   - publish_result: one of
@@ -39,16 +48,7 @@ use std::process::{Command, exit};
 #[path = "rust-paths.rs"]
 mod rust_paths;
 
-fn get_arg(name: &str) -> Option<String> {
-    let args: Vec<String> = env::args().collect();
-    let flag = format!("--{}", name);
-
-    if let Some(idx) = args.iter().position(|a| a == &flag) {
-        return args.get(idx + 1).cloned();
-    }
-
-    None
-}
+const BOOTSTRAP_COMMAND: &str = "package-registry-manager setup --registry crates-io --execute";
 
 fn needs_cd(rust_root: &str) -> bool {
     rust_root != "."
@@ -117,6 +117,7 @@ fn classify_failure(combined: &str) -> FailureKind {
         || combined.contains("please provide a")
         || combined.contains("unauthorized")
         || combined.contains("authentication")
+        || combined.contains("403 Forbidden")
     {
         FailureKind::AuthFailed
     } else {
@@ -141,10 +142,9 @@ fn main() {
         }
     };
 
-    // Get token from CLI arg, then env vars
-    let token = get_arg("token")
-        .or_else(|| env::var("CARGO_REGISTRY_TOKEN").ok().filter(|s| !s.is_empty()))
-        .or_else(|| env::var("CARGO_TOKEN").ok().filter(|s| !s.is_empty()));
+    // `cargo publish` reads CARGO_REGISTRY_TOKEN from the environment itself;
+    // only its presence is checked here, never its value.
+    let has_token = env::var("CARGO_REGISTRY_TOKEN").is_ok_and(|s| !s.is_empty());
 
     let package_info = match rust_paths::read_package_info(&package_manifest) {
         Ok(info) => info,
@@ -168,28 +168,26 @@ fn main() {
     println!();
     println!("=== Attempting to publish to crates.io ===");
 
-    if token.is_none() {
-        println!("::warning::Neither CARGO_REGISTRY_TOKEN nor CARGO_TOKEN is set, attempting publish without explicit token");
-        println!();
-        println!("To fix this, ensure one of the following secrets is configured:");
-        println!("  - CARGO_REGISTRY_TOKEN (Cargo's native env var, preferred)");
-        println!("  - CARGO_TOKEN (alternative for backwards compatibility)");
-        println!();
-        println!("For organization secrets, you may need to map the secret name in your workflow:");
-        println!("  env:");
-        println!("    CARGO_REGISTRY_TOKEN: ${{{{ secrets.CARGO_TOKEN }}}}");
-        println!();
+    if has_token {
+        println!("Using the crates.io token from CARGO_REGISTRY_TOKEN (trusted publishing)");
     } else {
-        println!("Using provided authentication token");
+        println!("::warning::CARGO_REGISTRY_TOKEN is not set; attempting publish with Cargo's own credentials");
+        println!();
+        println!("In CI the token comes from crates.io trusted publishing: the release job runs");
+        println!("rust-lang/crates-io-auth-action (step id `crates-io-auth`, job permission");
+        println!("`id-token: write`) and passes its output to this step:");
+        println!("  env:");
+        println!("    CARGO_REGISTRY_TOKEN: ${{{{ steps.crates-io-auth.outputs.token }}}}");
+        println!();
+        println!("If {} is not on crates.io yet, publish the first version once with:", name);
+        println!("  {}", BOOTSTRAP_COMMAND);
+        println!();
     }
 
-    // Build the cargo publish command
+    // Build the cargo publish command. The token stays in the environment,
+    // never on argv.
     let mut cmd = Command::new("cargo");
     cmd.arg("publish").arg("--allow-dirty").arg("-p").arg(&name);
-
-    if let Some(t) = &token {
-        cmd.arg("--token").arg(t);
-    }
 
     // For multi-language repos, change to the rust directory
     if needs_cd(&rust_root) {
@@ -239,18 +237,23 @@ fn main() {
                 eprintln!();
                 eprintln!("=== AUTHENTICATION FAILURE ===");
                 eprintln!();
-                eprintln!("Failed to publish due to missing or invalid authentication token.");
+                eprintln!("crates.io refused the trusted-publishing token for {}.", name);
                 eprintln!();
-                eprintln!("SOLUTION: Configure one of these secrets in your repository or organization:");
-                eprintln!("  1. CARGO_REGISTRY_TOKEN - Cargo's native environment variable (preferred)");
-                eprintln!("  2. CARGO_TOKEN - Alternative name for backwards compatibility");
+                eprintln!("Check, in this order:");
+                eprintln!("  1. The crate exists on crates.io. Trusted publishing cannot create a crate;");
+                eprintln!("     publish the first version once from a maintainer machine with:");
+                eprintln!("       {}", BOOTSTRAP_COMMAND);
+                eprintln!("  2. The crate's trusted publisher (crates.io -> crate settings -> Trusted");
+                eprintln!("     Publishing) names this repository and the workflow file");
+                eprintln!("     .github/workflows/release.yml, with no environment unless the job uses one.");
+                eprintln!("  3. The publish step receives the token from the auth action:");
+                eprintln!("       CARGO_REGISTRY_TOKEN: ${{{{ steps.crates-io-auth.outputs.token }}}}");
+                eprintln!("     and the job grants `id-token: write`.");
                 eprintln!();
-                eprintln!("If using organization secrets with a different name, map it in your workflow:");
-                eprintln!("  - name: Publish to Crates.io");
-                eprintln!("    env:");
-                eprintln!("      CARGO_REGISTRY_TOKEN: ${{{{ secrets.YOUR_SECRET_NAME }}}}");
+                eprintln!("Original cargo publish error:");
+                eprintln!("{}", combined.trim());
                 eprintln!();
-                eprintln!("See: https://doc.rust-lang.org/cargo/reference/publishing.html");
+                eprintln!("See: https://crates.io/docs/trusted-publishing");
                 eprintln!();
             }
             FailureKind::Unknown => {
@@ -309,6 +312,26 @@ You have published too many versions of this crate in the last 24 hours
         let body = "error: failed to publish: please provide a non-empty token";
         assert_eq!(classify_failure(body), FailureKind::AuthFailed);
         assert_eq!(FailureKind::AuthFailed.output_value(), "auth_failed");
+    }
+
+    #[test]
+    fn classifies_trusted_publishing_refusal_as_auth_failure() {
+        let body = "\
+error: failed to publish to registry at https://crates.io
+
+Caused by:
+  the remote server responded with an error (status 403 Forbidden): \
+this token does not have the required permissions to perform this action
+";
+        assert_eq!(classify_failure(body), FailureKind::AuthFailed);
+    }
+
+    #[test]
+    fn bootstrap_command_names_the_crates_io_registry() {
+        assert_eq!(
+            BOOTSTRAP_COMMAND,
+            "package-registry-manager setup --registry crates-io --execute"
+        );
     }
 
     #[test]

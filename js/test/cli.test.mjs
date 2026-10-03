@@ -114,3 +114,31 @@ test("rejects an unknown --browser mode", async () => {
     },
   );
 });
+
+test("rejects --open-with together with --no-browser", async () => {
+  await assert.rejects(
+    execute(
+      process.execPath,
+      [
+        cli,
+        "--repository",
+        fixture,
+        "--open-with",
+        "firefox",
+        "--no-browser",
+        "--execute",
+        "--registry",
+        "npm",
+        "setup",
+      ],
+      { env: registryEnv },
+    ),
+    (error) => {
+      assert.match(
+        error.stderr,
+        /--open-with and --no-browser are mutually exclusive/,
+      );
+      return true;
+    },
+  );
+});

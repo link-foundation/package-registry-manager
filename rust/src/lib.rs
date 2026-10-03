@@ -12,12 +12,16 @@ pub mod npm_package;
 pub mod plan;
 pub mod prerequisites;
 pub mod profile;
+pub mod publishers;
 pub mod registry_state;
 pub mod setup;
+pub mod skips;
+pub mod tokens;
 pub mod workflows;
 
-pub use discovery::inspect_repository;
+pub use discovery::{inspect_repository, inspect_repository_with, InspectOptions};
 pub use model::{
-    Inspection, Package, PlanMode, Registry, RepositoryInfo, SetupPlan, SetupStep, StepKind,
+    Inspection, Package, PlanMode, Registry, RepositoryInfo, SetupPlan, SetupStep, Skipped,
+    StepKind,
 };
 pub use plan::{build_plans, build_plans_for, build_plans_with, PlanOptions};

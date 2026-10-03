@@ -1,9 +1,10 @@
 //! Registry flows: the ordered, conditional steps that take a package from
 //! unpublished to trusted publishing without long-lived tokens.
 
-use crate::model::{Package, SetupStep, StepKind};
+use crate::model::{Package, Registry, SetupStep, StepKind};
 use crate::prerequisites::{DEFAULT_TRUST_NPM, NPM_TFA_URL};
 use crate::registry_state::{encode_uri_component, npm_name, Endpoints};
+use crate::tokens::{token_secret_steps, CRATES_TOKENS_URL};
 
 /// Step conditions that only hold while a package is not yet published.
 pub const BOOTSTRAP_CONDITIONS: [&str; 2] = ["package-missing", "worktree-created"];
@@ -20,6 +21,8 @@ pub struct FlowContext<'a> {
     pub slug: Option<String>,
     /// Release workflow file name, when known.
     pub workflow: Option<String>,
+    /// GitHub environment the trusted publisher is bound to, when any.
+    pub environment: Option<String>,
     /// Append the release-verification steps.
     pub verify_release: bool,
     /// Registry API base URLs.
@@ -337,6 +340,13 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
         )
         .command("npx", &trust_list)]);
         steps.extend(release_run_steps(context, workflow));
+        let mut trust_args = vec![
+            "-y", trust_npm, "trust", "github", name, "--repo", slug, "--file", workflow,
+        ];
+        if let Some(environment) = context.environment.as_deref() {
+            trust_args.extend(["--env", environment]);
+        }
+        trust_args.extend(["--allow-publish", "--yes", "--browser=false"]);
         steps.extend([
             step(
                 "attach-trusted-publisher",
@@ -344,23 +354,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
                 StepKind::Command,
                 format!("Trust the release workflow to publish through OIDC with {trust_npm}, run through npx; npm trust needs npm 11.10 or newer and account-level 2FA."),
             )
-            .command(
-                "npx",
-                &[
-                    "-y",
-                    trust_npm,
-                    "trust",
-                    "github",
-                    name,
-                    "--repo",
-                    slug,
-                    "--file",
-                    workflow,
-                    "--allow-publish",
-                    "--yes",
-                    "--browser=false",
-                ],
-            )
+            .command("npx", &trust_args)
             .when("trust-missing"),
         ]);
     }
@@ -382,7 +376,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
         }),
     );
     if let Some((slug, workflow)) = trusted_target {
-        steps.extend([
+        steps.push(
             step(
                 "verify-trusted-publisher",
                 "Verify trusted publishing",
@@ -391,26 +385,9 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
             )
             .command("npx", &trust_list)
             .when("trust-missing"),
-            step(
-                "audit-token-secrets",
-                "Look for a leftover NPM_TOKEN secret",
-                StepKind::Check,
-                "Trusted publishing makes long-lived npm tokens unnecessary.",
-            )
-            .command("gh", &["secret", "list", "--repo", slug, "--json", "name"])
-            .cwd("."),
-            step(
-                "delete-token-secret",
-                "Delete the NPM_TOKEN secret",
-                StepKind::Command,
-                "Remove the unused long-lived token secret from the repository.",
-            )
-            .command("gh", &["secret", "delete", "NPM_TOKEN", "--repo", slug])
-            .when("token-secret-present")
-            .cwd(".")
-            .confirmed(),
-            rerun_release_step(context),
-        ]);
+        );
+        steps.extend(token_secret_steps(package, slug));
+        steps.push(rerun_release_step(context));
         if context.verify_release {
             steps.extend(verify_release_steps(
                 context,
@@ -469,17 +446,18 @@ pub fn crates_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupSte
     steps.extend([
         step(
             "create-publish-token",
-            "Create a first-publish token",
+            "Create a one-time first-publish token",
             StepKind::Browser,
-            format!("crates.io requires an API token for a crate's first upload. Create one limited to the publish-new scope and the crate name {name}, with a short expiry; paste it only into cargo login in the next step."),
+            format!("A one-time exception that needs your approval: crates.io has no token-free first publish (no pending publisher as on PyPI), so the first upload needs an API token. Create one limited to the publish-new scope and the crate name {name}, expiring in a day; paste it only into cargo login in the next step. It is revoked, and the revocation verified, before setup ends."),
         )
         .url("https://crates.io/settings/tokens/new")
-        .when("package-missing"),
+        .when("package-missing")
+        .confirmed(),
         step(
             "sign-in",
             "Sign cargo in",
             StepKind::Command,
-            "cargo reads the token from the terminal; the tool never sees it.",
+            "cargo reads the token from the terminal, so it is never typed into the tool.",
         )
         .command("cargo", &["login"])
         .when("package-missing"),
@@ -507,7 +485,18 @@ pub fn crates_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupSte
             StepKind::Browser,
             "Revoke the token created for the first publish; it is no longer needed.",
         )
-        .url("https://crates.io/settings/tokens")
+        .url(CRATES_TOKENS_URL)
+        .when("package-missing"),
+        step(
+            "verify-token-revoked",
+            "Verify the first-publish token is revoked",
+            StepKind::Check,
+            "Send the token cargo stored to crates.io, which must reject it; the token is never printed.",
+        )
+        .url(format!(
+            "{}/me/tokens",
+            context.endpoints.base(Registry::CratesIo).unwrap_or_default()
+        ))
         .when("package-missing"),
         step(
             "configure-trusted-publisher",
@@ -520,6 +509,11 @@ pub fn crates_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupSte
             encode_uri_component(name)
         ))
         .when("trust-missing"),
+    ]);
+    if let Some(slug) = context.slug.as_deref() {
+        steps.extend(token_secret_steps(package, slug));
+    }
+    steps.extend([
         step(
             "sign-out",
             "Sign cargo out",
@@ -591,6 +585,9 @@ pub fn pypi_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep>
         ))
         .when("trust-missing"),
     ]);
+    if let Some(slug) = context.slug.as_deref() {
+        steps.extend(token_secret_steps(package, slug));
+    }
     steps
 }
 
