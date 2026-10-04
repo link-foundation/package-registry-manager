@@ -226,10 +226,9 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
             format!(
                 "npm publish {destination}/pipeline-app-0.1.0.tgz --access public --auth-type=web --browser=false --provenance=false"
             ),
-            "npx -y npm@^11.10 trust list pipeline-app --json".to_owned(),
+            "npx -y npm@^11.10 trust list pipeline-app --browser=false".to_owned(),
             "gh run list --repo acme/pipeline-app --workflow release.yml --limit 1 --json databaseId,conclusion,status,url".to_owned(),
             "npx -y npm@^11.10 trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false".to_owned(),
-            "npx -y npm@^11.10 trust list pipeline-app --json".to_owned(),
             "gh secret list --repo acme/pipeline-app --json name".to_owned(),
             "gh secret delete NPM_TOKEN --repo acme/pipeline-app".to_owned(),
             "npm logout".to_owned(),
@@ -263,6 +262,8 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
     for line in [
         "Open https://www.npmjs.com/login?next=/login/cli/fake",
         "Open https://www.npmjs.com/auth/cli/fake",
+        "Open https://www.npmjs.com/auth/cli/fake-trust",
+        "  npm stored the trusted publisher.",
         TWO_FACTOR_HINT,
         "Future releases publish from release.yml through trusted publishing; no login is needed.",
     ] {
@@ -304,7 +305,9 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
     assert!(!resumed
         .iter()
         .any(|command| command.contains("trust github")));
-    assert!(resumed.contains(&"npx -y npm@^11.10 trust list pipeline-app --json".to_owned()));
+    assert!(
+        resumed.contains(&"npx -y npm@^11.10 trust list pipeline-app --browser=false".to_owned())
+    );
 }
 
 #[test]
@@ -602,6 +605,34 @@ fn reports_npm_pack_corrections_and_stops_when_a_bin_was_removed() {
     assert!(!commands
         .iter()
         .any(|command| command.starts_with("npm publish") || command.starts_with("npm pkg fix")));
+}
+
+#[test]
+fn signs_out_and_removes_the_worktree_when_a_middle_step_fails() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    // npm trust github fails, so verify-trusted-publisher fails (#24).
+    let (_, stderr, commands) = failing_setup(
+        &repository,
+        &state,
+        &bootstrap_registry(),
+        &[("FAKE_TRUST_GITHUB", "fail")],
+    );
+    assert!(
+        stderr.contains("npm does not list a trusted publisher for the package"),
+        "{stderr}"
+    );
+    let failed = commands
+        .iter()
+        .rposition(|command| command == "npx -y npm@^11.10 trust list pipeline-app --browser=false")
+        .expect("verify-trusted-publisher ran");
+    assert_eq!(commands[failed + 1], "npm logout", "{commands:?}");
+    let worktree = commands[failed + 2]
+        .strip_prefix("git worktree remove --force ")
+        .expect("the worktree is removed");
+    assert!(!Path::new(worktree).exists(), "temporary files are removed");
 }
 
 #[test]

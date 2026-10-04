@@ -22,7 +22,10 @@ use crate::default_browser::{detect_default_browser, open_with_command};
 use crate::flows::CLEANUP_CONDITIONS;
 use crate::model::Registry;
 use crate::model::{CommandSpec, PlanMode, SetupPlan, SetupStep, StepKind};
-use crate::npm_package::{packed_entry, report_pack_warnings, verify_bins, PUBLISH_REJECTED};
+use crate::npm_package::{
+    lists_trusted_publisher, packed_entry, report_pack_warnings, trust_created, verify_bins,
+    PUBLISH_REJECTED,
+};
 use crate::pages::{pages_change_warning, report_pages, PagesState, PAGES_CHANGES};
 use crate::plan::package_directory;
 use crate::prerequisites::two_factor_mode;
@@ -122,7 +125,6 @@ struct Session<'a> {
     conditions: BTreeSet<&'static str>,
     values: BTreeMap<String, String>,
     token_secrets: Vec<String>,
-    deferred: Vec<&'a SetupStep>,
     browser: Option<Automation>,
     temporary: Option<tempfile::TempDir>,
     shim: Option<(tempfile::TempDir, PathBuf)>,
@@ -149,7 +151,6 @@ impl<'a> Session<'a> {
             conditions,
             values: BTreeMap::new(),
             token_secrets: Vec::new(),
-            deferred: Vec::new(),
             browser: None,
             temporary: None,
             shim: None,
@@ -173,7 +174,8 @@ impl<'a> Session<'a> {
     async fn run(&mut self) -> Result<()> {
         for step in &self.plan.steps {
             match step.when.as_deref() {
-                Some(when) if CLEANUP_CONDITIONS.contains(&when) => self.deferred.push(step),
+                // cleanup() runs these, even after a failed step.
+                Some(when) if CLEANUP_CONDITIONS.contains(&when) => {}
                 Some(when) if !self.holds(when) => {
                     if self.options.verbose {
                         eprintln!("skip {}: condition {when} does not hold", step.id);
@@ -188,8 +190,16 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
+    /// Runs every cleanup step of the plan whose condition holds, including
+    /// those after a step that failed (#24).
     async fn cleanup(&mut self) {
-        for step in std::mem::take(&mut self.deferred) {
+        let plan = self.plan;
+        let cleanup = plan.steps.iter().filter(|step| {
+            step.when
+                .as_deref()
+                .is_some_and(|when| CLEANUP_CONDITIONS.contains(&when))
+        });
+        for step in cleanup {
             if step.id == "sign-out" && self.keeps_session(step) {
                 println!(
                     "Keeping the npm session (--keep-session): its token stays in npm's user \
@@ -291,8 +301,7 @@ impl<'a> Session<'a> {
         match step.id.as_str() {
             "check-sign-in" => self.toggle("signed-out", result.code != 0),
             "check-trust" | "verify-trusted-publisher" => {
-                let trusted =
-                    result.code == 0 && Regex::new(r#""(?:id|type|file)"\s*:"#)?.is_match(output);
+                let trusted = result.code == 0 && lists_trusted_publisher(output);
                 self.toggle("trust-missing", !trusted);
                 if step.id == "verify-trusted-publisher" && !trusted {
                     bail!("npm does not list a trusted publisher for the package");
@@ -531,6 +540,10 @@ impl<'a> Session<'a> {
             }
         }
         match step.id.as_str() {
+            "attach-trusted-publisher" if trust_created(&result.stdout) => {
+                println!("  npm stored the trusted publisher.");
+                self.conditions.remove("trust-missing");
+            }
             "sign-in" => {
                 self.conditions.insert("tool-signed-in");
             }

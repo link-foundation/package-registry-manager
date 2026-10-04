@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use package_registry_manager::auth_urls::{node_options_with_shim, AuthUrlScanner};
-use package_registry_manager::npm_package::packed_entry;
+use package_registry_manager::npm_package::{lists_trusted_publisher, packed_entry, trust_created};
 use package_registry_manager::registry_state::Endpoints;
 use package_registry_manager::{
     build_plans_with, inspect_repository, Package, PlanMode, PlanOptions, Registry, SetupPlan,
@@ -110,7 +110,7 @@ fn plans_a_bootstrap_for_a_package_missing_from_npm() {
         ),
         (
             "check-trust",
-            "npx -y npm@^11.10 trust list pipeline-app --json",
+            "npx -y npm@^11.10 trust list pipeline-app --browser=false",
         ),
         ("sign-out", "npm logout"),
     ] {
@@ -241,4 +241,23 @@ fn reads_npm_pack_output_before_and_since_npm_12() {
     assert_eq!(packed_entry(&array).expect("npm 11 output"), packed);
     assert_eq!(packed_entry(&object).expect("npm 12 output"), packed);
     assert!(packed_entry("{}").is_err());
+}
+
+#[test]
+fn reads_trusted_publishers_from_npm_trust_list_output() {
+    let human = "Authenticate your account at:\nhttps://www.npmjs.com/auth/cli/x\n\ntype: \u{1b}[32mgithub\u{1b}[39m\nid: \u{1b}[32m5c6fb388\u{1b}[39m\nfile: \u{1b}[32mrelease.yml\u{1b}[39m\n";
+    assert!(lists_trusted_publisher(human));
+    assert!(lists_trusted_publisher(
+        r#"{"type":"github","file":"a.yml"}"#
+    ));
+    assert!(!lists_trusted_publisher(
+        "Authenticate your account at:\nhttps://www.npmjs.com/auth/cli/x\nNo trust configurations found for package (a)\n"
+    ));
+    assert!(!lists_trusted_publisher(""));
+    assert!(trust_created(
+        "\u{1b}[34mTrust configuration created successfully for \u{1b}[39ma with the following settings:"
+    ));
+    assert!(!trust_created(
+        "Establishing trust between a package and GitHub"
+    ));
 }
