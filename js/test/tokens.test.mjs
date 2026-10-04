@@ -106,6 +106,7 @@ test("plans the first-publish token as a confirmed, verified exception", () => {
     directory: ".",
     slug: "acme/demo",
     workflow: "release.yml",
+    manual: true,
   };
   const steps = cratesFlow(crate, context);
   assert.deepEqual(ids(steps), [
@@ -246,6 +247,7 @@ test(
         packages: [{ ...crate, token_secrets: ["CARGO_TOKEN"] }],
       },
       ["crates-io"],
+      { manual: true },
     );
     const saved = { ...process.env };
     const cargo = await cargoCredentials();
@@ -320,9 +322,11 @@ test(
 );
 
 test("stops before any upload when the one-time token is declined", async () => {
-  const [plan] = buildPlans({ repository: {}, packages: [crate] }, [
-    "crates-io",
-  ]);
+  const [plan] = buildPlans(
+    { repository: {}, packages: [crate] },
+    ["crates-io"],
+    { manual: true },
+  );
   const create = plan.steps.findIndex(
     (step) => step.id === "create-publish-token",
   );

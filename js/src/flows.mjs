@@ -4,6 +4,7 @@ import {
   registryEndpoint,
   registryStateUrl,
 } from "./registry-state.mjs";
+import { CRATES_IO_URL } from "./crates-api.mjs";
 import { CRATES_TOKENS_URL, tokenSecretSteps } from "./tokens.mjs";
 
 /** Step conditions that only hold while a package is not yet published. */
@@ -15,6 +16,7 @@ export const BOOTSTRAP_CONDITIONS = new Set([
 /** Step conditions evaluated in the cleanup phase, after every other step. */
 export const CLEANUP_CONDITIONS = new Set([
   "tool-signed-in",
+  "crates-signed-in",
   "worktree-created",
 ]);
 
@@ -451,7 +453,85 @@ export function npmFlow(packageInfo, context) {
   return steps;
 }
 
+/**
+ * The crates.io flow. By default the crates.io API publishes the first
+ * version with a short-lived token the tool creates, uses, and revokes
+ * itself (#26); `context.manual` keeps the manual token checklist.
+ */
 export function cratesFlow(packageInfo, context) {
+  return context.manual
+    ? manualCratesFlow(packageInfo, context)
+    : apiCratesFlow(packageInfo, context);
+}
+
+function apiCratesFlow(packageInfo, context) {
+  const name = packageInfo.name;
+  const api = registryStateUrl(packageInfo);
+  const steps = [
+    step(
+      "validate-package",
+      "Validate the crate",
+      "check",
+      "Package the crate without uploading it.",
+      { command: command("cargo", ["publish", "--dry-run"]) },
+    ),
+    checkRegistryStep("crates.io", api),
+    ...worktreeSteps(),
+    step(
+      "crates-sign-in",
+      "Sign in to crates.io in the automated browser",
+      "api",
+      'Reuse the automated profile\'s crates.io session, or click "Log in with GitHub" and wait until GET /api/v1/me answers. crates.io needs a verified email address.',
+      { url: CRATES_IO_URL, when: "trust-missing" },
+    ),
+    step(
+      "first-publish",
+      "Publish the first version",
+      "api",
+      `After one confirmation, create a 1-hour token limited to the crate ${name} with the publish-new and trusted-publishing scopes from inside the crates.io page, run cargo publish from the clean checkout with the token only in its environment, wait for the registry, attach the trusted publisher with the token, then revoke it and verify crates.io rejects it. The token is never printed or stored.`,
+      {
+        command: command("cargo", ["publish"]),
+        url: api,
+        when: "package-missing",
+        cwd: packageCwd(context.directory),
+        confirm: true,
+      },
+    ),
+    step(
+      "attach-trusted-publisher",
+      "Attach the crates.io trusted publisher",
+      "api",
+      "POST the repository's GitHub Actions workflow to /api/v1/trusted_publishing/github_configs with the browser session.",
+      { when: "trust-missing" },
+    ),
+    step(
+      "configure-trusted-publisher",
+      "Configure crates.io trusted publishing",
+      "browser",
+      "The API could not attach the trusted publisher; add the repository's GitHub Actions workflow in the form, then review and submit.",
+      {
+        url: `https://crates.io/crates/${encodeURIComponent(name)}/settings/new-trusted-publisher`,
+        when: "trust-api-failed",
+      },
+    ),
+  ];
+  if (context.slug) {
+    steps.push(...tokenSecretSteps(packageInfo, context.slug));
+  }
+  steps.push(
+    step(
+      "crates-sign-out",
+      "Sign the automated browser out of crates.io",
+      "api",
+      "Remove the sign-in this run brought into the automated profile; --keep-session keeps it. No token outlives the run either way.",
+      { when: "crates-signed-in" },
+    ),
+    removeWorktreeStep(),
+  );
+  return steps;
+}
+
+function manualCratesFlow(packageInfo, context) {
   const name = packageInfo.name;
   const api = registryStateUrl(packageInfo);
   const steps = [

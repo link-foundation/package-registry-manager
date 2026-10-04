@@ -5,8 +5,20 @@ import {
   LAUNCH_RESTRICTIONS,
 } from "browser-commander";
 
-/** Browsers whose profile `--browser-import` can migrate. */
-export const IMPORT_BROWSERS = ["chrome", "edge", "brave", "firefox"];
+import {
+  IMPORT_CHOICES,
+  IMPORT_SCOPES,
+  importSources,
+} from "./sign-in-import.mjs";
+
+/**
+ * What `--browser-import` accepts: every browser Browser Commander reads,
+ * plus `default` (the system default browser) and `auto` (accept the
+ * sign-in import offer, the default browser first).
+ */
+export function importBrowsers() {
+  return [...importSources(), ...IMPORT_CHOICES];
+}
 /** How `--browser-attach` reaches the user's own browser. */
 export const ATTACH_MODES = ["snapshot", "extension"];
 
@@ -31,6 +43,7 @@ export function parseBrowserOptions({
   channel = "chrome",
   executable,
   importFrom,
+  importScope,
   attach,
   preferences = [],
   restrictions = [],
@@ -40,6 +53,7 @@ export function parseBrowserOptions({
     channel,
     executable: executable ? path.resolve(executable) : null,
     import: importFrom ? parseImport(importFrom) : null,
+    importScope: parseImportScope(importScope, importFrom),
     attach: attach ? parseAttach(attach) : null,
     preferences: parsePreferences(preferences),
     restrictions: validateRestrictions(restrictions),
@@ -67,17 +81,39 @@ export function parseBrowserOptions({
   return options;
 }
 
-/** Parses `<chrome|edge|brave|firefox>[:profile]`. */
+/** Parses `<browser>[:profile]`, `default`, or `auto`. */
 export function parseImport(spec) {
   const separator = spec.indexOf(":");
   const browser = separator === -1 ? spec : spec.slice(0, separator);
   const profile = separator === -1 ? null : spec.slice(separator + 1);
-  if (!IMPORT_BROWSERS.includes(browser) || profile === "") {
+  const choice = IMPORT_CHOICES.includes(browser);
+  if (
+    !importBrowsers().includes(browser) ||
+    profile === "" ||
+    (choice && profile !== null)
+  ) {
     throw new Error(
-      "--browser-import must be <chrome|edge|brave|firefox>[:profile]",
+      `--browser-import must be <${importSources().join("|")}>[:profile], default, or auto`,
     );
   }
   return { browser, profile };
+}
+
+/**
+ * Parses `--browser-import-scope`: `full` migrates the whole profile and
+ * `domains` only the registry's sign-in cookies. Without it a named browser
+ * is migrated fully, as before, and `default`, `auto`, and the sign-in offer
+ * import only the sign-in domains.
+ */
+export function parseImportScope(scope, importFrom) {
+  if (scope === undefined || scope === null) {
+    const named = importFrom && !IMPORT_CHOICES.includes(importFrom);
+    return named ? "full" : "domains";
+  }
+  if (!IMPORT_SCOPES.includes(scope)) {
+    throw new Error("--browser-import-scope must be full or domains");
+  }
+  return scope;
 }
 
 /** Parses `snapshot`, `snapshot:<profile>`, or `extension`. */

@@ -173,6 +173,7 @@ function flowPlan(inspection, packageInfo, options) {
     environment,
     verifyRelease: Boolean(options.verifyRelease),
     trustNpm: options.environment?.trustNpm,
+    manual: Boolean(options.manual),
   };
   const mode = planMode(packageInfo);
   let steps = FLOWS.get(packageInfo.registry)(packageInfo, context);
