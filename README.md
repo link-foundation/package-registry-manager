@@ -226,7 +226,8 @@ A bootstrap run:
 2. Checks out the default branch into a temporary worktree, runs
    `npm pack --ignore-scripts`, lists every file with the packed and
    unpacked size, installs the tarball into a scratch directory, and runs
-   each bin with `--version`.
+   each bin through its `node_modules/.bin` link with `--version`. A bin that
+   fails or prints nothing stops the run before anything is published.
 3. Signs in with `npm login --auth-type=web` only when needed, right before
    publishing, so the approval links do not expire while packing. The CLI
    opens the printed login URL in the default browser, where the maintainer

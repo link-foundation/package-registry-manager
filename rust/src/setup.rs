@@ -22,7 +22,7 @@ use crate::default_browser::{detect_default_browser, open_with_command};
 use crate::flows::CLEANUP_CONDITIONS;
 use crate::model::Registry;
 use crate::model::{CommandSpec, PlanMode, SetupPlan, SetupStep, StepKind};
-use crate::npm_package::{report_pack_warnings, verify_bins, PUBLISH_REJECTED};
+use crate::npm_package::{packed_entry, report_pack_warnings, verify_bins, PUBLISH_REJECTED};
 use crate::pages::{pages_change_warning, report_pages, PagesState, PAGES_CHANGES};
 use crate::plan::package_directory;
 use crate::prerequisites::two_factor_mode;
@@ -554,10 +554,7 @@ impl<'a> Session<'a> {
     }
 
     fn record_pack(&mut self, output: &str) -> Result<()> {
-        let packed = json_list(output)?
-            .into_iter()
-            .next()
-            .context("npm pack printed no package")?;
+        let packed = packed_entry(output)?;
         for file in packed["files"].as_array().into_iter().flatten() {
             println!(
                 "  {:>8}  {}",

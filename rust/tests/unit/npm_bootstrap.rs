@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use package_registry_manager::auth_urls::{node_options_with_shim, AuthUrlScanner};
+use package_registry_manager::npm_package::packed_entry;
 use package_registry_manager::registry_state::Endpoints;
 use package_registry_manager::{
     build_plans_with, inspect_repository, Package, PlanMode, PlanOptions, Registry, SetupPlan,
@@ -230,4 +231,14 @@ fn trims_trailing_slashes_from_endpoint_overrides() {
     );
     let hostile = format!("{}x", "/".repeat(100_000));
     assert_eq!(base(&hostile), Some(hostile.clone()));
+}
+
+#[test]
+fn reads_npm_pack_output_before_and_since_npm_12() {
+    let packed = serde_json::json!({ "filename": "a-1.0.0.tgz", "version": "1.0.0" });
+    let array = serde_json::json!([packed]).to_string();
+    let object = serde_json::json!({ "a": packed }).to_string();
+    assert_eq!(packed_entry(&array).expect("npm 11 output"), packed);
+    assert_eq!(packed_entry(&object).expect("npm 12 output"), packed);
+    assert!(packed_entry("{}").is_err());
 }

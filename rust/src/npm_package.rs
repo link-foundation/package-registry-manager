@@ -1,6 +1,6 @@
 //! Checks of the packed npm tarball before its first publish: npm's pack
 //! warnings, the packed bin entries, and each installed bin run with
-//! `--version`.
+//! `--version`, which must print the version.
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -51,6 +51,22 @@ pub fn report_pack_warnings(stderr: &str) {
             "  npm changed the packed package.json; correct these fields in package.json itself."
         );
     }
+}
+
+/// The first package in `npm pack --json` output: an array before npm 12, an
+/// object keyed by package name since.
+///
+/// # Errors
+/// Fails when the output is not JSON or names no package.
+pub fn packed_entry(output: &str) -> Result<Value> {
+    let parsed: Value =
+        serde_json::from_str(output.trim()).context("npm pack printed invalid JSON")?;
+    let packed = match parsed {
+        Value::Array(items) => items.into_iter().next(),
+        Value::Object(entries) => entries.into_iter().next().map(|(_, packed)| packed),
+        _ => None,
+    };
+    packed.context("npm pack printed no package")
 }
 
 /// The `bin` entries of a package.json as `(name, file)` pairs; a string `bin`
@@ -160,9 +176,19 @@ pub async fn verify_bins(source: &Path, prefix: &Path, name: &str, verbose: bool
                 "bin {bin} ({file}) exited with status {code} when run with --version from the installed tarball"
             );
         }
+        // A bin whose entry point never runs exits 0 without output.
+        let output = match stdout.trim() {
+            "" => stderr.trim(),
+            text => text,
+        };
+        if output.is_empty() {
+            bail!(
+                "bin {bin} ({file}) printed nothing when run with --version from the installed tarball; make sure it runs when started through the node_modules/.bin symlink"
+            );
+        }
         println!(
             "  {bin} --version: {}",
-            stdout.trim().lines().next().unwrap_or_default()
+            output.lines().next().unwrap_or_default()
         );
     }
     Ok(())
