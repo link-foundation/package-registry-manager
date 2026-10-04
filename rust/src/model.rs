@@ -205,6 +205,8 @@ pub enum StepKind {
     Command,
     Wait,
     Browser,
+    /// A registry API call made through the automated browser's session.
+    Api,
     Manual,
 }
 

@@ -24,7 +24,7 @@ fn keeps_a_fresh_dedicated_profile_by_default() {
     let browser = parse_browser_options(&BrowserArgs::default()).expect("defaults");
     assert_eq!(browser, BrowserOptions::default());
     assert_eq!(browser.preferences, json!({}));
-    let options = launch_options(&browser, &profile(), false);
+    let options = launch_options(&browser, &profile(), false, &[]);
     assert_eq!(options.channel, "chrome");
     assert!(!options.headless);
     assert!(!options.verbose);
@@ -51,7 +51,7 @@ fn passes_the_executable_preferences_and_restrictions_to_the_launch() {
         ..BrowserArgs::default()
     })
     .expect("valid options");
-    let options = launch_options(&browser, &profile(), true);
+    let options = launch_options(&browser, &profile(), true, &[]);
     assert_eq!(options.channel, "msedge");
     assert!(options.verbose);
     assert_eq!(
@@ -91,6 +91,7 @@ fn imports_a_real_profile_into_the_dedicated_profile_on_request() {
             .expect(spec),
             &profile(),
             false,
+            &[],
         );
         let mut expected = MigrationSource::new(browser);
         expected.profile = name.map(str::to_owned);
@@ -116,7 +117,7 @@ fn attaches_to_a_snapshot_of_the_users_own_profile() {
         assert_eq!(snapshot.browser, browser);
         assert_eq!(snapshot.profile, name);
         assert_eq!(snapshot.user_data_dir, None);
-        let options = launch_options(&parsed, &profile(), false);
+        let options = launch_options(&parsed, &profile(), false, &[]);
         assert_eq!(options.user_data_dir, None, "a snapshot is temporary");
     }
     assert_eq!(snapshot_browser("chromium"), "chromium");
@@ -131,14 +132,14 @@ fn rejects_invalid_or_conflicting_browser_options() {
                 import: Some("safari".to_owned()),
                 ..BrowserArgs::default()
             },
-            "--browser-import must be <chrome|edge|brave|firefox>[:profile]",
+            "--browser-import must be <chrome|edge|brave|chromium|firefox>[:profile], default, or auto",
         ),
         (
             BrowserArgs {
                 import: Some("chrome:".to_owned()),
                 ..BrowserArgs::default()
             },
-            "--browser-import must be <chrome|edge|brave|firefox>[:profile]",
+            "--browser-import must be <chrome|edge|brave|chromium|firefox>[:profile], default, or auto",
         ),
         (
             BrowserArgs {

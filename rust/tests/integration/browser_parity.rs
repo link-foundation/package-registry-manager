@@ -19,6 +19,7 @@ async fn launches_the_automated_profile_like_a_browser_started_by_hand() -> anyh
         &BrowserOptions::default(),
         profile.path(),
         false,
+        &[],
     )))
     .await?;
     let measured = tokio::time::timeout(

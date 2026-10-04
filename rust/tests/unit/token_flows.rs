@@ -19,6 +19,7 @@ fn plans_the_first_publish_token_as_a_confirmed_verified_exception() {
         verify_release: false,
         endpoints: &endpoints,
         trust_npm: None,
+        manual: true,
     };
     let steps = crates_flow(&crate_package(Registry::CratesIo), &context);
     assert_eq!(
