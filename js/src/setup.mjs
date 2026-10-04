@@ -416,10 +416,16 @@ class SetupSession {
           `bin ${name} (${file}) exited with status ${result.code} when run with --version from the installed tarball`,
         );
       }
-      const version = String(result.stdout ?? "")
-        .trim()
-        .split("\n")[0];
-      console.log(`  ${name} --version: ${version}`);
+      // A bin whose entry point never runs exits 0 without output.
+      const output =
+        String(result.stdout ?? "").trim() ||
+        String(result.stderr ?? "").trim();
+      if (!output) {
+        throw new Error(
+          `bin ${name} (${file}) printed nothing when run with --version from the installed tarball; make sure it runs when started through the node_modules/.bin symlink`,
+        );
+      }
+      console.log(`  ${name} --version: ${output.split("\n")[0]}`);
     }
   }
 
@@ -492,7 +498,7 @@ class SetupSession {
   }
 
   recordPack(output) {
-    const [packed] = JSON.parse(output);
+    const packed = packedEntry(output);
     for (const file of packed.files ?? []) {
       console.log(`  ${String(file.size).padStart(8)}  ${file.path}`);
     }
@@ -738,6 +744,19 @@ export function packWarnings(stderr) {
       line.replace(/\s*Please run "npm pkg fix"[^.]*\.?/i, "").trim(),
     )
     .filter((line) => !/npm pkg fix/i.test(line));
+}
+
+/**
+ * The first package in `npm pack --json` output: an array before npm 12, an
+ * object keyed by package name since.
+ */
+export function packedEntry(output) {
+  const parsed = JSON.parse(output);
+  const [packed] = Array.isArray(parsed) ? parsed : Object.values(parsed ?? {});
+  if (!packed) {
+    throw new Error("npm pack printed no package");
+  }
+  return packed;
 }
 
 function reportPackWarnings(stderr) {

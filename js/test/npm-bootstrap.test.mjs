@@ -752,6 +752,56 @@ test(
 );
 
 test(
+  "stops when an installed bin runs without printing its version (#22)",
+  POSIX_ONLY,
+  async () => {
+    await freshState();
+    const plan = await npmPlan({
+      exists_on_registry: false,
+      trusted_publishing: false,
+    });
+    await withEnv({ FAKE_BIN_SILENT: "1" }, () =>
+      assert.rejects(
+        runWithFakeTools(plan, () => null),
+        /bin pipeline-app \(bin\/cli\.js\) printed nothing when run with --version/,
+      ),
+    );
+  },
+);
+
+test("reads npm pack output before and since npm 12 (#22)", async () => {
+  const { packedEntry } = await import("../src/setup.mjs");
+  const packed = { filename: "a-1.0.0.tgz", version: "1.0.0" };
+  assert.deepEqual(packedEntry(JSON.stringify([packed])), packed);
+  assert.deepEqual(packedEntry(JSON.stringify({ a: packed })), packed);
+  assert.throws(() => packedEntry("{}"), /npm pack printed no package/);
+});
+
+test(
+  "packs and installs the tarball with npm 12's pack output (#22)",
+  POSIX_ONLY,
+  async () => {
+    await freshState();
+    const plan = await npmPlan({
+      exists_on_registry: false,
+      trusted_publishing: false,
+    });
+    // The failing bin stops the run right after the tarball was installed.
+    const error = await withEnv(
+      { FAKE_PACK_JSON: "object", FAKE_BIN_FAILS: "1" },
+      () => runWithFakeTools(plan, () => null).catch((failure) => failure),
+    );
+    assert.match(error.message, /bin pipeline-app \(bin\/cli\.js\) exited/);
+    assert.ok(
+      error.lines.includes(
+        "  pipeline-app-0.1.0.tgz: 120 bytes packed, 300 bytes unpacked, 1 files",
+      ),
+      error.lines.join("\n"),
+    );
+  },
+);
+
+test(
   "re-runs a release that npm rejected before trust and watches it",
   POSIX_ONLY,
   async () => {

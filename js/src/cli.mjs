@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
+import { readFileSync, realpathSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { parseBrowserOptions } from "./browser-options.mjs";
@@ -22,6 +23,8 @@ Commands:
   setup --registry <registry>     Bootstrap or attach trusted publishing
 
 Global options:
+  -h, --help                      Print this help
+  -V, --version                   Print the version
   --repository <path>             Repository to inspect (default: .)
   --format <text|json>            Output format (default: text)
   --offline                       Do not look up packages on registries
@@ -106,10 +109,15 @@ export async function main(args = process.argv.slice(2)) {
       "browser-pref": { type: "string", multiple: true },
       "browser-restriction": { type: "string", multiple: true },
       help: { type: "boolean", short: "h", default: false },
+      version: { type: "boolean", short: "V", default: false },
     },
   });
   if (values.help) {
     process.stdout.write(HELP);
+    return;
+  }
+  if (values.version) {
+    process.stdout.write(`package-registry-manager ${packageVersion()}\n`);
     return;
   }
   if (positionals.length !== 1) {
@@ -394,8 +402,25 @@ function outputPlans(plans, format) {
   }
 }
 
+function packageVersion() {
+  const manifest = new URL("../package.json", import.meta.url);
+  return JSON.parse(readFileSync(manifest, "utf8")).version;
+}
+
+/**
+ * Whether this module is the program node started. npm, npx, and global
+ * installs start bins through a symlink in node_modules/.bin, while
+ * import.meta.url names the real file, so both sides are resolved first.
+ */
 export function isDirectExecution(moduleUrl, entryPath) {
-  return Boolean(entryPath) && moduleUrl === pathToFileURL(entryPath).href;
+  if (!entryPath) {
+    return false;
+  }
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(entryPath);
+  } catch {
+    return false;
+  }
 }
 
 if (isDirectExecution(import.meta.url, process.argv[1])) {
