@@ -240,12 +240,15 @@ A bootstrap run:
    `npx -y npm@^11.10 trust github <package> --repo <owner/repo> --file <workflow>`.
    If that command fails, the CLI opens the package's access page and prefills
    the trusted publisher form instead.
-7. Confirms the trust with `npm trust list`, then lists the repository
-   secrets and deletes each leftover `NPM_TOKEN`/`NPM_AUTH_TOKEN` that no
-   workflow reads any more, one confirmation each.
+7. Takes npm's `Trust configuration created successfully` as the
+   confirmation; after the browser fallback it confirms the trust with
+   `npm trust list --browser=false`, whose 2FA approval link it opens like
+   the others. It then lists the repository secrets and deletes each
+   leftover `NPM_TOKEN`/`NPM_AUTH_TOKEN` that no workflow reads any more,
+   one confirmation each.
 8. Signs npm out (unless `--keep-session`) and removes the temporary
-   worktree, then explains that every later version is published by the
-   trusted workflow.
+   worktree, even when an earlier step failed, then explains that every
+   later version is published by the trusted workflow.
 
 The trusted publisher is the workflow file whose job runs `npm publish` (or
 `npm`/`pnpm`/`yarn` publishing through a script), not a workflow that merely

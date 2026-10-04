@@ -226,13 +226,15 @@ export function npmFlow(packageInfo, context) {
   const name = packageInfo.name;
   const registry = registryEndpoint("npm");
   const trustNpm = context.trustNpm ?? DEFAULT_TRUST_NPM;
+  // npm trust list needs a 2FA approval; with --json npm holds the approval
+  // URL back until it exits, so the human output is read instead (#24).
   const trustList = command("npx", [
     "-y",
     trustNpm,
     "trust",
     "list",
     name,
-    "--json",
+    "--browser=false",
   ]);
   const steps = [
     step(

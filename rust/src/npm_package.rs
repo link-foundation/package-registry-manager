@@ -1,6 +1,7 @@
-//! Checks of the packed npm tarball before its first publish: npm's pack
-//! warnings, the packed bin entries, and each installed bin run with
-//! `--version`, which must print the version.
+//! Checks of the packed npm tarball and of `npm trust` answers.
+//!
+//! Before the first publish: npm's pack warnings, the packed bin entries, and
+//! each installed bin run with `--version`, which must print the version.
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -14,6 +15,25 @@ use crate::auth_urls::ANSI_PATTERN;
 
 /// npm's rejection of a publish from a workflow it does not trust.
 pub const PUBLISH_REJECTED: &str = r"(?i)\bE404\b|404 Not Found|invalid-publisher";
+
+/// Whether `npm trust list` output, human-readable or JSON, names a trusted
+/// publisher.
+#[must_use]
+pub fn lists_trusted_publisher(output: &str) -> bool {
+    let ansi = Regex::new(ANSI_PATTERN).expect("static pattern must compile");
+    let listed = Regex::new(r#"(?m)^\s*(?:id|type|file):\s*\S|"(?:id|type|file)"\s*:"#)
+        .expect("static pattern must compile");
+    listed.is_match(&ansi.replace_all(output, ""))
+}
+
+/// Whether `npm trust github` reported that the registry stored the publisher,
+/// which verifies it without a second 2FA-gated `npm trust list` (#24).
+#[must_use]
+pub fn trust_created(output: &str) -> bool {
+    let ansi = Regex::new(ANSI_PATTERN).expect("static pattern must compile");
+    ansi.replace_all(output, "")
+        .contains("Trust configuration created successfully")
+}
 
 /// npm's warnings from `npm pack`, such as fields it auto-corrected or removed
 /// from the packed package.json, without npm's advice to run its fixer, which

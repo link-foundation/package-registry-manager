@@ -229,7 +229,9 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
     let name = package.name.as_str();
     let registry = context.endpoints.base(package.registry).unwrap_or_default();
     let trust_npm = context.trust_npm.unwrap_or(DEFAULT_TRUST_NPM);
-    let trust_list = ["-y", trust_npm, "trust", "list", name, "--json"];
+    // npm trust list needs a 2FA approval; with --json npm holds the approval
+    // URL back until it exits, so the human output is read instead (#24).
+    let trust_list = ["-y", trust_npm, "trust", "list", name, "--browser=false"];
     let package_cwd = context.package_cwd();
     let mut steps = vec![
         step(

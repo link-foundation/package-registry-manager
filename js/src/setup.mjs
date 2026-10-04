@@ -43,6 +43,10 @@ const INTERACTIVE_CHECKS = new Set(["check-trust", "verify-trusted-publisher"]);
 const PAGES_CHANGES = new Set(["enable-pages", "use-pages-workflow"]);
 /** Checks whose failure is an answer, so their output is not echoed. */
 const QUIET_CHECKS = new Set(["check-sign-in", "check-pages"]);
+/** A trusted publisher in `npm trust list` output, human-readable or JSON. */
+const LISTED_PUBLISHER = /^\s*(?:id|type|file):\s*\S|"(?:id|type|file)"\s*:/m;
+/** What `npm trust github` prints once the registry stored the publisher. */
+const TRUST_CREATED = /Trust configuration created successfully/i;
 /** npm's answer when a workflow publishes without an attached trusted publisher. */
 const PUBLISH_REJECTED = /\bE404\b|404 Not Found|invalid-publisher/i;
 /** Where `--browser` opens URLs that need no automation. */
@@ -107,7 +111,6 @@ class SetupSession {
       this.conditions.add("trust-missing");
     }
     this.values = {};
-    this.deferred = [];
     this.automation = null;
     this.temporary = null;
     this.shim = null;
@@ -116,7 +119,7 @@ class SetupSession {
   async run() {
     for (const step of this.plan.steps) {
       if (CLEANUP_CONDITIONS.has(step.when)) {
-        this.deferred.push(step);
+        // cleanup() runs these, even after a failed step.
       } else if (!step.when || this.conditions.has(step.when)) {
         this.log(`==> ${step.title}`);
         await this.runStep(step);
@@ -126,8 +129,12 @@ class SetupSession {
     }
   }
 
+  /**
+   * Runs every cleanup step of the plan whose condition holds, including
+   * those after a step that failed (#24).
+   */
   async cleanup() {
-    for (const step of this.deferred) {
+    for (const step of cleanupSteps(this.plan)) {
       if (step.id === "sign-out" && this.keepsSession(step)) {
         console.log(
           "Keeping the npm session (--keep-session): its token stays in npm's user configuration until you run npm logout, and the next run reuses it while npm whoami succeeds.",
@@ -226,8 +233,7 @@ class SetupSession {
         return;
       case "check-trust":
       case "verify-trusted-publisher": {
-        const trusted =
-          result.code === 0 && /"(?:id|type|file)"\s*:/.test(output);
+        const trusted = result.code === 0 && listsTrustedPublisher(output);
         toggle(this.conditions, "trust-missing", !trusted);
         if (step.id === "verify-trusted-publisher" && !trusted) {
           throw new Error(
@@ -483,7 +489,9 @@ class SetupSession {
         `${step.command.program} exited with status ${result.code}`,
       );
     }
-    if (step.id === "sign-in") {
+    if (step.id === "attach-trusted-publisher") {
+      this.confirmTrustCreated(result.stdout);
+    } else if (step.id === "sign-in") {
       this.conditions.add("tool-signed-in");
     } else if (step.id === "prepare-worktree") {
       this.conditions.add("worktree-created");
@@ -494,6 +502,17 @@ class SetupSession {
       console.log("  Re-running the failed release jobs.");
       this.values.run_id = this.values.failed_run_id;
       this.conditions.delete("release-dispatch");
+    }
+  }
+
+  /**
+   * npm prints the stored configuration once `npm trust github` succeeds, so
+   * that answer verifies it without a second 2FA-gated `npm trust list`.
+   */
+  confirmTrustCreated(output) {
+    if (TRUST_CREATED.test(stripAnsi(output))) {
+      console.log("  npm stored the trusted publisher.");
+      this.conditions.delete("trust-missing");
     }
   }
 
@@ -728,6 +747,20 @@ class SetupSession {
   prompt(message) {
     return (this.options.prompt ?? prompt)(message);
   }
+}
+
+/** The plan's cleanup steps, which run after every other step, even a failed one. */
+export function cleanupSteps(plan) {
+  return plan.steps.filter((step) => CLEANUP_CONDITIONS.has(step.when));
+}
+
+/** Whether `npm trust list` output names a trusted publisher. */
+export function listsTrustedPublisher(output) {
+  return LISTED_PUBLISHER.test(stripAnsi(output));
+}
+
+function stripAnsi(text) {
+  return String(text ?? "").replaceAll(ANSI, "");
 }
 
 /**
