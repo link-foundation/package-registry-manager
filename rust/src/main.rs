@@ -25,6 +25,7 @@ use package_registry_manager::{
 #[derive(Parser, Debug)]
 #[command(
     name = "package-registry-manager",
+    version,
     about = "Inspect repositories and guide secure package-registry setup"
 )]
 struct Args {

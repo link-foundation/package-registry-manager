@@ -288,7 +288,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
             "verify-bins",
             "Verify the packed bin entries",
             StepKind::Check,
-            "Compare the bin entries of the packed package.json with package.json and run each installed bin with --version.",
+            "Compare the bin entries of the packed package.json with package.json and check that each installed bin prints its version for --version.",
         )
         .when("package-missing"),
         // Sign in right before publishing, so the sign-in, publish, and trust

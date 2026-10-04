@@ -4,7 +4,9 @@
 // It records every argument vector and keeps just enough state (session,
 // trusted publisher) for a resumed run to behave like the real tools.
 // Scenarios: FAKE_TFA=off (no 2FA), FAKE_PACK_WARNINGS (npm drops the bin
-// while packing), FAKE_BIN_FAILS (the installed bin exits 1), and
+// while packing), FAKE_BIN_FAILS (the installed bin exits 1), FAKE_BIN_SILENT
+// (the installed bin exits 0 without output), FAKE_PACK_JSON=object (npm 12's
+// `npm pack --json`, an object keyed by package name), and
 // FAKE_RELEASE_RUN=failed-publish (the last release failed with E404), and
 // FAKE_REPO_TOKEN_NAMES (comma-separated repository secret names; default NPM_TOKEN),
 // FAKE_LEGACY_LOGIN=<n> (the first n web logins fall back to Username:), and
@@ -87,17 +89,20 @@ if (tool === "npm") {
         console.error(line);
     }
     fs.writeFileSync(sidecar(tarball), JSON.stringify(manifest));
+    const packed = {
+      filename: "pipeline-app-0.1.0.tgz",
+      version: "0.1.0",
+      size: 120,
+      unpackedSize: 300,
+      entryCount: 1,
+      files: [{ path: "package.json", size: 300 }],
+    };
     console.log(
-      JSON.stringify([
-        {
-          filename: "pipeline-app-0.1.0.tgz",
-          version: "0.1.0",
-          size: 120,
-          unpackedSize: 300,
-          entryCount: 1,
-          files: [{ path: "package.json", size: 300 }],
-        },
-      ]),
+      JSON.stringify(
+        process.env.FAKE_PACK_JSON === "object"
+          ? { [manifest.name]: packed }
+          : [packed],
+      ),
     );
   }
   if (args[0] === "publish") {
@@ -120,7 +125,9 @@ if (tool === "npm") {
     for (const name of Object.keys(manifest.bin || {})) {
       const body = process.env.FAKE_BIN_FAILS
         ? "process.exit(1);"
-        : `console.log(${JSON.stringify(manifest.version)});`;
+        : process.env.FAKE_BIN_SILENT
+          ? ""
+          : `console.log(${JSON.stringify(manifest.version)});`;
       fs.writeFileSync(
         path.join(bin, name),
         `#!${process.execPath}\n${body}\n`,

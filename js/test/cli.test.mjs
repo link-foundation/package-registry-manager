@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { createServer } from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -42,6 +44,31 @@ test("recognizes the CLI entry point as a portable file URL", () => {
     isDirectExecution(pathToFileURL(cli).href, `${cli}.different`),
     false,
   );
+});
+
+test(
+  "recognizes the CLI entry point started through a bin symlink (#22)",
+  { skip: process.platform === "win32" && "symlinks need privileges" },
+  async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "prm-bin-"));
+    try {
+      const link = path.join(directory, "package-registry-manager-js");
+      await symlink(cli, link);
+      assert.equal(isDirectExecution(pathToFileURL(cli).href, link), true);
+      const { stdout } = await execute(process.execPath, [link, "--help"]);
+      assert.match(stdout, /^Usage: package-registry-manager/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test("prints the package version", async () => {
+  const manifest = JSON.parse(
+    await readFile(path.resolve(here, "../package.json"), "utf8"),
+  );
+  const { stdout } = await execute(process.execPath, [cli, "--version"]);
+  assert.equal(stdout, `package-registry-manager ${manifest.version}\n`);
 });
 
 test("inspect emits machine-readable output", async () => {

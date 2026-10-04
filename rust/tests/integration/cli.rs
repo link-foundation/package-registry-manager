@@ -171,3 +171,12 @@ fn dry_run_conflicts_with_execute() {
         .expect("run package-registry-manager");
     assert!(!output.status.success());
 }
+
+#[test]
+fn prints_the_package_version() {
+    let output = run(&["--version"], None);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("package-registry-manager {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}

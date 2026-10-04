@@ -623,6 +623,48 @@ fn stops_when_an_installed_bin_fails_to_run_with_version() {
 }
 
 #[test]
+fn stops_when_an_installed_bin_runs_without_printing_its_version() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let (_, stderr, _) = failing_setup(
+        &repository,
+        &state,
+        &missing_registry(),
+        &[("FAKE_BIN_SILENT", "1")],
+    );
+    assert!(
+        stderr.contains("bin pipeline-app (bin/cli.js) printed nothing when run with --version"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn packs_and_installs_the_tarball_with_npm_12_pack_output() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    // The failing bin stops the run right after the tarball was installed.
+    let (stdout, stderr, _) = failing_setup(
+        &repository,
+        &state,
+        &missing_registry(),
+        &[("FAKE_PACK_JSON", "object"), ("FAKE_BIN_FAILS", "1")],
+    );
+    assert!(
+        stderr.contains("bin pipeline-app (bin/cli.js) exited with status 1"),
+        "{stderr}"
+    );
+    assert!(
+        stdout.lines().any(|line| line
+            == "  pipeline-app-0.1.0.tgz: 120 bytes packed, 300 bytes unpacked, 1 files"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn reruns_the_release_npm_refused_before_trust_and_watches_the_rerun() {
     let temporary = TempDir::new().expect("create temporary directory");
     let Some((repository, state)) = prepare(&temporary) else {
