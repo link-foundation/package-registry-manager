@@ -1,6 +1,7 @@
 //! Registry flows: the ordered, conditional steps that take a package from
 //! unpublished to trusted publishing without long-lived tokens.
 
+use crate::crates_api::CRATES_IO_URL;
 use crate::model::{Package, Registry, SetupStep, StepKind};
 use crate::prerequisites::{DEFAULT_TRUST_NPM, NPM_TFA_URL};
 use crate::registry_state::{encode_uri_component, npm_name, Endpoints};
@@ -10,7 +11,8 @@ use crate::tokens::{token_secret_steps, CRATES_TOKENS_URL};
 pub const BOOTSTRAP_CONDITIONS: [&str; 2] = ["package-missing", "worktree-created"];
 
 /// Step conditions evaluated in the cleanup phase, after every other step.
-pub const CLEANUP_CONDITIONS: [&str; 2] = ["tool-signed-in", "worktree-created"];
+pub const CLEANUP_CONDITIONS: [&str; 3] =
+    ["tool-signed-in", "crates-signed-in", "worktree-created"];
 
 /// Repository facts that shape a flow.
 #[derive(Debug, Clone)]
@@ -29,6 +31,8 @@ pub struct FlowContext<'a> {
     pub endpoints: &'a Endpoints,
     /// The npm package spec that runs `npm trust`; `npm@^11.10` when unset.
     pub trust_npm: Option<&'a str>,
+    /// crates.io: keep the manual first-publish token checklist (`--manual`).
+    pub manual: bool,
 }
 
 impl FlowContext<'_> {
@@ -432,10 +436,88 @@ fn rerun_release_step(context: &FlowContext<'_>) -> SetupStep {
     .confirmed()
 }
 
-/// crates.io: a short-lived publish-new token entered into `cargo login` for
-/// the first upload only, then trusted publishing in the browser.
+/// crates.io. By default the crates.io API publishes the first version with
+/// a short-lived token the tool creates, uses, and revokes itself (#26);
+/// `context.manual` keeps the manual token checklist.
 #[must_use]
 pub fn crates_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> {
+    if context.manual {
+        manual_crates_flow(package, context)
+    } else {
+        api_crates_flow(package, context)
+    }
+}
+
+fn api_crates_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> {
+    let name = package.name.as_str();
+    let api = context.state_url(package);
+    let mut steps = vec![
+        step(
+            "validate-package",
+            "Validate the crate",
+            StepKind::Check,
+            "Package the crate without uploading it.",
+        )
+        .command("cargo", &["publish", "--dry-run"]),
+        check_registry_step("crates.io", api.clone()),
+    ];
+    steps.extend(worktree_steps());
+    steps.extend([
+        step(
+            "crates-sign-in",
+            "Sign in to crates.io in the automated browser",
+            StepKind::Api,
+            "Reuse the automated profile's crates.io session, or click \"Log in with GitHub\" and wait until GET /api/v1/me answers. crates.io needs a verified email address.",
+        )
+        .url(CRATES_IO_URL)
+        .when("trust-missing"),
+        step(
+            "first-publish",
+            "Publish the first version",
+            StepKind::Api,
+            format!("After one confirmation, create a 1-hour token limited to the crate {name} with the publish-new and trusted-publishing scopes from inside the crates.io page, run cargo publish from the clean checkout with the token only in its environment, wait for the registry, attach the trusted publisher with the token, then revoke it and verify crates.io rejects it. The token is never printed or stored."),
+        )
+        .command("cargo", &["publish"])
+        .url(api)
+        .when("package-missing")
+        .cwd(context.package_cwd())
+        .confirmed(),
+        step(
+            "attach-trusted-publisher",
+            "Attach the crates.io trusted publisher",
+            StepKind::Api,
+            "POST the repository's GitHub Actions workflow to /api/v1/trusted_publishing/github_configs with the browser session.",
+        )
+        .when("trust-missing"),
+        step(
+            "configure-trusted-publisher",
+            "Configure crates.io trusted publishing",
+            StepKind::Browser,
+            "The API could not attach the trusted publisher; add the repository's GitHub Actions workflow in the form, then review and submit.",
+        )
+        .url(format!(
+            "https://crates.io/crates/{}/settings/new-trusted-publisher",
+            encode_uri_component(name)
+        ))
+        .when("trust-api-failed"),
+    ]);
+    if let Some(slug) = context.slug.as_deref() {
+        steps.extend(token_secret_steps(package, slug));
+    }
+    steps.extend([
+        step(
+            "crates-sign-out",
+            "Sign the automated browser out of crates.io",
+            StepKind::Api,
+            "Remove the sign-in this run brought into the automated profile; --keep-session keeps it. No token outlives the run either way.",
+        )
+        .when("crates-signed-in"),
+        remove_worktree_step(),
+    ]);
+    steps
+}
+
+fn manual_crates_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> {
     let name = package.name.as_str();
     let api = context.state_url(package);
     let mut steps = vec![

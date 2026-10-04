@@ -1,6 +1,7 @@
 mod approvals;
 mod browser_options;
 mod browser_profile;
+mod crates_api;
 mod npm_bootstrap;
 mod pages;
 mod pipeline_template;
