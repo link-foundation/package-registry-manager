@@ -152,10 +152,20 @@ no extra switches. Every change to that is opt-in:
 
 - `--browser-executable <path>` launches a specific browser binary instead of
   the channel's.
-- `--browser-import <chrome|edge|brave|firefox>[:<profile>]` copies cookies,
-  history, and other data from one of your browser profiles into the
+- `--browser-import <chrome|edge|brave|chromium|firefox>[:<profile>]` copies
+  cookies, history, and other data from one of your browser profiles into the
   dedicated profile before it starts, so registry sessions carry over without
-  automating your real profile.
+  automating your real profile. `default` takes the system default browser
+  and `auto` the first installed browser signed in to the registry.
+  `--browser-import-scope domains` imports only the cookies of the registry's
+  sign-in domains (`crates.io` and `github.com` for crates.io, `npmjs.com`
+  for npm, `pypi.org` and `github.com` for PyPI) instead of the whole profile;
+  it is the default for `default` and `auto`.
+- Without `--browser-import`, the profile stays fresh. When a sign-in step
+  finds no session and an installed browser holds cookies for the registry's
+  sign-in domains, the CLI asks once whether to import only those cookies.
+  Safari cannot be imported yet
+  ([link-foundation/browser-commander#114](https://github.com/link-foundation/browser-commander/issues/114)).
 - `--browser-attach snapshot[:<profile>]` fills forms in a temporary copy of
   your own profile of the `--browser-channel` browser (default `Default`),
   which is deleted afterwards. `--browser-attach extension` drives your
@@ -182,7 +192,7 @@ elsewhere.
 | Ecosystem | Manifest | Registry | Validation | Authenticated setup |
 | --- | --- | --- | --- | --- |
 | JavaScript / TypeScript | `package.json` | npm | `npm pkg get ...` | Web-login first publish, then `npm trust github` |
-| Rust | `Cargo.toml` | crates.io | `cargo publish --dry-run` | Revocable first-publish token, then trusted publishing settings |
+| Rust | `Cargo.toml` | crates.io | `cargo publish --dry-run` | First publish and trusted publisher through the crates.io API with a self-revoking 1-hour token |
 | Python | `pyproject.toml`, `setup.py` | PyPI | `python -m build` | Pending publisher, first OIDC publish from CI |
 | Go | `go.mod` | Go module proxy | `go test ./...` | Version tag and proxy request; no central account |
 | C# / .NET | `*.csproj`, `*.fsproj`, `*.vbproj` | NuGet | `dotnet pack --configuration Release` | Trusted-publishing credential |
@@ -267,17 +277,39 @@ crates.io only offers trusted publishing for crates that already exist, so the
 first version must be published with an API token ("you'll need to publish
 your first release manually", per the
 [crates.io announcement](https://blog.rust-lang.org/2025/07/11/crates-io-development-update-2025-07/)).
-The CLI keeps that token as short-lived as possible: it runs
-`cargo publish --dry-run`, opens the token page, lets `cargo login` read the
-token directly from the terminal, publishes once from a temporary worktree of
-the default branch, and then opens the token page again so the maintainer can
-revoke it. That one token is a maintainer-approved exception: creating it
-asks for confirmation first, and before the run continues the CLI checks with
-`GET https://crates.io/api/v1/me/tokens` that crates.io rejects it, asking
-again until it is revoked. It then opens the crate's trusted publisher
-settings, deletes leftover `CARGO_TOKEN`/`CARGO_REGISTRY_TOKEN` repository
-secrets after confirmation, and runs `cargo logout`. An existing crate goes
-straight to the trusted publisher settings. See the Cargo
+The CLI does that through the crates.io API, so the first publish takes one
+browser sign-in (or none, when the automated profile or an imported session
+already has it) and one confirmation (#26):
+
+1. It runs `cargo publish --dry-run`, then opens `https://crates.io/` in the
+   automated browser. When `GET /api/v1/me` answers 200 the session is
+   reused; otherwise it clicks "Log in with GitHub" and waits until it does.
+   crates.io needs a verified email address to publish and to add trusted
+   publishers, so a missing one stops the run with the settings link.
+2. One confirmation (`--yes` pre-confirms it): create a 1-hour token limited
+   to the crate with the `publish-new` and `trusted-publishing` scopes,
+   publish, attach the release workflow as trusted publisher, and revoke the
+   token.
+3. The token is created with `PUT /api/v1/me/tokens` from inside the
+   crates.io page, so the session cookie authenticates it and the token never
+   reaches the DOM, the terminal, the clipboard, or
+   `~/.cargo/credentials.toml`.
+4. `cargo publish` runs once from a temporary worktree of the default branch
+   with `CARGO_REGISTRY_TOKEN` set only in that child process; there is no
+   `cargo login` or `cargo logout`.
+5. After the registry shows the version, the token attaches the trusted
+   publisher with `POST /api/v1/trusted_publishing/github_configs`. Should
+   that fail, the crate's trusted publisher form opens instead.
+6. Whatever happened before, the token revokes itself with
+   `DELETE /api/v1/tokens/current`, and the run fails while crates.io still
+   accepts it.
+
+Leftover `CARGO_TOKEN`/`CARGO_REGISTRY_TOKEN` repository secrets are deleted
+after confirmation, and the crates.io sign-in the run brought into the
+automated profile is removed unless `--keep-session` is given. An existing
+crate only gets the trusted publisher. `--manual` keeps the previous
+checklist: create the token in the form, let `cargo login` read it, revoke it
+by hand, and fill the trusted publisher form. See the Cargo
 [publishing reference](https://doc.rust-lang.org/cargo/reference/publishing.html).
 
 ### PyPI
@@ -359,12 +391,14 @@ The CLIs intentionally use the same options and JSON schema:
 | `--browser-channel <name>` | Choose installed Chrome, Chromium, Edge, or Brave (default: `chrome`) |
 | `--browser-executable <path>` | Launch this browser executable instead of the channel's |
 | `--browser-profile <path>` | Choose the dedicated automation profile used to fill forms (default: per-user state directory) |
-| `--browser-import <browser>[:<profile>]` | Copy data from your chrome, edge, brave, or firefox profile into the automated profile first |
+| `--browser-import <browser>[:<profile>]\|default\|auto` | Copy data from your chrome, edge, brave, chromium, or firefox profile into the automated profile first |
+| `--browser-import-scope <full\|domains>` | Import the whole profile, or only the registry's sign-in cookies (default: `full` for a named browser, `domains` otherwise) |
 | `--browser-attach snapshot[:<profile>]\|extension` | Fill forms in a temporary copy of your profile, or in your running browser through the Browser Commander extension |
 | `--browser-pref <key=value>` | Set a preference in the automated profile; may be repeated |
 | `--browser-restriction <name>` | Add a launch restriction or preset, such as `no-extensions`; may be repeated |
 | `--open-with <app>` | Open sign-in and approval URLs with this browser application instead of the default browser |
-| `--keep-session` | Keep the npm sign-in after a first publish, so the next package needs no new sign-in |
+| `--manual` | crates.io: create, use, and revoke the first-publish token by hand instead of through the crates.io API |
+| `--keep-session` | Keep the npm sign-in after a first publish, and the crates.io browser session of the automated profile, so the next package needs no new sign-in |
 | `--workflow <file>` | Trusted-publisher workflow in `.github/workflows`, when detection finds several or the wrong one |
 | `--environment <name>` | GitHub environment of the trusted publisher |
 
