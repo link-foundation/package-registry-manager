@@ -11,7 +11,10 @@
 // FAKE_REPO_TOKEN_NAMES (comma-separated repository secret names; default NPM_TOKEN),
 // FAKE_LEGACY_LOGIN=<n> (the first n web logins fall back to Username:), and
 // FAKE_EXPIRED_PUBLISH=<n> (the first n publish approvals expire), and
-// FAKE_PAGES=missing|legacy|workflow (the GitHub Pages site; default workflow).
+// FAKE_PAGES=missing|legacy|workflow (the GitHub Pages site; default workflow),
+// and FAKE_TRUST_GITHUB=fail (npm trust github fails). Like npm 11, npm trust
+// asks for a 2FA approval, and `npm trust list --json` holds its URL back, so
+// the approval expires and npm fails with E404.
 const fs = require("node:fs");
 const path = require("node:path");
 const tool = path.basename(__filename);
@@ -143,16 +146,28 @@ if (tool === "cargo") {
     fs.writeFileSync(credentials, '[registry]\ntoken = "cio-fake"\n');
   if (args[0] === "logout") fs.rmSync(credentials, { force: true });
 }
-if (tool === "npx") {
-  if (command.includes("trust github")) set("trusted", true);
-  if (command.includes("trust list") && flag("trusted"))
-    console.log(
-      JSON.stringify({
-        type: "github",
-        file: "release.yml",
-        repository: "acme/pipeline-app",
-      }),
+if (tool === "npx" && args.includes("trust")) {
+  if (args.includes("--json")) {
+    console.error("npm error code E404");
+    console.error(
+      "npm error 404 Not Found - GET https://registry.npmjs.org/-/v1/done?authId=fake",
     );
+    process.exit(1);
+  }
+  console.log("Authenticate your account at:");
+  console.log("https://www.npmjs.com/auth/cli/fake-trust");
+  if (command.includes("trust github")) {
+    if (process.env.FAKE_TRUST_GITHUB === "fail") process.exit(1);
+    set("trusted", true);
+    console.log(
+      "Trust configuration created successfully for pipeline-app with the following settings:",
+    );
+  }
+  if (command.includes("trust github") || flag("trusted"))
+    console.log(
+      "\ntype: \u001b[32mgithub\u001b[39m\nid: \u001b[32mfake-id\u001b[39m\nfile: \u001b[32mrelease.yml\u001b[39m\nrepository: \u001b[32macme/pipeline-app\u001b[39m\n",
+    );
+  else console.log("No trust configurations found for package (pipeline-app)");
 }
 if (tool === "git") {
   if (args[0] === "worktree" && args[1] === "add") {

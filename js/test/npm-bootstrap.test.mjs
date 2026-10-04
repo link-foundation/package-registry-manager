@@ -139,7 +139,7 @@ test("plans a bootstrap for a package missing from npm", async () => {
     "trust",
     "list",
     "pipeline-app",
-    "--json",
+    "--browser=false",
   ]);
   assert.deepEqual(argv(plan, "sign-out"), ["npm", "logout"]);
 });
@@ -374,10 +374,9 @@ test(
       "npm login --auth-type=web --browser=false",
       "npm profile get --json",
       `npm publish ${destination}/pipeline-app-0.1.0.tgz --access public --auth-type=web --browser=false --provenance=false`,
-      "npx -y npm@^11.10 trust list pipeline-app --json",
+      "npx -y npm@^11.10 trust list pipeline-app --browser=false",
       "gh run list --repo acme/pipeline-app --workflow release.yml --limit 1 --json databaseId,conclusion,status,url",
       "npx -y npm@^11.10 trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false",
-      "npx -y npm@^11.10 trust list pipeline-app --json",
       "gh secret list --repo acme/pipeline-app --json name",
       "gh secret delete NPM_TOKEN --repo acme/pipeline-app",
       "npm logout",
@@ -395,6 +394,11 @@ test(
       lines.includes("Open https://www.npmjs.com/login?next=/login/cli/fake"),
     );
     assert.ok(lines.includes("Open https://www.npmjs.com/auth/cli/fake"));
+    assert.ok(
+      lines.includes("Open https://www.npmjs.com/auth/cli/fake-trust"),
+      "npm trust list's approval link is relayed (#24)",
+    );
+    assert.ok(lines.includes("  npm stored the trusted publisher."));
     assert.ok(
       lines.some((line) =>
         /^Sign in within about 5 minutes \(until \d\d:\d\d\)\.$/.test(line),
@@ -442,7 +446,9 @@ test(
       false,
     );
     assert.ok(
-      again.includes("npx -y npm@^11.10 trust list pipeline-app --json"),
+      again.includes(
+        "npx -y npm@^11.10 trust list pipeline-app --browser=false",
+      ),
     );
   },
 );
@@ -843,6 +849,53 @@ test(
     assert.ok(
       lines.some((line) => line.includes("E404/invalid-publisher")),
       lines.join("\n"),
+    );
+  },
+);
+
+test("reads trusted publishers from npm trust list output (#24)", async () => {
+  const { listsTrustedPublisher } = await import("../src/setup.mjs");
+  const human =
+    "Authenticate your account at:\nhttps://www.npmjs.com/auth/cli/x\n\ntype: \u001b[32mgithub\u001b[39m\nid: \u001b[32m5c6fb388\u001b[39m\nfile: \u001b[32mrelease.yml\u001b[39m\n";
+  assert.equal(listsTrustedPublisher(human), true);
+  assert.equal(listsTrustedPublisher('{"type":"github","file":"a.yml"}'), true);
+  assert.equal(
+    listsTrustedPublisher(
+      "Authenticate your account at:\nhttps://www.npmjs.com/auth/cli/x\nNo trust configurations found for package (a)\n",
+    ),
+    false,
+  );
+  assert.equal(listsTrustedPublisher(""), false);
+});
+
+test(
+  "signs out and removes the worktree when a middle step fails (#24)",
+  POSIX_ONLY,
+  async () => {
+    await freshState();
+    const plan = await npmPlan(missing);
+    const registry = (url) =>
+      url.endsWith("/pipeline-app/0.1.0") ? { version: "0.1.0" } : null;
+    // npm trust github fails, so verify-trusted-publisher throws.
+    const error = await withEnv({ FAKE_TRUST_GITHUB: "fail" }, () =>
+      runWithFakeTools(plan, registry).catch((failure) => failure),
+    );
+    assert.match(
+      error.message,
+      /npm does not list a trusted publisher for the package/,
+    );
+    const commands = (await readLog(process.env.FAKE_STATE)).map((entry) =>
+      entry.argv.join(" "),
+    );
+    const failed = commands.lastIndexOf(
+      "npx -y npm@^11.10 trust list pipeline-app --browser=false",
+    );
+    assert.deepEqual(commands.slice(failed + 1, failed + 2), ["npm logout"]);
+    assert.match(commands[failed + 2], /^git worktree remove --force /);
+    const worktree = commands[failed + 2].split(" ")[4];
+    await assert.rejects(
+      stat(path.dirname(worktree)),
+      "temporary files are removed",
     );
   },
 );
