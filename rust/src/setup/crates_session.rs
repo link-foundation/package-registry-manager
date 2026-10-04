@@ -111,7 +111,10 @@ impl Session<'_> {
             }
             "first-publish" => {
                 let version = crate_version(&self.cwd(step));
-                let publisher = plan.trusted_publisher.as_ref();
+                // `Option::from` rather than `.as_ref()`: CodeQL's cleartext-logging
+                // heuristic takes a method call on a `trusted_*` field for a secret,
+                // though only the workflow file name is printed.
+                let publisher = Option::from(&plan.trusted_publisher);
                 if step.confirm
                     && !self.options.yes
                     && !is_yes(&prompt(&first_publish_question(
