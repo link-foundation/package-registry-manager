@@ -186,7 +186,7 @@ fn release_workflow_jobs_have_explicit_timeouts() {
         ("build", 10),
         ("auto-release", 60),
         ("manual-release", 60),
-        ("javascript-release", 15),
+        ("javascript-release", 25),
         ("docker-publish", 60),
         ("docker-merge-manifest", 10),
         ("changelog-pr", 10),

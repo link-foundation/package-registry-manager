@@ -9,6 +9,7 @@ use package_registry_manager::browser_options::{
     BrowserArgs, BrowserOptions, ImportSource,
 };
 use package_registry_manager::profile::default_browser_profile;
+use package_registry_manager::sign_in_import::import_sources;
 use serde_json::json;
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -126,20 +127,24 @@ fn attaches_to_a_snapshot_of_the_users_own_profile() {
 
 #[test]
 fn rejects_invalid_or_conflicting_browser_options() {
+    let import_error = format!(
+        "--browser-import must be <{}>[:profile], default, or auto",
+        import_sources().join("|")
+    );
     let cases: Vec<(BrowserArgs, &str)> = vec![
         (
             BrowserArgs {
                 import: Some("safari".to_owned()),
                 ..BrowserArgs::default()
             },
-            "--browser-import must be <chrome|edge|brave|chromium|firefox>[:profile], default, or auto",
+            &import_error,
         ),
         (
             BrowserArgs {
                 import: Some("chrome:".to_owned()),
                 ..BrowserArgs::default()
             },
-            "--browser-import must be <chrome|edge|brave|chromium|firefox>[:profile], default, or auto",
+            &import_error,
         ),
         (
             BrowserArgs {

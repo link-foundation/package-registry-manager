@@ -48,6 +48,11 @@ mod rust_paths;
 /// that the contact address in the `User-Agent` be reachable.
 const USER_AGENT: &str = "rust-script-wait-for-crate (+https://github.com/link-foundation/rust-ai-driven-development-pipeline-template)";
 
+/// Every probe asks for a fresh answer, so a CDN copy of the sparse index file
+/// fetched before the publish cannot keep reporting the old version list
+/// (package-registry-manager#28).
+const CACHE_CONTROL: &str = "no-cache";
+
 /// What a crates.io probe actually established.
 ///
 /// A bare `bool` cannot carry the difference between "crates.io said this
@@ -217,6 +222,7 @@ fn failure_message(
 fn check_index(crate_name: &str, version: &str) -> Visibility {
     match ureq::get(&index_url(crate_name))
         .set("User-Agent", USER_AGENT)
+        .set("Cache-Control", CACHE_CONTROL)
         .call()
     {
         Ok(response) => {
@@ -233,6 +239,7 @@ fn check_index(crate_name: &str, version: &str) -> Visibility {
 fn check_api(crate_name: &str, version: &str) -> Visibility {
     match ureq::get(&api_url(crate_name, version))
         .set("User-Agent", USER_AGENT)
+        .set("Cache-Control", CACHE_CONTROL)
         .call()
     {
         Ok(response) => classify_api_status(response.status()),
@@ -353,7 +360,7 @@ mod tests {
     use super::{
         api_url, classify_api_status, classify_index_response, combine, failure_message,
         index_body_has_version, index_path, index_url, should_skip_crate_wait, Visibility,
-        USER_AGENT,
+        CACHE_CONTROL, USER_AGENT,
     };
 
     #[test]
@@ -399,6 +406,11 @@ mod tests {
             USER_AGENT.contains("+https://"),
             "crates.io asks that clients be reachable"
         );
+    }
+
+    #[test]
+    fn probes_bypass_cached_answers() {
+        assert_eq!(CACHE_CONTROL, "no-cache");
     }
 
     #[test]

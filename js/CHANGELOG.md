@@ -35,6 +35,7 @@ currently shares its release version with the Rust implementation.
   outside any repository (`~/Library/Application Support` on macOS,
   `$XDG_STATE_HOME` or `~/.local/state` on Linux, `%LOCALAPPDATA%` on Windows,
   each followed by `package-registry-manager/browser-profile`) (#8).
+- `browser-commander` is required at `^0.22.0`, its latest release (#28).
 
 ### Fixed
 

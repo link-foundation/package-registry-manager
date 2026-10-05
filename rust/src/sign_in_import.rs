@@ -25,8 +25,8 @@ const SOURCE_NAMES: [(&str, &str); 5] = [
     ("firefox", "Firefox"),
 ];
 
-/// Every browser `--browser-import` can read, from Browser Commander. Safari,
-/// Opera, Vivaldi, and Arc follow once Browser Commander reads them
+/// Every browser `--browser-import` can read, from Browser Commander. Safari
+/// follows once Browser Commander reads it
 /// (link-foundation/browser-commander#114).
 #[must_use]
 pub fn import_sources() -> Vec<&'static str> {

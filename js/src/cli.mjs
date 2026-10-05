@@ -1,19 +1,21 @@
 #!/usr/bin/env node
 
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { parseBrowserOptions } from "./browser-options.mjs";
+import { isDirectExecution } from "./direct-execution.mjs";
 import { inspectRepository } from "./discovery.mjs";
 import { parseRegistry } from "./model.mjs";
 import { buildPlans } from "./plan.mjs";
 import { probeEnvironment, renderPrerequisites } from "./prerequisites.mjs";
 import { probeRegistryState } from "./registry-state.mjs";
 import { BROWSER_MODES, defaultBrowserProfile, executePlan } from "./setup.mjs";
+
+export { isDirectExecution };
 
 const HELP = `Usage: package-registry-manager-js [global options] <command>
 
@@ -419,22 +421,6 @@ function outputPlans(plans, format) {
 function packageVersion() {
   const manifest = new URL("../package.json", import.meta.url);
   return JSON.parse(readFileSync(manifest, "utf8")).version;
-}
-
-/**
- * Whether this module is the program node started. npm, npx, and global
- * installs start bins through a symlink in node_modules/.bin, while
- * import.meta.url names the real file, so both sides are resolved first.
- */
-export function isDirectExecution(moduleUrl, entryPath) {
-  if (!entryPath) {
-    return false;
-  }
-  try {
-    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(entryPath);
-  } catch {
-    return false;
-  }
 }
 
 if (isDirectExecution(import.meta.url, process.argv[1])) {
