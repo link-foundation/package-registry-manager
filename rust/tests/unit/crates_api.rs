@@ -329,8 +329,8 @@ async fn stops_before_publishing_when_crates_io_creates_no_token() {
             .contains("crate scope is invalid); nothing was published"),
         "{error}"
     );
-    assert!(host.envs.is_empty());
-    assert!(host.calls.is_empty());
+    assert_eq!(host.envs, Vec::<BTreeMap<String, String>>::new());
+    assert_eq!(host.calls, Vec::<String>::new());
 }
 
 #[tokio::test]
