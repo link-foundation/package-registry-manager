@@ -77,7 +77,7 @@ fn base_plan(inspection: &Inspection, package: &Package, steps: Vec<SetupStep>) 
         steps,
         mode: None,
         prerequisites: Vec::new(),
-        trusted_publisher: None,
+        oidc_publisher: None,
         skipped_reason: None,
     }
 }
@@ -239,7 +239,7 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
     plan.mode = mode;
     plan.prerequisites = plan_prerequisites(&plan, options.environment.as_ref(), &options.browser);
     if let (Some((owner, name)), Some(workflow), true) = (owner_repo, workflow, trusted) {
-        plan.trusted_publisher = Some(TrustedPublisherPrefill {
+        plan.oidc_publisher = Some(TrustedPublisherPrefill {
             provider: "github-actions".to_owned(),
             organization: owner.to_owned(),
             repository: name.to_owned(),

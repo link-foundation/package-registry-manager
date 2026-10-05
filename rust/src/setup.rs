@@ -114,7 +114,7 @@ pub async fn execute_plan(plan: &SetupPlan, options: &ExecuteOptions<'_>) -> Res
     let result = session.run().await;
     session.cleanup().await;
     result?;
-    if let Some(prefill) = &plan.trusted_publisher {
+    if let Some(prefill) = &plan.oidc_publisher {
         println!("\n{}", oidc_release_note(&prefill.workflow));
     }
     Ok(())
@@ -638,7 +638,7 @@ impl<'a> Session<'a> {
             }
         }
         let fill =
-            PREFILLED_FORMS.contains(&step.id.as_str()) && self.plan.trusted_publisher.is_some();
+            PREFILLED_FORMS.contains(&step.id.as_str()) && self.plan.oidc_publisher.is_some();
         self.open(step.url.as_deref().unwrap_or_default(), fill)
             .await?;
         if fill && self.browser.is_some() {
@@ -652,7 +652,7 @@ impl<'a> Session<'a> {
     }
 
     async fn prefill(&self) -> Result<()> {
-        let (Some(browser), Some(prefill)) = (&self.browser, &self.plan.trusted_publisher) else {
+        let (Some(browser), Some(prefill)) = (&self.browser, &self.plan.oidc_publisher) else {
             return Ok(());
         };
         prompt("Press Enter when the form is visible...")?;

@@ -536,7 +536,7 @@ fn output_plans(plans: &[SetupPlan], format: OutputFormat) -> Result<()> {
                 if let Some(reason) = &plan.skipped_reason {
                     writeln!(output, "  skipped: {reason}")?;
                 }
-                if let Some(publisher) = &plan.trusted_publisher {
+                if let Some(publisher) = &plan.oidc_publisher {
                     let jobs = trusted_jobs(&plan.package, &publisher.workflow);
                     writeln!(
                         output,

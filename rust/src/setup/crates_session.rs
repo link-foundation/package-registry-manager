@@ -111,10 +111,7 @@ impl Session<'_> {
             }
             "first-publish" => {
                 let version = crate_version(&self.cwd(step));
-                // `Option::from` rather than `.as_ref()`: CodeQL's cleartext-logging
-                // heuristic takes a method call on a `trusted_*` field for a secret,
-                // though only the workflow file name is printed.
-                let publisher = Option::from(&plan.trusted_publisher);
+                let publisher = plan.oidc_publisher.as_ref();
                 if step.confirm
                     && !self.options.yes
                     && !is_yes(&prompt(&first_publish_question(
@@ -134,7 +131,7 @@ impl Session<'_> {
                 }
             }
             "attach-trusted-publisher" => {
-                let Some(publisher) = &plan.trusted_publisher else {
+                let Some(publisher) = &plan.oidc_publisher else {
                     println!(
                         "  No GitHub repository or release workflow is known, so the trusted publisher is configured in the form."
                     );
