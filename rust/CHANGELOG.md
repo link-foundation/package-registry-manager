@@ -69,6 +69,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.22.1] - 2026-10-05
+
+### Fixed
+- The release workflow no longer fails after a successful `npm publish` because the new version was not visible yet: every `npm view` lookup uses `--prefer-online` instead of npm's cached pre-publish packument, the wait grows to about 11 minutes with backoff, and if the version is still not visible the job ends with a warning and `published=true`. The crates.io wait sends `Cache-Control: no-cache` with each probe (#28)
+
+### Changed
+- `browser-commander` is required at `0.15.0`, its latest release. `--browser-import` now accepts every browser it reads cookies from, including Chrome and Edge channels, Opera, Vivaldi, Arc, Yandex, and Firefox forks (#28)
+
 ## [0.22.0] - 2026-10-05
 
 ### Added
