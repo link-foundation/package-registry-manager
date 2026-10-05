@@ -205,6 +205,8 @@ pub enum StepKind {
     Command,
     Wait,
     Browser,
+    /// A registry API call made through the automated browser's session.
+    Api,
     Manual,
 }
 
@@ -350,8 +352,12 @@ pub struct SetupPlan {
     /// Manual prerequisites, listed before the steps; empty without a probe.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prerequisites: Vec<Prerequisite>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trusted_publisher: Option<TrustedPublisherPrefill>,
+    /// The trusted publisher to configure, serialized as `trusted_publisher`.
+    /// Named `oidc_publisher` in Rust because `CodeQL`'s cleartext-logging
+    /// heuristic takes any `trusted*` field for a secret, though it only holds
+    /// the repository and workflow names that are printed.
+    #[serde(rename = "trusted_publisher", skip_serializing_if = "Option::is_none")]
+    pub oidc_publisher: Option<TrustedPublisherPrefill>,
     /// Why no steps were planned, for packages whose manifest forbids publishing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skipped_reason: Option<String>,

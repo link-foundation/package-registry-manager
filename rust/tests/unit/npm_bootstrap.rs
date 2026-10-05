@@ -195,9 +195,13 @@ fn never_reads_writes_or_requests_an_npm_token() {
     .map(|pattern| Regex::new(pattern).expect("pattern"));
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for directory in [root.join("src"), root.join("../js/src")] {
-        for entry in fs::read_dir(&directory).expect("read sources") {
-            let path = entry.expect("source entry").path();
-            let contents = fs::read_to_string(&path).expect("read source");
+        for entry in walkdir::WalkDir::new(&directory) {
+            let entry = entry.expect("source entry");
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let contents = fs::read_to_string(path).expect("read source");
             for pattern in &forbidden {
                 assert!(
                     !pattern.is_match(&contents),

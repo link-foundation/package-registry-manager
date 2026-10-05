@@ -29,6 +29,9 @@ pub struct PlanOptions {
     pub workflow: Option<String>,
     /// GitHub environment of the trusted publisher, overriding the detected one.
     pub publisher_environment: Option<String>,
+    /// crates.io: keep the manual first-publish token checklist instead of
+    /// the crates.io API (`--manual`).
+    pub manual: bool,
 }
 
 /// Build setup plans for every publishable package found during inspection.
@@ -74,7 +77,7 @@ fn base_plan(inspection: &Inspection, package: &Package, steps: Vec<SetupStep>) 
         steps,
         mode: None,
         prerequisites: Vec::new(),
-        trusted_publisher: None,
+        oidc_publisher: None,
         skipped_reason: None,
     }
 }
@@ -206,6 +209,7 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
             .environment
             .as_ref()
             .map(|environment| environment.trust_npm.as_str()),
+        manual: options.manual,
     };
     let flow = match package.registry {
         Registry::Npm => npm_flow,
@@ -235,7 +239,7 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
     plan.mode = mode;
     plan.prerequisites = plan_prerequisites(&plan, options.environment.as_ref(), &options.browser);
     if let (Some((owner, name)), Some(workflow), true) = (owner_repo, workflow, trusted) {
-        plan.trusted_publisher = Some(TrustedPublisherPrefill {
+        plan.oidc_publisher = Some(TrustedPublisherPrefill {
             provider: "github-actions".to_owned(),
             organization: owner.to_owned(),
             repository: name.to_owned(),

@@ -19,6 +19,7 @@ import {
   withFreshLinks,
 } from "./approvals.mjs";
 import { connectAutomation } from "./automation.mjs";
+import { runCratesApiStep } from "./crates-api.mjs";
 import {
   detachedRunner,
   npmPrefillScript,
@@ -31,6 +32,7 @@ import { packageDirectory } from "./plan.mjs";
 import { twoFactorMode } from "./prerequisites.mjs";
 import { protectLegacyProfile } from "./profile.mjs";
 import { getJson, probePackage } from "./registry-state.mjs";
+import { launchBrowser, signInDomains } from "./sign-in-import.mjs";
 import { reportTokenSecrets, verifyTokenRevoked } from "./tokens.mjs";
 
 export { defaultBrowserProfile } from "./profile.mjs";
@@ -111,7 +113,7 @@ class SetupSession {
       this.conditions.add("trust-missing");
     }
     this.values = {};
-    this.automation = null;
+    this.automation = options.automation ?? null;
     this.temporary = null;
     this.shim = null;
   }
@@ -138,6 +140,11 @@ class SetupSession {
       if (step.id === "sign-out" && this.keepsSession(step)) {
         console.log(
           "Keeping the npm session (--keep-session): its token stays in npm's user configuration until you run npm logout, and the next run reuses it while npm whoami succeeds.",
+        );
+      } else if (this.conditions.has(step.when) && step.kind === "api") {
+        this.log(`==> ${step.title}`);
+        await runCratesApiStep(this, step).catch((error) =>
+          console.error(`warning: ${step.id} failed: ${error.message}`),
         );
       } else if (this.conditions.has(step.when)) {
         this.log(`==> ${step.title}`);
@@ -186,6 +193,8 @@ class SetupSession {
         return this.wait(step);
       case "browser":
         return this.browser(step);
+      case "api":
+        return runCratesApiStep(this, step);
       default:
         console.log(step.description);
         if (step.url) {
@@ -625,12 +634,34 @@ class SetupSession {
       }
       return;
     }
-    this.automation ??= await connectAutomation({
-      browser: this.options.browserOptions,
-      profile: this.options.browserProfile,
-      verbose: this.options.verbose,
-    });
-    await this.automation.goto(url);
+    await (await this.automatedPage()).goto(url);
+  }
+
+  /**
+   * The automated page, launched once. The crates.io sign-in step offers
+   * `--browser-import default|auto` itself, once it knows a sign-in is missing.
+   */
+  async automatedPage(browser = this.options.browserOptions) {
+    if (!this.automation) {
+      const domains = signInDomains(this.plan.registry);
+      this.automation = await connectAutomation({
+        browser: await launchBrowser(browser, domains, {
+          deferred: this.plan.registry === "crates-io",
+          verbose: this.options.verbose,
+        }),
+        profile: this.options.browserProfile,
+        verbose: this.options.verbose,
+        domains,
+      });
+    }
+    return this.automation;
+  }
+
+  /** Relaunches the automated browser with other options, such as an import. */
+  async reconnect(browser) {
+    await this.automation?.close();
+    this.automation = null;
+    return this.automatedPage(browser);
   }
 
   /**
@@ -687,9 +718,10 @@ class SetupSession {
     return result;
   }
 
-  async runProcess(step, mirror) {
+  /** Runs a step's command; `extra` is added to that child's environment only. */
+  async runProcess(step, mirror, extra = undefined) {
     const { command, cwd } = this.prepare(step);
-    let env = process.env;
+    let env = extra ? { ...process.env, ...extra } : process.env;
     const npm = ["npm", "npx"].includes(command.program);
     if (npm) {
       await this.detectDefaultBrowser();

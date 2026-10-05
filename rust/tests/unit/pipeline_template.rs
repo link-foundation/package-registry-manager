@@ -88,7 +88,7 @@ fn plans_no_actionable_steps_for_unpublishable_packages() {
         private.steps,
         [] as [package_registry_manager::SetupStep; 0]
     );
-    assert!(private.trusted_publisher.is_none());
+    assert!(private.oidc_publisher.is_none());
     assert_eq!(
         private.skipped_reason.as_deref(),
         Some("package.json marks this package as private")
@@ -102,7 +102,7 @@ fn plans_no_actionable_steps_for_unpublishable_packages() {
     assert_ne!(public.steps, [] as [package_registry_manager::SetupStep; 0]);
     assert_eq!(
         public
-            .trusted_publisher
+            .oidc_publisher
             .as_ref()
             .map(|publisher| publisher.workflow.as_str()),
         Some("release.yml")

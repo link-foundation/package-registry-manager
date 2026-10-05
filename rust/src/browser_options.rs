@@ -8,8 +8,17 @@ use browser_commander::browser::restrictions::{launch_restriction_presets, launc
 use regex::Regex;
 use serde_json::{Map, Value};
 
-/// Browsers whose profile `--browser-import` can migrate.
-pub const IMPORT_BROWSERS: [&str; 4] = ["chrome", "edge", "brave", "firefox"];
+use crate::sign_in_import::{import_sources, IMPORT_CHOICES};
+
+/// What `--browser-import` accepts: every browser Browser Commander reads,
+/// plus `default` and `auto`, which pick the source browser for the user (the
+/// sign-in import offer, the default browser first).
+#[must_use]
+pub fn import_browsers() -> Vec<&'static str> {
+    let mut browsers = import_sources();
+    browsers.extend(IMPORT_CHOICES);
+    browsers
+}
 /// How `--browser-attach` reaches the user's own browser.
 pub const ATTACH_MODES: [&str; 2] = ["snapshot", "extension"];
 
@@ -18,6 +27,16 @@ pub const ATTACH_MODES: [&str; 2] = ["snapshot", "extension"];
 pub struct ImportSource {
     pub browser: String,
     pub profile: Option<String>,
+}
+
+/// What `--browser-import` migrates.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ImportScope {
+    /// Only the cookies of the registry's sign-in domains.
+    #[default]
+    Domains,
+    /// The whole profile.
+    Full,
 }
 
 /// How `--browser-attach` fills forms in the user's own browser.
@@ -35,6 +54,8 @@ pub struct BrowserOptions {
     pub channel: String,
     pub executable: Option<PathBuf>,
     pub import: Option<ImportSource>,
+    /// What the import migrates (`--browser-import-scope`).
+    pub import_scope: ImportScope,
     pub attach: Option<AttachMode>,
     /// Preferences deep-merged into the profile, always a JSON object.
     pub preferences: Value,
@@ -47,6 +68,7 @@ impl Default for BrowserOptions {
             channel: "chrome".to_owned(),
             executable: None,
             import: None,
+            import_scope: ImportScope::Domains,
             attach: None,
             preferences: Value::Object(Map::new()),
             restrictions: Vec::new(),
@@ -68,6 +90,8 @@ pub struct BrowserArgs {
     pub channel: String,
     pub executable: Option<PathBuf>,
     pub import: Option<String>,
+    /// `--browser-import-scope`: `full` or `domains`.
+    pub import_scope: Option<String>,
     pub attach: Option<String>,
     pub preferences: Vec<String>,
     pub restrictions: Vec<String>,
@@ -81,6 +105,7 @@ impl Default for BrowserArgs {
             channel: "chrome".to_owned(),
             executable: None,
             import: None,
+            import_scope: None,
             attach: None,
             preferences: Vec::new(),
             restrictions: Vec::new(),
@@ -124,6 +149,10 @@ pub fn parse_browser_options(args: &BrowserArgs) -> Result<BrowserOptions> {
         import: given(&args.import)
             .map(|spec| parse_import(&spec))
             .transpose()?,
+        import_scope: parse_import_scope(
+            given(&args.import_scope).as_deref(),
+            given(&args.import).as_deref(),
+        )?,
         attach: given(&args.attach)
             .map(|spec| parse_attach(&spec))
             .transpose()?,
@@ -148,19 +177,46 @@ pub fn parse_browser_options(args: &BrowserArgs) -> Result<BrowserOptions> {
     Ok(options)
 }
 
-/// Parses `<chrome|edge|brave|firefox>[:profile]`.
+/// Parses `<browser>[:profile]`, `default`, or `auto`.
 pub fn parse_import(spec: &str) -> Result<ImportSource> {
     let (browser, profile) = match spec.split_once(':') {
         Some((browser, profile)) => (browser, Some(profile)),
         None => (spec, None),
     };
-    if !IMPORT_BROWSERS.contains(&browser) || profile == Some("") {
-        bail!("--browser-import must be <chrome|edge|brave|firefox>[:profile]");
+    let choice = IMPORT_CHOICES.contains(&browser);
+    if !import_browsers().contains(&browser) || profile == Some("") || (choice && profile.is_some())
+    {
+        bail!(
+            "--browser-import must be <{}>[:profile], default, or auto",
+            import_sources().join("|")
+        );
     }
     Ok(ImportSource {
         browser: browser.to_owned(),
         profile: profile.map(str::to_owned),
     })
+}
+
+/// Parses `--browser-import-scope`.
+///
+/// `full` migrates the whole profile and `domains` only the registry's
+/// sign-in cookies. Without it a named browser is migrated fully, as before,
+/// and `default`, `auto`, and the sign-in offer import only the sign-in
+/// domains.
+pub fn parse_import_scope(scope: Option<&str>, import: Option<&str>) -> Result<ImportScope> {
+    match scope {
+        None => {
+            let named = import.is_some_and(|spec| !IMPORT_CHOICES.contains(&spec));
+            Ok(if named {
+                ImportScope::Full
+            } else {
+                ImportScope::Domains
+            })
+        }
+        Some("domains") => Ok(ImportScope::Domains),
+        Some("full") => Ok(ImportScope::Full),
+        Some(_) => bail!("--browser-import-scope must be full or domains"),
+    }
 }
 
 /// Parses `snapshot`, `snapshot:<profile>`, or `extension`.

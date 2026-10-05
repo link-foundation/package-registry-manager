@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::model::{Inspection, Package, Registry};
 use crate::tokens::{token_state, TokenState};
@@ -244,6 +244,50 @@ impl RegistryClient {
                     eprintln!("GET {url} failed: {error}");
                 }
                 None
+            }
+        }
+    }
+
+    /// Call the crates.io API at `url` with `token`; status 0 when the request
+    /// failed. Only the method, URL, and status are traced, never the token.
+    pub async fn token_call(
+        &self,
+        method: &str,
+        url: &str,
+        token: &str,
+        body: Option<&Value>,
+    ) -> (u16, Value) {
+        let method = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or_default();
+        let mut request = self
+            .client
+            .request(method.clone(), url)
+            .timeout(Duration::from_secs(30))
+            .header("accept", "application/json")
+            .header("authorization", token);
+        if let Some(body) = body {
+            request = request
+                .header("content-type", "application/json")
+                .body(body.to_string());
+        }
+        match request.send().await {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                if self.verbose {
+                    eprintln!("{method} {url} -> {status}");
+                }
+                let body = response
+                    .bytes()
+                    .await
+                    .ok()
+                    .and_then(|body| serde_json::from_slice(&body).ok())
+                    .unwrap_or(Value::Null);
+                (status, body)
+            }
+            Err(error) => {
+                if self.verbose {
+                    eprintln!("{method} {url} failed: {error}");
+                }
+                (0, json!({ "errors": [{ "detail": error.to_string() }] }))
             }
         }
     }

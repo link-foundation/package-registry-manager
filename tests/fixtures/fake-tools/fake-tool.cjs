@@ -12,7 +12,10 @@
 // FAKE_LEGACY_LOGIN=<n> (the first n web logins fall back to Username:), and
 // FAKE_EXPIRED_PUBLISH=<n> (the first n publish approvals expire), and
 // FAKE_PAGES=missing|legacy|workflow (the GitHub Pages site; default workflow),
-// and FAKE_TRUST_GITHUB=fail (npm trust github fails). Like npm 11, npm trust
+// and FAKE_TRUST_GITHUB=fail (npm trust github fails), and
+// FAKE_CARGO_PUBLISH=fail (cargo publish fails). cargo records the
+// CARGO_REGISTRY_TOKEN of its environment, so a test can check which child
+// received the first-publish token. Like npm 11, npm trust
 // asks for a 2FA approval, and `npm trust list --json` holds its URL back, so
 // the approval expires and npm fails with E404.
 const fs = require("node:fs");
@@ -32,6 +35,9 @@ log({
   cwd: process.cwd(),
   shim: String(process.env.NODE_OPTIONS || "").includes("--require"),
   tty: Boolean(process.stdout.isTTY),
+  ...(tool === "cargo"
+    ? { registryToken: process.env.CARGO_REGISTRY_TOKEN ?? null }
+    : {}),
 });
 const command = args.join(" ");
 const sidecar = (tarball) => tarball + ".json";
@@ -145,6 +151,13 @@ if (tool === "cargo") {
   if (args[0] === "login")
     fs.writeFileSync(credentials, '[registry]\ntoken = "cio-fake"\n');
   if (args[0] === "logout") fs.rmSync(credentials, { force: true });
+  if (
+    command === "publish" &&
+    process.env.FAKE_CARGO_PUBLISH === "fail"
+  ) {
+    console.error("error: failed to publish to registry");
+    process.exit(101);
+  }
 }
 if (tool === "npx" && args.includes("trust")) {
   if (args.includes("--json")) {
@@ -172,7 +185,7 @@ if (tool === "npx" && args.includes("trust")) {
 if (tool === "git") {
   if (args[0] === "worktree" && args[1] === "add") {
     fs.mkdirSync(args[3], { recursive: true });
-    for (const entry of ["package.json", "bin"])
+    for (const entry of ["package.json", "Cargo.toml", "bin"])
       if (fs.existsSync(entry))
         fs.cpSync(entry, path.join(args[3], entry), { recursive: true });
   }

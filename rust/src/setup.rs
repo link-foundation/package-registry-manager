@@ -35,6 +35,8 @@ use crate::tokens::{
     cargo_home, read_cargo_token, report_token_secrets, TokenState, CRATES_TOKENS_URL,
 };
 
+mod crates_session;
+
 const PREFILLED_FORMS: [&str; 2] = ["configure-trusted-publisher", "create-pending-publisher"];
 const INTERACTIVE_CHECKS: [&str; 2] = ["check-trust", "verify-trusted-publisher"];
 /// Checks whose failure is an answer, so their output is not echoed.
@@ -112,7 +114,7 @@ pub async fn execute_plan(plan: &SetupPlan, options: &ExecuteOptions<'_>) -> Res
     let result = session.run().await;
     session.cleanup().await;
     result?;
-    if let Some(prefill) = &plan.trusted_publisher {
+    if let Some(prefill) = &plan.oidc_publisher {
         println!("\n{}", oidc_release_note(&prefill.workflow));
     }
     Ok(())
@@ -208,6 +210,12 @@ impl<'a> Session<'a> {
                 );
             } else if step.when.as_deref().is_some_and(|when| self.holds(when)) {
                 println!("==> {}", step.title);
+                if step.kind == StepKind::Api {
+                    if let Err(error) = self.api_step(step).await {
+                        eprintln!("warning: {} failed: {error:#}", step.id);
+                    }
+                    continue;
+                }
                 match self.run_process(step, true).await {
                     Ok(result) if result.code == 0 => {}
                     Ok(result) => eprintln!("warning: {} exited with {}", step.id, result.code),
@@ -242,6 +250,7 @@ impl<'a> Session<'a> {
             StepKind::Command => self.command(step).await,
             StepKind::Wait => self.wait(step).await,
             StepKind::Browser => self.browser_step(step).await,
+            StepKind::Api => self.api_step(step).await,
             StepKind::Manual => {
                 println!("{}", step.description);
                 if let Some(url) = &step.url {
@@ -629,7 +638,7 @@ impl<'a> Session<'a> {
             }
         }
         let fill =
-            PREFILLED_FORMS.contains(&step.id.as_str()) && self.plan.trusted_publisher.is_some();
+            PREFILLED_FORMS.contains(&step.id.as_str()) && self.plan.oidc_publisher.is_some();
         self.open(step.url.as_deref().unwrap_or_default(), fill)
             .await?;
         if fill && self.browser.is_some() {
@@ -643,7 +652,7 @@ impl<'a> Session<'a> {
     }
 
     async fn prefill(&self) -> Result<()> {
-        let (Some(browser), Some(prefill)) = (&self.browser, &self.plan.trusted_publisher) else {
+        let (Some(browser), Some(prefill)) = (&self.browser, &self.plan.oidc_publisher) else {
             return Ok(());
         };
         prompt("Press Enter when the form is visible...")?;
@@ -692,20 +701,7 @@ impl<'a> Session<'a> {
             }
             return Ok(());
         }
-        if self.browser.is_none() {
-            self.browser = Some(
-                Automation::connect(
-                    self.options.browser_options,
-                    self.options.browser_profile,
-                    self.options.verbose,
-                )
-                .await?,
-            );
-        }
-        if let Some(browser) = &mut self.browser {
-            browser.goto(url).await?;
-        }
-        Ok(())
+        self.automated().await?.goto(url).await
     }
 
     async fn open_with(&self, url: &str, app: &str) -> Result<()> {
@@ -797,14 +793,25 @@ impl<'a> Session<'a> {
     /// 5 minutes, so an npm step that ends on an expired link is run again for
     /// a fresh one.
     async fn run_process(&mut self, step: &SetupStep, mirror: bool) -> Result<CommandOutput> {
+        self.run_process_with(step, mirror, &BTreeMap::new()).await
+    }
+
+    /// [`Self::run_process`] with `extra` added to the child's environment
+    /// only, never to this process's.
+    async fn run_process_with(
+        &mut self,
+        step: &SetupStep,
+        mirror: bool,
+        extra: &BTreeMap<String, String>,
+    ) -> Result<CommandOutput> {
         let (command, cwd) = self.prepare(step)?;
         let npm = matches!(command.program.as_str(), "npm" | "npx");
         if !npm {
-            return self.run_once(&command, &cwd, mirror, false).await;
+            return self.run_once(&command, &cwd, mirror, false, extra).await;
         }
         self.detect_default_browser().await;
         for attempt in 1.. {
-            let result = self.run_once(&command, &cwd, mirror, true).await?;
+            let result = self.run_once(&command, &cwd, mirror, true, extra).await?;
             match next_link(&result, attempt, APPROVAL_ATTEMPTS)? {
                 Some(message) => println!("{message}"),
                 None => return Ok(result),
@@ -819,8 +826,9 @@ impl<'a> Session<'a> {
         cwd: &Path,
         mirror: bool,
         npm: bool,
+        extra: &BTreeMap<String, String>,
     ) -> Result<CommandOutput> {
-        let mut env = BTreeMap::new();
+        let mut env = extra.clone();
         if npm {
             if self.shim.is_none() {
                 self.shim = Some(write_tty_shim()?);

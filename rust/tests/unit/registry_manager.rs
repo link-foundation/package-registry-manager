@@ -84,7 +84,7 @@ fn npm_plan_prefills_trusted_publisher_from_repository() {
         .iter()
         .find(|plan| plan.registry == Registry::Npm)
         .expect("npm plan");
-    let publisher = npm.trusted_publisher.as_ref().expect("publisher prefill");
+    let publisher = npm.oidc_publisher.as_ref().expect("publisher prefill");
 
     assert_eq!(publisher.organization, "acme");
     assert_eq!(publisher.repository, "polyglot");
@@ -98,6 +98,23 @@ fn npm_plan_prefills_trusted_publisher_from_repository() {
     let script = npm_prefill_script(publisher, false).expect("build browser script");
     assert!(script.contains("publish.yml"));
     assert!(script.contains("shouldSubmit = false"));
+}
+
+#[test]
+fn plan_json_keeps_the_trusted_publisher_key() {
+    let (_temporary, root) = fixture();
+    let inspection = inspect_repository(&root).expect("inspect fixture");
+    let npm = build_plans(&inspection)
+        .into_iter()
+        .find(|plan| plan.registry == Registry::Npm)
+        .expect("npm plan");
+    let json = serde_json::to_value(&npm).expect("serialize plan");
+
+    assert_eq!(json["trusted_publisher"]["workflow"], "publish.yml");
+    assert!(json.get("oidc_publisher").is_none());
+    let parsed: package_registry_manager::model::SetupPlan =
+        serde_json::from_value(json).expect("parse plan");
+    assert_eq!(parsed.oidc_publisher, npm.oidc_publisher);
 }
 
 #[test]

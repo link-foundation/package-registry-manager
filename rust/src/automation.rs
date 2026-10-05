@@ -16,8 +16,9 @@ use browser_commander::{
 };
 use serde_json::{json, Value};
 
-use crate::browser_options::{snapshot_browser, AttachMode, BrowserOptions};
+use crate::browser_options::{snapshot_browser, AttachMode, BrowserOptions, ImportScope};
 use crate::profile::{default_browser_profile, ensure_profile_ignored};
+use crate::sign_in_import::IMPORT_CHOICES;
 
 /// How long `--browser-attach extension` waits for the extension to connect.
 pub const EXTENSION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -31,14 +32,18 @@ pub fn relay_extension_directory() -> Result<PathBuf> {
     ))
 }
 
-/// The `launch_real_browser` options for the automated browser: the dedicated
-/// profile by default, optionally seeded from a real profile. A snapshot
-/// launch leaves the profile to [`snapshot_options`].
+/// The `launch_real_browser` options for the automated browser.
+///
+/// The dedicated profile is used by default, optionally seeded from a real
+/// profile. A snapshot launch leaves the profile to [`snapshot_options`]. With the `domains`
+/// import scope only the cookies of `domains`, the registry's sign-in
+/// domains, are imported.
 #[must_use]
 pub fn launch_options(
     browser: &BrowserOptions,
     profile: &Path,
     verbose: bool,
+    domains: &[&str],
 ) -> RealBrowserOptions {
     let mut options = RealBrowserOptions::chromiumoxide()
         .channel(&browser.channel)
@@ -53,14 +58,52 @@ pub fn launch_options(
         return options;
     }
     options = options.user_data_dir(profile);
-    if let Some(source) = &browser.import {
+    // `default` and `auto` are resolved to an installed browser before launch.
+    if let Some(source) = browser
+        .import
+        .as_ref()
+        .filter(|source| !IMPORT_CHOICES.contains(&source.browser.as_str()))
+    {
         let mut migration = MigrationSource::new(&source.browser);
         if let Some(name) = &source.profile {
             migration = migration.profile(name);
         }
         options = options.migrate_from(migration);
+        if browser.import_scope == ImportScope::Domains && !domains.is_empty() {
+            options = options
+                .migrate_include(["cookies"])
+                .migrate_domains(domains.iter().copied());
+        }
     }
     options
+}
+
+/// The storage state that deletes every cookie of `domains` or their
+/// subdomains: the same cookies, empty and expired long ago.
+#[must_use]
+pub fn expired_cookies(state: &Value, domains: &[&str]) -> Value {
+    let cookies: Vec<Value> = state["cookies"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|cookie| {
+            let host = cookie["domain"].as_str().unwrap_or_default();
+            let host = host.strip_prefix('.').unwrap_or(host);
+            domains.iter().any(|domain| {
+                host == *domain
+                    || host
+                        .strip_suffix(domain)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+            })
+        })
+        .map(|cookie| {
+            let mut expired = cookie.clone();
+            expired["value"] = json!("");
+            expired["expires"] = json!(1.0);
+            expired
+        })
+        .collect();
+    json!({ "cookies": cookies, "origins": [] })
 }
 
 /// The profile `--browser-attach snapshot` copies, if requested.
@@ -99,12 +142,18 @@ pub enum Automation {
 
 #[allow(clippy::future_not_send)] // Browser Commander's native CDP adapter is intentionally !Sync.
 impl Automation {
-    /// Connects the browser that fills forms.
-    pub async fn connect(browser: &BrowserOptions, profile: &Path, verbose: bool) -> Result<Self> {
+    /// Connects the browser that fills forms; `domains` are the sign-in
+    /// domains a scoped import brings in.
+    pub async fn connect(
+        browser: &BrowserOptions,
+        profile: &Path,
+        verbose: bool,
+        domains: &[&str],
+    ) -> Result<Self> {
         if browser.attach == Some(AttachMode::Extension) {
             return connect_extension().await;
         }
-        let options = launch_options(browser, profile, verbose);
+        let options = launch_options(browser, profile, verbose, domains);
         if let Some(source) = snapshot_options(browser) {
             // Boxed: the launch future is large, and every step awaits it.
             let launched = Box::pin(launch_snapshot(source, options))
@@ -173,13 +222,34 @@ impl Automation {
         Ok(response["result"]["value"].clone())
     }
 
+    /// Removes the cookies of `domains` from a launched profile; returns
+    /// whether it could. The user's own browser is never touched.
+    pub async fn clear_cookies(&self, domains: &[&str]) -> Result<bool> {
+        let Some(launched) = self.launched() else {
+            return Ok(false);
+        };
+        let state = launched.page.export_storage_state().await?;
+        launched
+            .page
+            .restore_storage_state(expired_cookies(&state, domains))
+            .await?;
+        Ok(true)
+    }
+
     /// Detaches from the user's browser or closes the launched one.
     pub async fn close(self) {
-        if let Self::Extension { mut relay, session } = self {
-            if let Some(session) = session {
-                let _ = session.detach().await;
+        match self {
+            Self::Extension { mut relay, session } => {
+                if let Some(session) = session {
+                    let _ = session.detach().await;
+                }
+                relay.close().await;
             }
-            relay.close().await;
+            // Gracefully, so a relaunch can open the same profile again.
+            Self::Launched(launched) => {
+                let _ = launched.close().await;
+            }
+            Self::Snapshot(_) => {}
         }
     }
 }

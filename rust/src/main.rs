@@ -66,6 +66,11 @@ enum Commands {
         #[arg(long)]
         package: Option<String>,
 
+        /// crates.io: create, use, and revoke the first-publish token by hand
+        /// instead of through the crates.io API.
+        #[arg(long)]
+        manual: bool,
+
         #[command(flatten)]
         publisher: PublisherArgs,
     },
@@ -106,8 +111,14 @@ enum Commands {
         #[arg(long, value_name = "APP", conflicts_with = "no_browser")]
         open_with: Option<String>,
 
-        /// Stay signed in to npm after setup; the session token stays in npm's
-        /// user configuration until npm logout.
+        /// crates.io: create, use, and revoke the first-publish token by hand
+        /// instead of through the crates.io API.
+        #[arg(long)]
+        manual: bool,
+
+        /// Stay signed in after setup: npm keeps its session token in npm's
+        /// user configuration until npm logout; crates.io keeps only the
+        /// automated profile's browser session.
         #[arg(long)]
         keep_session: bool,
 
@@ -130,11 +141,17 @@ enum Commands {
         #[arg(long)]
         browser_profile: Option<PathBuf>,
 
-        /// Copy cookies, history, and other data from your chrome, edge,
-        /// brave, or firefox profile (`<browser>[:<profile>]`) into the
-        /// automated profile first.
-        #[arg(long, value_name = "BROWSER[:PROFILE]")]
+        /// Copy data from your chrome, edge, brave, chromium, or firefox
+        /// profile (`<browser>[:<profile>]`) into the automated profile first;
+        /// default takes the system default browser, auto the first browser
+        /// signed in to the registry.
+        #[arg(long, value_name = "BROWSER[:PROFILE]|default|auto")]
         browser_import: Option<String>,
+
+        /// Import the whole profile, or only the registry's sign-in cookies
+        /// (default: full for a named browser, domains otherwise).
+        #[arg(long, value_name = "full|domains")]
+        browser_import_scope: Option<String>,
 
         /// Fill forms in your own browser instead: snapshot[:<profile>]
         /// launches a temporary copy of your profile, extension drives your
@@ -242,6 +259,7 @@ async fn main() -> Result<()> {
             registry: _,
             verify_release,
             package,
+            manual,
             publisher,
         } => {
             let options = PlanOptions {
@@ -255,6 +273,7 @@ async fn main() -> Result<()> {
                     channel: "chrome".to_owned(),
                     ..BrowserDisplay::default()
                 },
+                manual,
             };
             let plans = filter_plans(
                 build_plans_with(&inspection, &selected, &options),
@@ -272,12 +291,14 @@ async fn main() -> Result<()> {
             yes,
             no_browser,
             open_with,
+            manual,
             keep_session,
             browser,
             browser_channel,
             browser_executable,
             browser_profile,
             browser_import,
+            browser_import_scope,
             browser_attach,
             browser_pref,
             browser_restriction,
@@ -290,6 +311,7 @@ async fn main() -> Result<()> {
                 channel: browser_channel,
                 executable: browser_executable,
                 import: browser_import,
+                import_scope: browser_import_scope,
                 attach: browser_attach,
                 preferences: browser_pref,
                 restrictions: browser_restriction,
@@ -308,6 +330,7 @@ async fn main() -> Result<()> {
                 endpoints,
                 environment: Some(environment),
                 browser: browser_display(no_browser, browser, &browser_options, &profile),
+                manual,
             };
             let plans = build_plans_with(&inspection, &selected, &options);
             let plan = select_plan(&plans, package.as_deref())?;
@@ -513,7 +536,7 @@ fn output_plans(plans: &[SetupPlan], format: OutputFormat) -> Result<()> {
                 if let Some(reason) = &plan.skipped_reason {
                     writeln!(output, "  skipped: {reason}")?;
                 }
-                if let Some(publisher) = &plan.trusted_publisher {
+                if let Some(publisher) = &plan.oidc_publisher {
                     let jobs = trusted_jobs(&plan.package, &publisher.workflow);
                     writeln!(
                         output,

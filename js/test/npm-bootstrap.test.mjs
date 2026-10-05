@@ -255,7 +255,12 @@ test("never reads, writes, or requests an npm token", async () => {
   ];
   for (const directory of ["../src", "../../rust/src"]) {
     const root = path.resolve(here, directory);
-    for (const name of await readdir(root)) {
+    const entries = await readdir(root, {
+      recursive: true,
+      withFileTypes: true,
+    });
+    for (const entry of entries.filter((item) => item.isFile())) {
+      const name = path.relative(root, path.join(entry.parentPath, entry.name));
       const contents = await readFile(path.join(root, name), "utf8");
       for (const pattern of forbidden) {
         assert.doesNotMatch(contents, pattern, `${directory}/${name}`);

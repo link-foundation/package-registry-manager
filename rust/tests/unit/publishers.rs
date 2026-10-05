@@ -123,7 +123,7 @@ fn finds_the_job_that_publishes_to_npm_through_a_script() {
     );
 
     let plans = build_plans_for(&inspection, &BTreeSet::from([Registry::Npm]));
-    let publisher = plans[0].trusted_publisher.as_ref().expect("publisher");
+    let publisher = plans[0].oidc_publisher.as_ref().expect("publisher");
     assert_eq!(
         (
             publisher.provider.as_str(),
@@ -169,7 +169,7 @@ fn never_falls_back_to_a_workflow_named_like_a_release() {
     assert_eq!(inspection.repository.release_workflow, None);
     assert_eq!(inspection.packages[0].workflow, None);
     let plans = build_plans_for(&inspection, &BTreeSet::from([Registry::Npm]));
-    assert!(plans[0].trusted_publisher.is_none());
+    assert!(plans[0].oidc_publisher.is_none());
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn stops_and_asks_when_several_workflows_publish() {
         },
     )[0];
     assert_eq!(chosen.skipped_reason, None);
-    let publisher = chosen.trusted_publisher.as_ref().expect("publisher");
+    let publisher = chosen.oidc_publisher.as_ref().expect("publisher");
     assert_eq!(publisher.workflow, "b.yml");
     assert_eq!(publisher.environment.as_deref(), Some("release"));
 }

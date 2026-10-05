@@ -50,9 +50,13 @@ Setup options:
   --open-with <app>               Open sign-in and approval pages in this
                                   application instead of the default browser,
                                   such as "Google Chrome" (macOS) or firefox
-  --keep-session                  Stay signed in to npm after setup; the
-                                  session token stays in npm's user
-                                  configuration until npm logout
+  --manual                        crates.io: create, use, and revoke the
+                                  first-publish token by hand instead of
+                                  through the crates.io API
+  --keep-session                  Stay signed in after setup: npm keeps its
+                                  session token in npm's user configuration
+                                  until npm logout; crates.io keeps only the
+                                  automated profile's browser session
   --browser <default|automated>   Open sign-in and approval pages in your
                                   default browser, or in the automated
                                   profile too (default: default)
@@ -63,10 +67,16 @@ Setup options:
                                   instead of the channel's
   --browser-profile <path>        Dedicated automation profile, used to fill
                                   forms (default: per-user state directory)
-  --browser-import <browser>[:<profile>]
-                                  Copy cookies, history, and other data from
-                                  your chrome, edge, brave, or firefox profile
-                                  into the automated profile first
+  --browser-import <browser>[:<profile>]|default|auto
+                                  Copy data from your chrome, edge, brave,
+                                  chromium, or firefox profile into the
+                                  automated profile first; default takes the
+                                  system default browser, auto the first
+                                  browser signed in to the registry
+  --browser-import-scope <full|domains>
+                                  Import the whole profile, or only the
+                                  registry's sign-in cookies (default: full
+                                  for a named browser, domains otherwise)
   --browser-attach <mode>         Fill forms in your own browser instead:
                                   snapshot[:<profile>] launches a temporary
                                   copy of your profile, extension drives your
@@ -100,11 +110,13 @@ export async function main(args = process.argv.slice(2)) {
       "no-browser": { type: "boolean", default: false },
       "open-with": { type: "string" },
       "keep-session": { type: "boolean", default: false },
+      manual: { type: "boolean", default: false },
       browser: { type: "string", default: "default" },
       "browser-channel": { type: "string", default: "chrome" },
       "browser-profile": { type: "string" },
       "browser-executable": { type: "string" },
       "browser-import": { type: "string" },
+      "browser-import-scope": { type: "string" },
       "browser-attach": { type: "string" },
       "browser-pref": { type: "string", multiple: true },
       "browser-restriction": { type: "string", multiple: true },
@@ -133,6 +145,7 @@ export async function main(args = process.argv.slice(2)) {
     channel: values["browser-channel"],
     executable: values["browser-executable"],
     importFrom: values["browser-import"],
+    importScope: values["browser-import-scope"],
     attach: values["browser-attach"],
     preferences: values["browser-pref"],
     restrictions: values["browser-restriction"],
@@ -168,6 +181,7 @@ export async function main(args = process.argv.slice(2)) {
   });
   const planOptions = {
     verifyRelease: values["verify-release"],
+    manual: values.manual,
     workflow: await workflowOverride(repository, values.workflow),
     publisherEnvironment: nonEmpty(values.environment, "--environment"),
     environment,

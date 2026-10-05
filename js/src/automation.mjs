@@ -9,6 +9,7 @@ import {
 
 import { snapshotBrowser } from "./browser-options.mjs";
 import { defaultBrowserProfile, ensureProfileIgnored } from "./profile.mjs";
+import { IMPORT_CHOICES, migrationFor } from "./sign-in-import.mjs";
 
 /** How long `--browser-attach extension` waits for the extension to connect. */
 export const EXTENSION_TIMEOUT_MS = 300_000;
@@ -21,9 +22,11 @@ export function relayExtensionDirectory() {
 /**
  * The `launchRealBrowser` options for the automated browser: the dedicated
  * profile by default, optionally seeded from a real profile, or a temporary
- * snapshot of the user's own profile with `--browser-attach snapshot`.
+ * snapshot of the user's own profile with `--browser-attach snapshot`. With
+ * the `domains` import scope only the cookies of `domains`, the registry's
+ * sign-in domains, are imported.
  */
-export function launchOptions(browser, profile, verbose = false) {
+export function launchOptions(browser, profile, verbose = false, domains = []) {
   const options = {
     engine: "playwright",
     channel: browser.channel,
@@ -48,11 +51,13 @@ export function launchOptions(browser, profile, verbose = false) {
     return options;
   }
   options.userDataDir = profile;
-  if (browser.import) {
-    options.migrateFrom = {
-      browser: browser.import.browser,
-      ...(browser.import.profile ? { profile: browser.import.profile } : {}),
-    };
+  // `default` and `auto` are resolved to an installed browser before launch.
+  if (browser.import && !IMPORT_CHOICES.includes(browser.import.browser)) {
+    options.migrateFrom = migrationFor(
+      browser.import,
+      browser.importScope ?? "full",
+      domains,
+    );
   }
   return options;
 }
@@ -68,9 +73,14 @@ export function extensionInstructions(directory) {
 
 /**
  * Connects the browser that fills forms and returns a page with `goto`,
- * `evaluate`, and `close`.
+ * `evaluate`, `close`, and, for a launched profile, `clearCookies(domains)`.
  */
-export async function connectAutomation({ browser, profile, verbose = false }) {
+export async function connectAutomation({
+  browser,
+  profile,
+  verbose = false,
+  domains = [],
+}) {
   if (browser.attach?.mode === "extension") {
     return connectExtension();
   }
@@ -78,12 +88,20 @@ export async function connectAutomation({ browser, profile, verbose = false }) {
     await ensureProfileIgnored(profile, { verbose });
   }
   const connection = await launchRealBrowser(
-    launchOptions(browser, profile, verbose),
+    launchOptions(browser, profile, verbose, domains),
   );
   return {
     goto: (url) => connection.page.goto(url),
     evaluate: (script) => connection.page.evaluate(script),
     close: () => connection.browser.close(),
+    async clearCookies(names) {
+      for (const name of names) {
+        const escaped = name.replaceAll(".", "\\.");
+        await connection.page
+          .context()
+          .clearCookies({ domain: new RegExp(`(?:^|\\.)${escaped}$`) });
+      }
+    },
   };
 }
 

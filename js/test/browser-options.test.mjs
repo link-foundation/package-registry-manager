@@ -23,6 +23,7 @@ test("keeps a fresh dedicated profile by default", () => {
     channel: "chrome",
     executable: null,
     import: null,
+    importScope: "domains",
     attach: null,
     preferences: {},
     restrictions: [],
