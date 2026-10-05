@@ -1276,7 +1276,9 @@ jobs:
       needs.javascript.result == 'success' &&
       (needs.auto-release.result == 'success' || needs.manual-release.result == 'success')
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # publish-to-npm.mjs waits about 11 minutes for the new version to appear
+    # on the registry before it settles for a warning (#28).
+    timeout-minutes: 25
     concurrency:
       group: ${{ github.workflow }}-main-write
       cancel-in-progress: false
