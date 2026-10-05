@@ -157,6 +157,8 @@ no extra switches. Every change to that is opt-in:
   dedicated profile before it starts, so registry sessions carry over without
   automating your real profile. `default` takes the system default browser
   and `auto` the first installed browser signed in to the registry.
+  The Rust CLI also accepts every other browser Browser Commander reads, such
+  as Opera, Vivaldi, Arc, and Firefox forks.
   `--browser-import-scope domains` imports only the cookies of the registry's
   sign-in domains (`crates.io` and `github.com` for crates.io, `npmjs.com`
   for npm, `pypi.org` and `github.com` for PyPI) instead of the whole profile;

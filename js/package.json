@@ -39,7 +39,7 @@
     "pack:check": "npm pack --dry-run"
   },
   "dependencies": {
-    "browser-commander": "^0.21.2",
+    "browser-commander": "^0.22.0",
     "command-stream": "^1.3.0",
     "playwright": "^1.63.0"
   },

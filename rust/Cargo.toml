@@ -36,7 +36,7 @@ lino-arguments = "0.3.0"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 anyhow = "1.0.104"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
-browser-commander = "0.14.1"
+browser-commander = "0.15.0"
 command-stream = "1.2.0"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
