@@ -71,6 +71,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.22.4] - 2026-10-06
+
+### Added
+
+- Select Firefox, its forks and Tor through `--browser-channel`: launchable
+  channels and aliases now follow Browser Commander's control protocol.
+  Firefox uses native WebDriver BiDi with the selected installed executable,
+  a separate dedicated profile, the shared npm/PyPI form scripts and async
+  crates.io page calls. Sign-in cookies import into Firefox without writing
+  the source profile and cleanup removes only the registry's domains.
+
+### Changed
+
+- Firefox imports default to the registry's sign-in domains. Unsupported full
+  migration, snapshot, preference and Chromium restriction options report their
+  capability limits before launching. Safari remains unavailable until its
+  upstream catalogue supplies a launch control protocol.
+- Update command-stream to the current releases in both ports, with the upstream
+  guarded-glob advisory exception and a bounded regression test.
+
 ## [0.22.3] - 2026-10-06
 
 ### Fixed
