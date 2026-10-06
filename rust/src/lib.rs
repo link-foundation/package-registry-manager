@@ -23,6 +23,7 @@ pub mod setup;
 pub mod sign_in_import;
 pub mod skips;
 pub mod tokens;
+mod webdriver_automation;
 pub mod workflows;
 
 pub use discovery::{inspect_repository, inspect_repository_with, InspectOptions};

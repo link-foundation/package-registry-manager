@@ -10,9 +10,11 @@ use browser_commander::browser::migration::MigrationSource;
 use browser_commander::browser::real_browser::{
     launch_real_browser, RealBrowserLaunchResult, RealBrowserOptions,
 };
+use browser_commander::browser::system_browser::assert_dedicated_user_data_dir;
 use browser_commander::{
-    launch_snapshot, write_extension_directory, ExtensionRelay, RelayOptions, RelaySession,
-    SnapshotLaunchResult, SnapshotOptions,
+    find_browser_source, launch_snapshot, write_extension_directory, EngineAdapter, EngineType,
+    ExtensionRelay, ManagedWebDriver, RelayOptions, RelaySession, SnapshotLaunchResult,
+    SnapshotOptions,
 };
 use serde_json::{json, Value};
 
@@ -45,11 +47,21 @@ pub fn launch_options(
     verbose: bool,
     domains: &[&str],
 ) -> RealBrowserOptions {
-    let mut options = RealBrowserOptions::chromiumoxide()
-        .channel(&browser.channel)
-        .headless(false)
-        .verbose(verbose)
-        .restrictions(browser.restrictions.iter().cloned());
+    let engine = if find_browser_source(&browser.channel)
+        .is_some_and(|source| source.control_protocol.as_deref() == Some("cdp"))
+    {
+        EngineType::Chromiumoxide
+    } else {
+        EngineType::Fantoccini
+    };
+    let mut options = RealBrowserOptions {
+        engine,
+        ..RealBrowserOptions::default()
+    }
+    .channel(&browser.channel)
+    .headless(false)
+    .verbose(verbose)
+    .restrictions(browser.restrictions.iter().cloned());
     if let Some(executable) = &browser.executable {
         options = options.executable_path(executable);
     }
@@ -134,6 +146,7 @@ pub fn extension_instructions(directory: &Path) -> String {
 pub enum Automation {
     Launched(Box<RealBrowserLaunchResult>),
     Snapshot(Box<SnapshotLaunchResult>),
+    WebDriver(Box<ManagedWebDriver>),
     Extension {
         relay: ExtensionRelay,
         session: Option<RelaySession>,
@@ -161,10 +174,25 @@ impl Automation {
                 .context("could not launch a snapshot of your browser profile")?;
             return Ok(Self::Snapshot(Box::new(launched)));
         }
+        if find_browser_source(&browser.channel)
+            .is_some_and(|source| source.control_protocol.as_deref() == Some("bidi"))
+        {
+            assert_dedicated_user_data_dir(profile)?;
+            ensure_profile_ignored(profile, verbose).await?;
+            let driver = Box::pin(crate::webdriver_automation::connect(options, domains))
+                .await
+                .with_context(|| {
+                    format!(
+                        "could not launch {} through WebDriver BiDi",
+                        browser.channel
+                    )
+                })?;
+            return Ok(Self::WebDriver(Box::new(driver)));
+        }
         ensure_profile_ignored(profile, verbose).await?;
         let launched = Box::pin(launch_real_browser(options))
             .await
-            .context("could not launch an installed Chrome-family browser")?;
+            .context("could not launch the selected installed browser")?;
         Ok(Self::Launched(Box::new(launched)))
     }
 
@@ -172,12 +200,15 @@ impl Automation {
         match self {
             Self::Launched(launched) => Some(launched),
             Self::Snapshot(launched) => Some(&launched.launch),
-            Self::Extension { .. } => None,
+            Self::Extension { .. } | Self::WebDriver(_) => None,
         }
     }
 
     /// Opens `url`; the extension opens a new tab first, then navigates it.
     pub async fn goto(&mut self, url: &str) -> Result<()> {
+        if let Self::WebDriver(driver) = self {
+            return Ok(driver.goto(url).await?);
+        }
         if let Some(launched) = self.launched() {
             launched.page.goto(url).await?;
             return Ok(());
@@ -196,6 +227,9 @@ impl Automation {
 
     /// Evaluates `script` in the page and returns its value.
     pub async fn evaluate(&self, script: &str) -> Result<Value> {
+        if let Self::WebDriver(driver) = self {
+            return Ok(driver.evaluate(script).await?);
+        }
         if let Some(launched) = self.launched() {
             return Ok(launched.page.evaluate(script).await?);
         }
@@ -225,6 +259,10 @@ impl Automation {
     /// Removes the cookies of `domains` from a launched profile; returns
     /// whether it could. The user's own browser is never touched.
     pub async fn clear_cookies(&self, domains: &[&str]) -> Result<bool> {
+        if let Self::WebDriver(driver) = self {
+            crate::webdriver_automation::clear_cookies(driver, domains).await?;
+            return Ok(true);
+        }
         let Some(launched) = self.launched() else {
             return Ok(false);
         };
@@ -248,6 +286,9 @@ impl Automation {
             // Gracefully, so a relaunch can open the same profile again.
             Self::Launched(launched) => {
                 let _ = launched.close().await;
+            }
+            Self::WebDriver(driver) => {
+                let _ = driver.close().await;
             }
             Self::Snapshot(_) => {}
         }

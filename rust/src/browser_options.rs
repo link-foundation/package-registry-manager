@@ -154,10 +154,17 @@ pub fn parse_browser_options(args: &BrowserArgs) -> Result<BrowserOptions> {
         import: given(&args.import)
             .map(|spec| parse_import(&spec))
             .transpose()?,
-        import_scope: parse_import_scope(
-            given(&args.import_scope).as_deref(),
-            given(&args.import).as_deref(),
-        )?,
+        import_scope: if given(&args.import_scope).is_none()
+            && find_browser_source(&args.channel)
+                .is_some_and(|source| source.control_protocol.as_deref() == Some("bidi"))
+        {
+            ImportScope::Domains
+        } else {
+            parse_import_scope(
+                given(&args.import_scope).as_deref(),
+                given(&args.import).as_deref(),
+            )?
+        },
         attach: given(&args.attach)
             .map(|spec| parse_attach(&spec))
             .transpose()?,
@@ -179,7 +186,35 @@ pub fn parse_browser_options(args: &BrowserArgs) -> Result<BrowserOptions> {
             "--browser-attach extension cannot be combined with --browser-executable, --browser-pref, or --browser-restriction"
         );
     }
+    validate_engine_options(&options)?;
     Ok(options)
+}
+
+fn validate_engine_options(options: &BrowserOptions) -> Result<()> {
+    if options.attach == Some(AttachMode::Extension)
+        || find_browser_source(&options.channel)
+            .is_some_and(|source| source.control_protocol.as_deref() == Some("cdp"))
+    {
+        return Ok(());
+    }
+    let capability = if options.attach.is_some() {
+        Some("snapshot attachment")
+    } else if !options.restrictions.is_empty() {
+        Some("Chromium launch restrictions")
+    } else if options.has_preferences() {
+        Some("profile preferences")
+    } else if options.import.is_some() && options.import_scope == ImportScope::Full {
+        Some("full-profile migration (use --browser-import-scope domains for sign-in cookies)")
+    } else {
+        None
+    };
+    if let Some(capability) = capability {
+        bail!(
+            "{} does not support {capability} through the published browser-commander launcher",
+            options.channel
+        );
+    }
+    Ok(())
 }
 
 /// Parses `<browser>[:profile]`, `default`, or `auto`.
