@@ -85,6 +85,14 @@ pub fn installed_browsers_with(
         "windows" => "win32",
         other => other,
     };
+    // Windows environment names are case insensitive, including in snapshots.
+    let windows_environment = (platform == "win32").then(|| {
+        environment
+            .iter()
+            .map(|(key, value)| (key.to_ascii_uppercase(), value.clone()))
+            .collect::<Environment>()
+    });
+    let environment = windows_environment.as_ref().unwrap_or(environment);
     browser_sources()
         .iter()
         .filter(|source| {

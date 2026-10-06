@@ -176,14 +176,15 @@ test("discovers macOS protected Safari roots and Windows roaming profiles", () =
     installedBrowsers({
       platform: "win32",
       homeDir: "C:\\Users\\test",
-      environment: { PROGRAMFILES: "D:\\Programs" },
+      environment: { ProgramFiles: "D:\\Programs", Path: "D:\\Browsers" },
       exists: (candidate) =>
         [
+          "D:\\Browsers\\vivaldi.exe",
           "D:\\Programs\\Naver\\Naver Whale\\Application\\whale.exe",
           "D:\\Programs\\360\\360se6\\360se.exe",
           "D:\\Programs\\Tencent\\QQBrowser\\QQBrowser.exe",
         ].includes(candidate),
     }),
-    ["whale", "360se", "qq"],
+    ["vivaldi", "whale", "360se", "qq"],
   );
 });

@@ -43,9 +43,24 @@ export function catalogueName(id) {
 /** Installed executables or existing profile roots; never reads cookie data. */
 export function installedBrowsers(options = {}) {
   const exists = options.exists ?? existsSync;
+  const platform = options.platform ?? process.platform;
+  const environment = options.environment ?? process.env;
+  const discovery = {
+    ...options,
+    platform,
+    environment:
+      platform === "win32"
+        ? Object.fromEntries(
+            Object.entries(environment).map(([key, value]) => [
+              key.toUpperCase(),
+              value,
+            ]),
+          )
+        : environment,
+  };
   return browserSources()
     .filter((source) =>
-      installedCandidates(source, options).some((candidate) =>
+      installedCandidates(source, discovery).some((candidate) =>
         exists(candidate),
       ),
     )

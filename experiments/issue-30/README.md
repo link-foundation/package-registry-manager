@@ -18,6 +18,9 @@ names, help, snapshot selection, and diagnostics). Rust failed the Vivaldi name
 assertion: actual `vivaldi`, expected `Vivaldi`. The suites now also cover every
 upstream id/alias, operating-system identifiers, legacy identifiers, unsupported
 launch engines, and mocked executable/profile discovery on all three platforms.
+The Windows discovery regression also verifies case-insensitive `ProgramFiles`
+and `Path` keys in environment snapshots; both ports missed those installations
+before key normalization.
 
 Initial CI run `37422894841`, created 2026-10-06T06:17:14Z for
 `9bf1c9fc838292011c4aad569d285beb73849caf`, failed the upstream dependency check.

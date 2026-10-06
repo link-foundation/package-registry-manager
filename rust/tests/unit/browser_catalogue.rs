@@ -159,9 +159,13 @@ fn discovers_executables_and_profile_roots_on_each_platform() {
         installed_browsers_with(
             "windows",
             r"C:\Users\test",
-            &HashMap::from([("PROGRAMFILES".to_owned(), r"D:\Programs".to_owned()),]),
+            &HashMap::from([
+                ("ProgramFiles".to_owned(), r"D:\Programs".to_owned()),
+                ("Path".to_owned(), r"D:\Browsers".to_owned()),
+            ]),
             |candidate| {
                 [
+                    Path::new(r"D:\Browsers\vivaldi.exe"),
                     Path::new(r"D:\Programs\Naver\Naver Whale\Application\whale.exe"),
                     Path::new(r"D:\Programs\360\360se6\360se.exe"),
                     Path::new(r"D:\Programs\Tencent\QQBrowser\QQBrowser.exe"),
@@ -169,6 +173,6 @@ fn discovers_executables_and_profile_roots_on_each_platform() {
                 .contains(&candidate)
             }
         ),
-        ["whale", "360se", "qq"]
+        ["vivaldi", "whale", "360se", "qq"]
     );
 }
