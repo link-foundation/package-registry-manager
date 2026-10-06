@@ -42,3 +42,12 @@ The Chrome parity smoke tests remain unchanged. Large validation and CI logs
 are saved locally outside Git. For small containers, disable Rust debug
 information and build with one job to compile chromiumoxide within memory:
 `CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0`.
+
+CI's upstream freshness check also required command-stream 1.6.2 (JS) and
+1.5.1 (Rust). The JS release introduces the unpatched braces advisory
+GHSA-vfj7-8cjw-p6xm through ShellJS/fast-glob, but guards that path before
+recursive parsing. We reuse upstream's single-advisory exception and audit
+wrapper. `dependency-security.test.mjs` verifies the installed guard with a
+finite input in a child limited to 64 MB of heap and 256 KB of stack; all
+other high/critical advisories and audit transport failures remain fatal.
+An attempted ShellJS downgrade broke startup and was discarded.

@@ -105,6 +105,7 @@ jobs:
         if: steps.dependency-graph.outputs.available == 'true'
         with:
           fail-on-severity: high
+          allow-ghsas: GHSA-vfj7-8cjw-p6xm # Mitigated by command-stream; see audit-ignore.txt.
           comment-summary-in-pr: on-failure
 
   # Terminal status gate (issue #156): GitHub reports jobs killed by

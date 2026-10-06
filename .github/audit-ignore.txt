@@ -1,0 +1,7 @@
+# braces has no patched release. command-stream 1.6.2 guards pattern length
+# and combined brace/parenthesis depth before ShellJS calls fast-glob.sync.
+# This application uses the process-runner API; no direct braces/fast-glob API.
+# js/test/dependency-security.test.mjs verifies the installed guard in a bounded
+# child. Remove this exception when a patched release becomes available.
+# Same exception as link-foundation/command-stream's upstream security workflow.
+GHSA-vfj7-8cjw-p6xm
