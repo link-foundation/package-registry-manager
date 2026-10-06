@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { exec } from "command-stream";
+import { findBrowserSource } from "browser-commander";
 
 const APPLICATION = "package-registry-manager";
 const PROFILE = "browser-profile";
@@ -17,20 +18,26 @@ export function defaultBrowserProfile({
   platform = process.platform,
   env = process.env,
   home = os.homedir(),
+  channel = "chrome",
 } = {}) {
+  const source = findBrowserSource(channel);
+  const profile =
+    source?.controlProtocol && source.controlProtocol !== "cdp"
+      ? `${PROFILE}-${source.id}`
+      : PROFILE;
   const join = platform === "win32" ? path.win32.join : path.posix.join;
   if (platform === "win32") {
     const base = env.LOCALAPPDATA || join(home, "AppData", "Local");
-    return join(base, APPLICATION, PROFILE);
+    return join(base, APPLICATION, profile);
   }
   if (platform === "darwin") {
-    return join(home, "Library", "Application Support", APPLICATION, PROFILE);
+    return join(home, "Library", "Application Support", APPLICATION, profile);
   }
   // The XDG specification ignores relative values.
   const state = path.posix.isAbsolute(env.XDG_STATE_HOME ?? "")
     ? env.XDG_STATE_HOME
     : join(home, ".local", "state");
-  return join(state, APPLICATION, PROFILE);
+  return join(state, APPLICATION, profile);
 }
 
 /** The profile location used before it moved out of the repository. */

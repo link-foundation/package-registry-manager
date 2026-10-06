@@ -227,7 +227,8 @@ export async function main(args = process.argv.slice(2)) {
     browser: values.browser,
     browserOptions,
     browserProfile: path.resolve(
-      values["browser-profile"] ?? defaultBrowserProfile(),
+      values["browser-profile"] ??
+        defaultBrowserProfile({ channel: browserOptions.channel }),
     ),
     verbose: values.verbose,
     verifyRelease: values["verify-release"],
@@ -273,7 +274,10 @@ function browserSummary(command, values, browserOptions) {
     channel: browserOptions.channel,
     profile:
       values.browser === "automated" && !browserOptions.attach
-        ? path.resolve(values["browser-profile"] ?? defaultBrowserProfile())
+        ? path.resolve(
+            values["browser-profile"] ??
+              defaultBrowserProfile({ channel: browserOptions.channel }),
+          )
         : undefined,
     import: browserOptions.import ?? undefined,
     attach: browserOptions.attach ?? undefined,

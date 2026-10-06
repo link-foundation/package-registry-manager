@@ -5,7 +5,10 @@ import {
   attachViaExtension,
   EXTENSION_DIRECTORY,
   launchRealBrowser,
+  findBrowserSource,
 } from "browser-commander";
+
+import { connectWebDriverAutomation } from "./webdriver-automation.mjs";
 
 import { snapshotBrowser } from "./browser-options.mjs";
 import { defaultBrowserProfile, ensureProfileIgnored } from "./profile.mjs";
@@ -28,7 +31,10 @@ export function relayExtensionDirectory() {
  */
 export function launchOptions(browser, profile, verbose = false, domains = []) {
   const options = {
-    engine: "playwright",
+    engine:
+      findBrowserSource(browser.channel)?.controlProtocol === "cdp"
+        ? "playwright"
+        : "selenium",
     channel: browser.channel,
     headless: false,
     verbose,
@@ -75,25 +81,29 @@ export function extensionInstructions(directory) {
  * Connects the browser that fills forms and returns a page with `goto`,
  * `evaluate`, `close`, and, for a launched profile, `clearCookies(domains)`.
  */
-export async function connectAutomation({
-  browser,
-  profile,
-  verbose = false,
-  domains = [],
-}) {
+export async function connectAutomation(
+  { browser, profile, verbose = false, domains = [] },
+  dependencies = {},
+) {
   if (browser.attach?.mode === "extension") {
     return connectExtension();
+  }
+  if (findBrowserSource(browser.channel)?.controlProtocol === "bidi") {
+    return connectWebDriverAutomation(
+      { browser, profile, verbose, domains },
+      dependencies,
+    );
   }
   if (!browser.attach) {
     await ensureProfileIgnored(profile, { verbose });
   }
-  const connection = await launchRealBrowser(
-    launchOptions(browser, profile, verbose, domains),
-  );
+  const connection = await (
+    dependencies.launchRealBrowser ?? launchRealBrowser
+  )(launchOptions(browser, profile, verbose, domains));
   return {
     goto: (url) => connection.page.goto(url),
     evaluate: (script) => connection.page.evaluate(script),
-    close: () => connection.browser.close(),
+    close: () => connection.close(),
     async clearCookies(names) {
       for (const name of names) {
         const escaped = name.replaceAll(".", "\\.");

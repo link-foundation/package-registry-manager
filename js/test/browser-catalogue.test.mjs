@@ -132,10 +132,10 @@ test("accepts every launchable id and alias and rejects unsupported engines", ()
       channel.toUpperCase(),
     );
   }
-  for (const channel of ["firefox", "librewolf", "safari", "duckduckgo"]) {
+  for (const channel of ["safari", "duckduckgo"]) {
     assert.throws(
       () => parseBrowserOptions({ channel }),
-      /real launcher does not support yet/,
+      /no launch control protocol/,
     );
   }
   assert.throws(
