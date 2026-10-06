@@ -6,7 +6,7 @@ tool does not upload package artifacts.
 
 ## Development Setup
 
-Install stable Rust, Node.js 22 or newer, and the Rust components used by CI:
+Install stable Rust, Node.js 22.13 or newer, and the Rust components used by CI:
 
 ```bash
 rustup component add rustfmt clippy

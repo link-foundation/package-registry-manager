@@ -1,22 +1,6 @@
 import { exec } from "command-stream";
 
-/**
- * Names of common browsers by macOS bundle id, Linux desktop entry, and
- * Windows URL ProgId, so the tool can say which browser it opened.
- */
-const KNOWN_BROWSERS = [
-  [/^com\.apple\.safari$|^SafariURL/i, "Safari"],
-  [/^com\.google\.chrome\.canary$/i, "Google Chrome Canary"],
-  [/^com\.google\.chrome$|google-chrome|^ChromeHTML$/i, "Google Chrome"],
-  [/^org\.chromium\.chromium$|chromium|^ChromiumHTM/i, "Chromium"],
-  [/^org\.mozilla\.firefox$|firefox|^FirefoxURL/i, "Firefox"],
-  [/^com\.microsoft\.edgemac$|microsoft-edge|^MSEdgeHTM$/i, "Microsoft Edge"],
-  [/^com\.brave\.browser$|brave-browser|^BraveHTML$/i, "Brave"],
-  [/^company\.thebrowser\.browser$/i, "Arc"],
-  [/^com\.operasoftware\.opera$|opera|^OperaStable$/i, "Opera"],
-  [/^com\.vivaldi\.vivaldi$|vivaldi|^VivaldiHTM/i, "Vivaldi"],
-  [/^IE\.HTTP/i, "Internet Explorer"],
-];
+import { browserSources, catalogueName } from "./browser-catalogue.mjs";
 
 /** The command that reports the default browser, as an exact argument vector. */
 export function defaultBrowserQuery(platform = process.platform) {
@@ -100,8 +84,40 @@ export function browserName(id) {
   if (!id) {
     return undefined;
   }
-  const known = KNOWN_BROWSERS.find(([pattern]) => pattern.test(id));
-  return known?.[1];
+  const needle = id.trim().toLowerCase();
+  const sources = browserSources();
+  const known =
+    sources.find((source) =>
+      Object.values(source.default ?? {})
+        .flat()
+        .some((candidate) => needle === candidate.toLowerCase()),
+    ) ??
+    sources.find(
+      (source) =>
+        (source.default?.win32 ?? []).some((candidate) =>
+          needle.startsWith(candidate.toLowerCase()),
+        ) ||
+        (needle.endsWith(".desktop") &&
+          (source.executableNames ?? []).some((name) =>
+            ["-", "_", "."].some((separator) =>
+              needle.startsWith(`${name.toLowerCase()}${separator}`),
+            ),
+          )),
+    );
+  if (known) {
+    return catalogueName(known.id);
+  }
+  // Legacy ProgIds absent from the upstream catalogue remain recognizable.
+  if (/^safariurl/i.test(id)) {
+    return catalogueName("safari");
+  }
+  if (/^chromiumhtm/i.test(id)) {
+    return catalogueName("chromium");
+  }
+  if (/^ie\.http/i.test(id)) {
+    return "Internet Explorer";
+  }
+  return undefined;
 }
 
 /**

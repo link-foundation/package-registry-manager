@@ -5,10 +5,9 @@
 // printed, logged, or cached: they are only counted.
 import * as commander from "browser-commander";
 
+import { catalogueName } from "./browser-catalogue.mjs";
 import { detectDefaultBrowser } from "./default-browser.mjs";
 
-/** Browser Commander's cookie sources, should a release stop exporting them. */
-const FALLBACK_SOURCES = ["chrome", "edge", "brave", "chromium", "firefox"];
 /** `--browser-import` values that pick the source browser for the user. */
 export const IMPORT_CHOICES = ["default", "auto"];
 /** `--browser-import-scope` values. */
@@ -21,22 +20,9 @@ export const SIGN_IN_DOMAINS = {
   pypi: ["pypi.org", "github.com"],
 };
 
-/** Display names of the source browsers, as the default-browser query names them. */
-const SOURCE_NAMES = {
-  chrome: "Google Chrome",
-  edge: "Microsoft Edge",
-  brave: "Brave",
-  chromium: "Chromium",
-  firefox: "Firefox",
-};
-
-/**
- * Every browser `--browser-import` can read, from Browser Commander. Safari,
- * Opera, Vivaldi, and Arc follow once Browser Commander reads them
- * (link-foundation/browser-commander#114).
- */
+/** Every import id from Browser Commander's public catalogue. */
 export function importSources() {
-  return [...(commander.SUPPORTED_COOKIE_BROWSERS ?? FALLBACK_SOURCES)];
+  return [...commander.BROWSER_IDS];
 }
 
 /** The sign-in domains of a registry, or none. */
@@ -46,15 +32,12 @@ export function signInDomains(registry) {
 
 /** The display name of a source browser. */
 export function sourceName(browser) {
-  return SOURCE_NAMES[browser] ?? browser;
+  return catalogueName(browser);
 }
 
 /** The source id of a default-browser display name, when it can be imported. */
 export function sourceId(displayName) {
-  const entry = Object.entries(SOURCE_NAMES).find(
-    ([, name]) => name === displayName,
-  );
-  return entry && importSources().includes(entry[0]) ? entry[0] : undefined;
+  return importSources().find((id) => sourceName(id) === displayName);
 }
 
 /**
@@ -87,7 +70,12 @@ export async function findSignInSources(domains, options = {}) {
   );
   const found = [];
   for (const browser of browsers) {
-    const profiles = await list({ browser }).catch(() => []);
+    const profiles = await list({ browser }).catch((error) => {
+      if (options.verbose) {
+        console.error(`could not list ${browser} profiles: ${error.message}`);
+      }
+      return [];
+    });
     for (const profile of profiles) {
       const matched = [];
       for (const domain of domains) {
@@ -171,15 +159,15 @@ export async function chooseSignInSource(sources, domains, ask, auto) {
  * Resolves `--browser-import default|auto` to an installed source browser:
  * the system default browser, or for `auto` the first browser with a
  * sign-in for `domains`. Throws when `default` names a browser Browser
- * Commander cannot read yet, such as Safari.
+ * Commander cannot identify.
  */
 export async function resolveImportChoice(choice, domains, options = {}) {
   const preferred = await defaultSource(options);
   if (choice === "default") {
     if (!preferred) {
       throw new Error(
-        "--browser-import default: the default browser cannot be imported yet (Browser Commander reads " +
-          `${importSources().join(", ")}; see link-foundation/browser-commander#114)`,
+        "--browser-import default: the default browser is unknown or cannot be imported (Browser Commander sources: " +
+          `${importSources().join(", ")})`,
       );
     }
     return { browser: preferred, profile: null };

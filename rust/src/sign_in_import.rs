@@ -7,30 +7,20 @@
 
 use anyhow::Result;
 use browser_commander::{
-    list_browser_profiles, read_browser_cookies, BrowserCookieReadOptions, BrowserProfile,
-    BrowserProfileOptions, SUPPORTED_COOKIE_BROWSERS,
+    browser_ids, list_browser_profiles, read_browser_cookies, BrowserCookieReadOptions,
+    BrowserProfile, BrowserProfileOptions,
 };
 
+use crate::browser_catalogue::catalogue_name;
 use crate::model::Registry;
 
 /// `--browser-import` values that pick the source browser for the user.
 pub const IMPORT_CHOICES: [&str; 2] = ["default", "auto"];
 
-/// Display names of the source browsers, as the default-browser query names them.
-const SOURCE_NAMES: [(&str, &str); 5] = [
-    ("chrome", "Google Chrome"),
-    ("edge", "Microsoft Edge"),
-    ("brave", "Brave"),
-    ("chromium", "Chromium"),
-    ("firefox", "Firefox"),
-];
-
-/// Every browser `--browser-import` can read, from Browser Commander. Safari
-/// follows once Browser Commander reads it
-/// (link-foundation/browser-commander#114).
+/// Every browser in Browser Commander's public source catalogue.
 #[must_use]
 pub fn import_sources() -> Vec<&'static str> {
-    SUPPORTED_COOKIE_BROWSERS.to_vec()
+    browser_ids()
 }
 
 /// The domains whose cookies hold a registry's sign-in, or none.
@@ -47,20 +37,15 @@ pub const fn sign_in_domains(registry: Registry) -> &'static [&'static str] {
 /// The display name of a source browser.
 #[must_use]
 pub fn source_name(browser: &str) -> &str {
-    SOURCE_NAMES
-        .iter()
-        .find(|(id, _)| *id == browser)
-        .map_or(browser, |(_, name)| name)
+    catalogue_name(browser)
 }
 
 /// The source id of a default-browser display name, when it can be imported.
 #[must_use]
 pub fn source_id(display_name: &str) -> Option<&'static str> {
-    SOURCE_NAMES
-        .iter()
-        .find(|(_, name)| *name == display_name)
-        .map(|(id, _)| *id)
-        .filter(|id| import_sources().contains(id))
+    import_sources()
+        .into_iter()
+        .find(|id| source_name(id) == display_name)
 }
 
 /// An installed browser profile that holds a sign-in.
@@ -114,7 +99,12 @@ pub fn find_sign_in_sources(
     browsers.sort_by_key(|browser| Some(*browser) != preferred);
     let mut found = Vec::new();
     for browser in browsers {
-        let profiles = stores.profiles(browser).unwrap_or_default();
+        let profiles = stores.profiles(browser).unwrap_or_else(|error| {
+            if verbose {
+                eprintln!("could not list {browser} profiles: {error:#}");
+            }
+            Vec::new()
+        });
         for profile in &profiles {
             let matched: Vec<String> = domains
                 .iter()
@@ -219,12 +209,11 @@ pub fn choose_sign_in_source(
     Ok(sources.into_iter().nth(index - 1))
 }
 
-/// The error of `--browser-import default` when the default browser cannot
-/// be read yet, such as Safari.
+/// The error of `--browser-import default` when the default browser is unknown.
 #[must_use]
 pub fn default_unreadable() -> String {
     format!(
-        "--browser-import default: the default browser cannot be imported yet (Browser Commander reads {}; see link-foundation/browser-commander#114)",
+        "--browser-import default: the default browser is unknown or cannot be imported (Browser Commander sources: {})",
         import_sources().join(", ")
     )
 }

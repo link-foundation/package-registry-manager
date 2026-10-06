@@ -5,9 +5,11 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use browser_commander::browser::restrictions::{launch_restriction_presets, launch_restrictions};
+use browser_commander::find_browser_source;
 use regex::Regex;
 use serde_json::{Map, Value};
 
+use crate::browser_catalogue::{installed_description, validate_channel};
 use crate::sign_in_import::{import_sources, IMPORT_CHOICES};
 
 /// What `--browser-import` accepts: every browser Browser Commander reads,
@@ -135,6 +137,9 @@ pub fn restriction_names() -> Vec<String> {
 /// a real profile into it, and `--browser-attach` uses the user's own browser
 /// instead, as a temporary snapshot or through the companion extension.
 pub fn parse_browser_options(args: &BrowserArgs) -> Result<BrowserOptions> {
+    if args.attach.as_deref() != Some("extension") {
+        validate_channel(&args.channel)?;
+    }
     let given = |value: &Option<String>| value.clone().filter(|value| !value.is_empty());
     let options = BrowserOptions {
         channel: args.channel.clone(),
@@ -184,15 +189,16 @@ pub fn parse_import(spec: &str) -> Result<ImportSource> {
         None => (spec, None),
     };
     let choice = IMPORT_CHOICES.contains(&browser);
-    if !import_browsers().contains(&browser) || profile == Some("") || (choice && profile.is_some())
-    {
+    let source = find_browser_source(browser);
+    if (!choice && source.is_none()) || profile == Some("") || (choice && profile.is_some()) {
         bail!(
-            "--browser-import must be <{}>[:profile], default, or auto",
-            import_sources().join("|")
+            "--browser-import must be <{}>[:profile], default, or auto. {}",
+            import_sources().join("|"),
+            installed_description()
         );
     }
     Ok(ImportSource {
-        browser: browser.to_owned(),
+        browser: source.map_or(browser, |source| &source.id).to_owned(),
         profile: profile.map(str::to_owned),
     })
 }
@@ -293,13 +299,7 @@ pub fn validate_restrictions(names: &[String]) -> Result<Vec<String>> {
 /// The installed browser a snapshot copies for a launch channel.
 #[must_use]
 pub fn snapshot_browser(channel: &str) -> &str {
-    if channel.starts_with("msedge") {
-        "edge"
-    } else if matches!(channel, "brave" | "chromium") {
-        channel
-    } else {
-        "chrome"
-    }
+    find_browser_source(channel).map_or(channel, |source| source.id.as_str())
 }
 
 /// Describes where forms are filled, for the browser prerequisite.

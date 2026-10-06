@@ -4,6 +4,7 @@ use browser_commander::browser::migration::MigrationSource;
 use package_registry_manager::automation::{
     extension_instructions, launch_options, relay_extension_directory, snapshot_options,
 };
+use package_registry_manager::browser_catalogue::installed_description;
 use package_registry_manager::browser_options::{
     automated_description, parse_browser_options, restriction_names, snapshot_browser, AttachMode,
     BrowserArgs, BrowserOptions, ImportSource,
@@ -105,7 +106,12 @@ fn imports_a_real_profile_into_the_dedicated_profile_on_request() {
 fn attaches_to_a_snapshot_of_the_users_own_profile() {
     for (channel, attach, browser, name) in [
         ("chrome", "snapshot", "chrome", "Default"),
-        ("msedge-beta", "snapshot:Profile 2", "edge", "Profile 2"),
+        (
+            "msedge-beta",
+            "snapshot:Profile 2",
+            "edge-beta",
+            "Profile 2",
+        ),
         ("brave", "snapshot", "brave", "Default"),
     ] {
         let parsed = parse_browser_options(&BrowserArgs {
@@ -122,19 +128,20 @@ fn attaches_to_a_snapshot_of_the_users_own_profile() {
         assert_eq!(options.user_data_dir, None, "a snapshot is temporary");
     }
     assert_eq!(snapshot_browser("chromium"), "chromium");
-    assert_eq!(snapshot_browser("msedge-canary"), "edge");
+    assert_eq!(snapshot_browser("msedge-canary"), "edge-canary");
 }
 
 #[test]
 fn rejects_invalid_or_conflicting_browser_options() {
     let import_error = format!(
-        "--browser-import must be <{}>[:profile], default, or auto",
-        import_sources().join("|")
+        "--browser-import must be <{}>[:profile], default, or auto. {}",
+        import_sources().join("|"),
+        installed_description()
     );
     let cases: Vec<(BrowserArgs, &str)> = vec![
         (
             BrowserArgs {
-                import: Some("safari".to_owned()),
+                import: Some("netscape".to_owned()),
                 ..BrowserArgs::default()
             },
             &import_error,

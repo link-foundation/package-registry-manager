@@ -1,48 +1,13 @@
 //! Names the user's default browser, so the tool can say where a link opened.
 
 use anyhow::{bail, Result};
+use browser_commander::browser_sources;
 use command_stream::StreamingRunner;
 use regex::Regex;
 
 use crate::auth_urls::resolve_program;
+use crate::browser_catalogue::catalogue_name;
 use crate::model::CommandSpec;
-
-/// Names of common browsers by macOS bundle id, Linux desktop entry, and
-/// Windows URL `ProgId`.
-const KNOWN_BROWSERS: [(&str, &str); 11] = [
-    (r"(?i)^com\.apple\.safari$|^SafariURL", "Safari"),
-    (r"(?i)^com\.google\.chrome\.canary$", "Google Chrome Canary"),
-    (
-        r"(?i)^com\.google\.chrome$|google-chrome|^ChromeHTML$",
-        "Google Chrome",
-    ),
-    (
-        r"(?i)^org\.chromium\.chromium$|chromium|^ChromiumHTM",
-        "Chromium",
-    ),
-    (
-        r"(?i)^org\.mozilla\.firefox$|firefox|^FirefoxURL",
-        "Firefox",
-    ),
-    (
-        r"(?i)^com\.microsoft\.edgemac$|microsoft-edge|^MSEdgeHTM$",
-        "Microsoft Edge",
-    ),
-    (
-        r"(?i)^com\.brave\.browser$|brave-browser|^BraveHTML$",
-        "Brave",
-    ),
-    (r"(?i)^company\.thebrowser\.browser$", "Arc"),
-    (
-        r"(?i)^com\.operasoftware\.opera$|opera|^OperaStable$",
-        "Opera",
-    ),
-    (
-        r"(?i)^com\.vivaldi\.vivaldi$|vivaldi|^VivaldiHTM",
-        "Vivaldi",
-    ),
-    (r"(?i)^IE\.HTTP", "Internet Explorer"),
-];
 
 fn spec(program: &str, args: &[&str]) -> CommandSpec {
     CommandSpec {
@@ -136,14 +101,46 @@ pub fn default_browser_id(output: &str, os: &str) -> Option<String> {
 /// A readable browser name for an id, or `None` when it is unknown.
 #[must_use]
 pub fn browser_name(id: &str) -> Option<&'static str> {
-    KNOWN_BROWSERS
+    let needle = id.trim().to_lowercase();
+    let sources = browser_sources();
+    let known = sources
         .iter()
-        .find(|(pattern, _)| {
-            Regex::new(pattern)
-                .expect("static pattern must compile")
-                .is_match(id)
+        .find(|source| {
+            source
+                .default
+                .values()
+                .flatten()
+                .any(|candidate| needle == candidate.to_lowercase())
         })
-        .map(|(_, name)| *name)
+        .or_else(|| {
+            sources.iter().find(|source| {
+                source
+                    .default
+                    .get("win32")
+                    .into_iter()
+                    .flatten()
+                    .any(|candidate| needle.starts_with(&candidate.to_lowercase()))
+                    || (needle.ends_with(".desktop")
+                        && source.executable_names.iter().any(|name| {
+                            ['-', '_', '.'].iter().any(|separator| {
+                                needle.starts_with(&format!("{}{separator}", name.to_lowercase()))
+                            })
+                        }))
+            })
+        });
+    if let Some(source) = known {
+        return Some(catalogue_name(&source.id));
+    }
+    // Preserve legacy ProgIds absent from the upstream catalogue.
+    if needle.starts_with("safariurl") {
+        Some(catalogue_name("safari"))
+    } else if needle.starts_with("chromiumhtm") {
+        Some(catalogue_name("chromium"))
+    } else if needle.starts_with("ie.http") {
+        Some("Internet Explorer")
+    } else {
+        None
+    }
 }
 
 /// Names the browser from the query's exit code and output on `os`.

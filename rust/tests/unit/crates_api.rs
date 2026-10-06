@@ -419,6 +419,7 @@ impl CookieStores for FakeStores {
                 display_name: String::new(),
                 path: format!("/{browser}/Default").into(),
                 is_default: true,
+                error: None,
             }]
         } else {
             Vec::new()
