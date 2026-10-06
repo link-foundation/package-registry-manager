@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { BROWSER_IDS, findBrowserSource } from "browser-commander";
 
@@ -73,7 +74,7 @@ test("preserves legacy and packaged default-browser identifiers", () => {
 test("lists all imports and supported launch channels in CLI help", () => {
   const help = execFileSync(
     process.execPath,
-    [new URL("../src/cli.mjs", import.meta.url).pathname, "--help"],
+    [fileURLToPath(new URL("../src/cli.mjs", import.meta.url)), "--help"],
     { encoding: "utf8" },
   );
   for (const id of [...BROWSER_IDS, ...launchChannels()]) {

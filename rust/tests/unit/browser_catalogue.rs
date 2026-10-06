@@ -154,7 +154,10 @@ fn discovers_executables_and_profile_roots_on_each_platform() {
         ),
         ["opera-gx"]
     );
-    assert!(installed_browsers_with("linux", "/users/test", &environment, |_| false).is_empty());
+    assert_eq!(
+        installed_browsers_with("linux", "/users/test", &environment, |_| false),
+        Vec::<&str>::new()
+    );
     assert_eq!(
         installed_browsers_with(
             "windows",

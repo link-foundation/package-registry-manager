@@ -45,6 +45,18 @@ CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
   cargo test --manifest-path rust/Cargo.toml --all-targets
 ```
 
+CI run `37426694996`, created 2026-10-06T06:57:13Z for `bed3903`, also
+exposed test portability issues. Its Windows JavaScript log line 231 showed
+`D:\D:\...` from using a file URL's pathname instead of `fileURLToPath`.
+The macOS log line 440 reported a missing opener entry: the helper could delete
+the log between its final snapshot and a detached opener's append. Clearing
+the previous log before starting children preserves late entries for polling.
+Clippy 1.99's `assert_is_empty` error appears in lint log line 781 and fresh-merge
+log line 1176; equality with an empty vector gives useful failure diagnostics.
+Completed job logs can be downloaded while the workflow is still running with
+`gh api repos/link-foundation/package-registry-manager/actions/jobs/JOB_ID/logs
+--allow-escape-sequences > ci-logs/JOB_NAME.log`.
+
 The public catalogue exposes 31 sources in these releases. It supplies
 identities, aliases, profile roots, executable templates, default-browser
 identifiers, and control protocols. JavaScript reaches entries through

@@ -307,6 +307,9 @@ async function runWithFakeTools(plan, registry, overrides = {}) {
   const originalLog = console.log;
   const originalPath = process.env.PATH;
   const state = process.env.FAKE_STATE;
+  // Clear the previous run before starting children. A detached opener may
+  // append after the final snapshot, so preserve that log for the polling tests.
+  await rm(path.join(state, "log.jsonl"), { force: true });
   process.env.PATH = `${path.join(state, "bin")}${path.delimiter}${originalPath}`;
   console.log = (...values) => lines.push(values.join(" "));
   try {
@@ -340,7 +343,6 @@ async function runWithFakeTools(plan, registry, overrides = {}) {
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
-  await rm(path.join(state, "log.jsonl"));
   return { lines, log };
 }
 
