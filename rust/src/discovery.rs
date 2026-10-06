@@ -176,6 +176,12 @@ fn with_publisher(
     }
     let secrets = token_secrets(workflows, item.registry);
     item.warnings.extend(publisher.warnings.iter().cloned());
+    if publisher.workflow.is_none() && publisher.candidates.is_empty() {
+        item.warnings.push(format!(
+            "no workflow publishes {} to {}; CI releases will not reach it",
+            item.name, item.registry
+        ));
+    }
     item.warnings.extend(
         secrets
             .iter()
@@ -337,7 +343,7 @@ fn parse_pyproject(contents: &str, manifest: String) -> Result<Option<Package>> 
     let Some(name) = metadata.get("name").and_then(TomlValue::as_str) else {
         return Ok(None);
     };
-    Ok(Some(Package::new(
+    let mut item = Package::new(
         Registry::PyPi,
         name.to_owned(),
         metadata
@@ -345,7 +351,12 @@ fn parse_pyproject(contents: &str, manifest: String) -> Result<Option<Package>> 
             .and_then(TomlValue::as_str)
             .map(str::to_owned),
         manifest,
-    )))
+    );
+    item.requires_python = metadata
+        .get("requires-python")
+        .and_then(TomlValue::as_str)
+        .map(str::to_owned);
+    Ok(Some(item))
 }
 
 fn parse_setup_py(contents: &str, manifest: String) -> Package {

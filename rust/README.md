@@ -11,8 +11,11 @@ cargo install package-registry-manager
 package-registry-manager inspect --repository /path/to/repository
 package-registry-manager plan --repository /path/to/repository --format json
 package-registry-manager setup --repository /path/to/repository --registry npm
+package-registry-manager setup --repository /path/to/repository --all --execute
 ```
 
-Setup is a dry run unless `--execute` is present, and it never publishes an
-artifact. See the [repository README](../README.md) for all registry
-walkthroughs and safety details.
+Setup is a dry run unless `--execute` is present. It can publish the first
+version after confirmation; later versions publish through CI. Missing CI
+publishing jobs are offered in a draft pull request, and PyPI builds select an
+interpreter satisfying `requires-python`. See the [repository README](../README.md)
+for the registry walkthroughs and safety details.

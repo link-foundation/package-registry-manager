@@ -386,3 +386,66 @@ fn splits_jobs_by_indentation_and_ignores_comments() {
     );
     assert_eq!(parsed.header, ["on: push", "env:", "  A: b"]);
 }
+
+#[test]
+fn follows_scripts_running_python_module_twine_issue_33() {
+    for (runner, script, contents) in [
+        (
+            "node",
+            "scripts/publish-to-pypi.mjs",
+            "await $`cd python && python -m twine upload dist/*`;",
+        ),
+        (
+            "bash",
+            "scripts/publish.sh",
+            "python -m twine upload dist/*",
+        ),
+        (
+            "python",
+            "scripts/publish.py",
+            "subprocess.run([\"python\", \"-m\", \"twine\", \"upload\", \"dist/*\"])",
+        ),
+    ] {
+        let yaml = format!("on: workflow_dispatch\njobs:\n  python-release:\n    permissions: {{id-token: write}}\n    steps:\n      - run: {runner} {script}\n");
+        let root = repository(&[
+            (
+                "python/pyproject.toml",
+                "[project]\nname=\"tool\"\nversion=\"1.0.0\"\n",
+            ),
+            (script, contents),
+            (".github/workflows/release.yml", &yaml),
+        ]);
+        let inspection = inspect_repository(root.path()).unwrap();
+        assert_eq!(
+            inspection.packages[0].workflow.as_deref(),
+            Some("release.yml"),
+            "{runner}"
+        );
+        assert_eq!(inspection.packages[0].workflow_jobs, ["python-release"]);
+    }
+}
+
+#[test]
+fn blocks_setup_without_a_publishing_job_issue_33() {
+    let root = repository(&[("package.json", "{\"name\":\"tool\"}")]);
+    let inspection = inspect_repository(root.path()).unwrap();
+    assert!(inspection.packages[0]
+        .warnings
+        .join("\n")
+        .contains("no workflow publishes tool to npm; CI releases will not reach it"));
+    let plans = build_plans_for(&inspection, &BTreeSet::new());
+    assert!(plans[0]
+        .skipped_reason
+        .as_deref()
+        .unwrap()
+        .contains("publishing job"));
+    assert!(plans[0].oidc_publisher.is_none());
+    assert_eq!(
+        plans[0]
+            .steps
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect::<Vec<_>>(),
+        ["add-publishing-workflow"]
+    );
+}

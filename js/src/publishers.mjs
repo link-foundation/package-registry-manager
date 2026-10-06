@@ -15,7 +15,7 @@ const JOB_PATTERNS = new Map([
   ],
   [
     "pypi",
-    /pypa\/gh-action-pypi-publish|\btwine\s+upload\b|\b(?:uv|poetry|hatch|flit|pdm)\s+publish\b/,
+    /pypa\/gh-action-pypi-publish|\b(?:python(?:3(?:\.\d+)?)?\s+-m\s+)?twine\s+upload\b|\b(?:uv|poetry|hatch|flit|pdm)\s+publish\b/,
   ],
 ]);
 

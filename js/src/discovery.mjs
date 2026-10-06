@@ -178,6 +178,11 @@ function withPublisher(item, workflows, publishers) {
   const secrets = tokenSecrets(workflows, item.registry);
   const warnings = [
     ...publisher.warnings,
+    ...(!publisher.workflow && publisher.candidates.length === 0
+      ? [
+          `no workflow publishes ${item.name} to ${item.registry}; CI releases will not reach it`,
+        ]
+      : []),
     ...secrets.map((secret) => tokenSecretWarning(item.registry, secret)),
   ];
   if (warnings.length > 0) {
@@ -291,7 +296,17 @@ function parsePyproject(contents, manifest) {
   if (!name) {
     return null;
   }
-  return packageInfo("pypi", name, tomlString(section, "version"), manifest);
+  const item = packageInfo(
+    "pypi",
+    name,
+    tomlString(section, "version"),
+    manifest,
+  );
+  const required = tomlString(section, "requires-python");
+  if (required) {
+    item.requires_python = required;
+  }
+  return item;
 }
 
 function parseDotnet(contents, manifestPath, manifest) {

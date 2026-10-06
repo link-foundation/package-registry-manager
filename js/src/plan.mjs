@@ -9,6 +9,7 @@ import {
 import { pagesSteps } from "./pages.mjs";
 import { planPrerequisites } from "./prerequisites.mjs";
 import { TRUSTED_REGISTRIES } from "./publishers.mjs";
+import { applyPython } from "./python.mjs";
 
 const FLOWS = new Map([
   ["npm", npmFlow],
@@ -166,6 +167,27 @@ function flowPlan(inspection, packageInfo, options) {
       skipped_reason: `several workflows publish to ${packageInfo.registry} (${packageInfo.workflow_candidates.join(", ")}); pass --workflow <file> to choose the trusted publisher`,
     };
   }
+  if (
+    trusted &&
+    (!workflow ||
+      (options.addPublishJob &&
+        !packageInfo.workflow &&
+        !packageInfo.workflow_candidates?.length))
+  ) {
+    return {
+      ...basePlan(inspection, packageInfo, [
+        {
+          id: "add-publishing-workflow",
+          title: "Offer a publishing job in a reviewed pull request",
+          kind: "manual",
+          description:
+            "Add the missing publishing job to the workflow used by the other registries, on a new branch and pull request. Review and merge it, then re-run setup to attach the trusted publisher.",
+          confirm: true,
+        },
+      ]),
+      skipped_reason: `no workflow publishes ${packageInfo.name} to ${packageInfo.registry}; CI releases will not reach it; add a publishing job or pass --workflow <file> before attaching a trusted publisher`,
+    };
+  }
   const context = {
     directory: packageDirectory(packageInfo.manifest),
     slug,
@@ -213,6 +235,7 @@ function flowPlan(inspection, packageInfo, options) {
       plan.trusted_publisher.project = packageInfo.name;
     }
   }
+  applyPython(plan, options.environment?.python);
   return plan;
 }
 

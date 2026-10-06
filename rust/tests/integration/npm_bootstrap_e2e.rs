@@ -112,11 +112,14 @@ fn setup_command(
             "setup",
             "--registry",
             "npm",
-            "--package",
-            "pipeline-app",
             "--execute",
             "--yes",
         ])
+        .args(if browser.contains(&"--all") {
+            vec![]
+        } else {
+            vec!["--package", "pipeline-app"]
+        })
         .args(browser)
         .envs(registry.env())
         .env("PATH", path)
@@ -172,6 +175,40 @@ fn published_registry() -> MockRegistry {
         path.starts_with("/npm/pipeline-app/")
             .then(|| r#"{"version":"0.1.0"}"#.to_owned())
     })
+}
+
+#[test]
+fn setup_all_reuses_the_npm_session_and_logs_out_after_the_last_package() {
+    let temporary = TempDir::new().unwrap();
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let second = repository.join("second");
+    fs::create_dir_all(&second).unwrap();
+    fs::write(
+        second.join("package.json"),
+        r#"{"name":"second-package","version":"0.1.0"}"#,
+    )
+    .unwrap();
+    let registry = MockRegistry::start(|path| {
+        path.starts_with("/npm/")
+            .then(|| r#"{"version":"0.1.0"}"#.to_owned())
+    });
+    let run = run_setup_with(&repository, &state, &registry, &["--no-browser", "--all"]);
+    let npm: Vec<_> = run
+        .log
+        .iter()
+        .filter(|entry| entry["argv"][0] == "npm")
+        .filter_map(|entry| entry["argv"][1].as_str())
+        .collect();
+    assert_eq!(npm.iter().filter(|command| **command == "login").count(), 1);
+    assert_eq!(
+        npm.iter().filter(|command| **command == "logout").count(),
+        1
+    );
+    assert_eq!(npm.last(), Some(&"logout"));
+    assert!(run.stdout.contains("second-package: configured"));
+    assert!(!state.join("session").exists());
 }
 
 /// A registry where `pipeline-app` appears once the tool polls for the

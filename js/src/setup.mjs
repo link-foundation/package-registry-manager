@@ -15,7 +15,6 @@ import {
 import {
   approvalDeadline,
   TWO_FACTOR_HINT,
-  oidcReleaseNote,
   withFreshLinks,
 } from "./approvals.mjs";
 import { connectAutomation } from "./automation.mjs";
@@ -30,7 +29,6 @@ import { CLEANUP_CONDITIONS } from "./flows.mjs";
 import { pagesSettingsUrl, pagesState } from "./pages.mjs";
 import { packageDirectory } from "./plan.mjs";
 import { twoFactorMode } from "./prerequisites.mjs";
-import { protectLegacyProfile } from "./profile.mjs";
 import { getJson, probePackage } from "./registry-state.mjs";
 import { launchBrowser, signInDomains } from "./sign-in-import.mjs";
 import { reportTokenSecrets, verifyTokenRevoked } from "./tokens.mjs";
@@ -54,54 +52,9 @@ const PUBLISH_REJECTED = /\bE404\b|404 Not Found|invalid-publisher/i;
 /** Where `--browser` opens URLs that need no automation. */
 export const BROWSER_MODES = ["default", "automated"];
 
-/**
- * Runs a setup plan. Without `options.execute` it only reports a dry run.
- * Steps whose `when` condition does not hold are skipped, so a re-run after a
- * partial success resumes where the previous run stopped.
- */
-export async function executePlan(plan, options) {
-  if (!plan.package.publishable) {
-    throw new Error(
-      `${plan.package.name} is not publishable: ${(plan.package.problems ?? []).join("; ")}`,
-    );
-  }
-  if (plan.mode === "complete") {
-    const remaining =
-      plan.steps.length === 0
-        ? "nothing to do."
-        : "only the repository checks remain.";
-    console.log(
-      `${plan.package.name} already publishes through trusted publishing; ${remaining}`,
-    );
-    if (plan.steps.length === 0) {
-      return;
-    }
-  }
-  if (!options.execute) {
-    console.log(
-      "Dry run only. Re-run with --execute to run these steps and open the registry.",
-    );
-    return;
-  }
-  if (options.browserProfile) {
-    await protectLegacyProfile(
-      options.repository,
-      options.browserProfile,
-      options,
-    );
-  }
-  const session = new SetupSession(plan, options);
-  try {
-    await session.run();
-  } finally {
-    await session.cleanup();
-  }
-  if (plan.trusted_publisher?.workflow) {
-    console.log(`\n${oidcReleaseNote(plan.trusted_publisher.workflow)}`);
-  }
-}
+export { executePlan, executePlans } from "./setup-batch.mjs";
 
-class SetupSession {
+export class SetupSession {
   constructor(plan, options) {
     this.plan = plan;
     this.options = options;
@@ -135,9 +88,22 @@ class SetupSession {
    * Runs every cleanup step of the plan whose condition holds, including
    * those after a step that failed (#24).
    */
-  async cleanup() {
+  async cleanup({ deferAuth = false, closeBrowser = true } = {}) {
+    const deferred = [];
     for (const step of cleanupSteps(this.plan)) {
-      if (step.id === "sign-out" && this.keepsSession(step)) {
+      if (
+        deferAuth &&
+        ["sign-out", "crates-sign-out"].includes(step.id) &&
+        this.conditions.has(step.when)
+      ) {
+        if (step.id === "sign-out" && this.options.keepSession) {
+          console.log(
+            "Keeping the npm session (--keep-session); run npm logout to revoke it.",
+          );
+        } else {
+          deferred.push(step);
+        }
+      } else if (step.id === "sign-out" && this.keepsSession(step)) {
         console.log(
           "Keeping the npm session (--keep-session): its token stays in npm's user configuration until you run npm logout, and the next run reuses it while npm whoami succeeds.",
         );
@@ -148,13 +114,17 @@ class SetupSession {
         );
       } else if (this.conditions.has(step.when)) {
         this.log(`==> ${step.title}`);
-        const result = await this.runProcess(step, true);
-        if (result.code !== 0) {
-          console.error(`warning: ${step.id} exited with ${result.code}`);
+        try {
+          const result = await this.runProcess(step, true);
+          if (result.code !== 0) {
+            console.error(`warning: ${step.id} exited with ${result.code}`);
+          }
+        } catch (error) {
+          console.error(`warning: ${step.id} failed: ${error.message}`);
         }
       }
     }
-    if (this.automation) {
+    if (this.automation && closeBrowser) {
       await this.automation.close();
     }
     for (const directory of [this.temporary, this.shim?.directory]) {
@@ -162,6 +132,9 @@ class SetupSession {
         await rm(directory, { recursive: true, force: true });
       }
     }
+    this.shim = null;
+    this.temporary = null;
+    return deferred;
   }
 
   keepsSession(step) {
@@ -643,7 +616,7 @@ class SetupSession {
    */
   async automatedPage(browser = this.options.browserOptions) {
     if (!this.automation) {
-      const domains = signInDomains(this.plan.registry);
+      const domains = this.options.domains ?? signInDomains(this.plan.registry);
       this.automation = await connectAutomation({
         browser: await launchBrowser(browser, domains, {
           deferred: this.plan.registry === "crates-io",
@@ -872,7 +845,7 @@ function render(command) {
 }
 
 /** Asks a question on the terminal; a closed stdin answers with "". */
-async function prompt(message) {
+export async function prompt(message) {
   const terminal = createInterface({ input: stdin, output: stdout });
   try {
     return await new Promise((resolve) => {

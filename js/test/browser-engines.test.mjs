@@ -18,7 +18,7 @@ import { pageFetchScript } from "../src/crates-api.mjs";
 
 for (const id of BROWSER_IDS) {
   const source = findBrowserSource(id);
-  if (!source.controlProtocol) {
+  if (!["cdp", "bidi"].includes(source.controlProtocol)) {
     continue;
   }
   test(`accepts launchable ${id} and forwards its engine`, () => {

@@ -101,6 +101,9 @@ pub struct Package {
     pub registry: Registry,
     pub name: String,
     pub version: Option<String>,
+    /// The Python interpreter constraint from project.requires-python.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_python: Option<String>,
     pub manifest: String,
     pub publishable: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -143,6 +146,7 @@ impl Package {
     ) -> Self {
         Self {
             registry,
+            requires_python: None,
             name,
             version,
             manifest,

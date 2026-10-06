@@ -83,6 +83,30 @@ If more than one package targets the selected registry, add
 `--package <package-name>`. Add `--verbose` when troubleshooting to show the
 exact validation commands and their output. Tracing is off by default.
 
+Set up every publishable package together with `setup --all --execute` in
+either CLI. An optional `--registry` limits the batch. The run reuses one
+automated browser and existing registry sign-ins, signs out at the end, and
+prints a per-package summary. If a package fails, cleanup still runs and the
+summary identifies the remaining packages as `not-run`.
+
+For npm, crates.io and PyPI, inspection follows repository scripts invoked by
+workflow jobs, including Node.js, shell and Python scripts. It reports the
+calling job. When CI has no publishing job, inspection and planning warn that
+releases will not reach the registry, and setup offers a draft pull request
+adding the missing jobs to the workflow already used by the other registries.
+The complete YAML is shown before confirmation. The proposal starts from the
+default branch in a temporary worktree and pushes a new `prm/publish-jobs-*`
+branch. Review its triggers, versioning and build dependencies, merge it, then
+re-run setup to attach the publishers to that workflow file.
+
+Use `--add-publish-job --workflow release.yml` to choose a proposal target when
+the repository has multiple publishing workflows; `--environment` chooses a
+shared GitHub environment. Without `--add-publish-job`, an explicit `--workflow`
+remains an override for trusted-publisher attachment. Generated jobs use OIDC:
+npm 11 with provenance and public access, crates.io's authentication action,
+and PyPI's publishing action. They grant `id-token: write` and require no
+long-lived npm token.
+
 ### Safety model
 
 `inspect` and `plan` read local files and make anonymous, read-only lookups on
@@ -339,6 +363,12 @@ not exist yet, the CLI opens the account's pending publisher form, dispatches
 the release workflow with `gh workflow run`, and waits until CI has published
 the first version through OIDC. For an existing project it opens the project's
 publishing settings instead. It runs `python -m build` first as a local check.
+The local check reads `project.requires-python`, probes `python`, `python3`
+and versioned `python3.<minor>` executables on `PATH`, and chooses a compatible
+stable interpreter. For example, `>=3.13` chooses `python3.13` when the default
+is 3.12. If none matches, setup stops with an installation hint. Compound
+constraints, exclusions, compatible releases and equality wildcards are
+supported; unsupported version syntax is treated as incompatible.
 See [PyPI trusted publishers](https://docs.pypi.org/trusted-publishers/).
 
 ### Docker Hub

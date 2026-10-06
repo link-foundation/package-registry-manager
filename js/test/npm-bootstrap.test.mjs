@@ -20,7 +20,7 @@ import { authUrlScanner, nodeOptionsWithShim } from "../src/auth-urls.mjs";
 import { inspectRepository } from "../src/discovery.mjs";
 import { buildPlans } from "../src/plan.mjs";
 import { probePackage, registryEndpoint } from "../src/registry-state.mjs";
-import { executePlan } from "../src/setup.mjs";
+import { executePlan, executePlans } from "../src/setup.mjs";
 import { TWO_FACTOR_HINT } from "../src/approvals.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -313,7 +313,8 @@ async function runWithFakeTools(plan, registry, overrides = {}) {
   process.env.PATH = `${path.join(state, "bin")}${path.delimiter}${originalPath}`;
   console.log = (...values) => lines.push(values.join(" "));
   try {
-    await executePlan(plan, {
+    const execute = Array.isArray(plan) ? executePlans : executePlan;
+    await execute(plan, {
       repository,
       execute: true,
       yes: true,
@@ -522,6 +523,56 @@ const signInSteps = (plan) => {
   return plan;
 };
 const missing = { exists_on_registry: false, trusted_publishing: false };
+
+test(
+  "setup --all signs in once and signs out after the final package (#33)",
+  POSIX_ONLY,
+  async () => {
+    await freshState();
+    const first = signInSteps(await npmPlan(missing));
+    const second = structuredClone(first);
+    second.package.name = "second-package";
+    const { lines, log } = await runWithFakeTools([first, second], () => ({}));
+    const commands = log
+      .filter((entry) => entry.argv[0] === "npm")
+      .map((entry) => entry.argv[1]);
+    assert.deepEqual(commands, ["whoami", "login", "whoami", "logout"]);
+    assert.ok(
+      lines.some((line) => line.includes("second-package: configured")),
+    );
+  },
+);
+
+test(
+  "setup --all revokes its session after a later package fails (#33)",
+  POSIX_ONLY,
+  async () => {
+    await freshState();
+    const first = signInSteps(await npmPlan(missing));
+    const second = structuredClone(first);
+    second.package.name = "second-package";
+    second.steps.unshift({
+      id: "fail",
+      title: "Fail",
+      kind: "command",
+      command: { program: process.execPath, args: ["-e", "process.exit(1)"] },
+    });
+    const error = await runWithFakeTools([first, second], () => ({})).catch(
+      (failure) => failure,
+    );
+    assert.ok(error instanceof Error);
+    const log = (
+      await readFile(path.join(process.env.FAKE_STATE, "log.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    assert.equal(log.filter((entry) => entry.argv[1] === "logout").length, 1);
+    assert.ok(
+      error.lines.some((line) => line.includes("second-package: failed")),
+    );
+  },
+);
 
 test(
   "requests a fresh login link when npm falls back to its username prompt (#17)",

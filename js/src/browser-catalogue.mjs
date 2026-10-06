@@ -11,7 +11,7 @@ export const browserSources = () => BROWSER_IDS.map(findBrowserSource);
 /** Catalogue channels with a launch control protocol. */
 export function launchChannels() {
   return browserSources()
-    .filter((source) => source.controlProtocol)
+    .filter((source) => ["cdp", "bidi"].includes(source.controlProtocol))
     .flatMap((source) => [source.id, ...(source.aliases ?? [])]);
 }
 
@@ -122,11 +122,11 @@ export function installedDescription(options = {}) {
 /** Reject unavailable engines before creating an automated profile. */
 export function validateChannel(channel) {
   const known = findBrowserSource(channel);
-  if (known?.controlProtocol) {
+  if (["cdp", "bidi"].includes(known?.controlProtocol)) {
     return channel;
   }
   const reason = known
-    ? `${channel} has no launch control protocol in browser-commander's catalogue${known.family === "safari" ? " (Safari setup: https://github.com/link-foundation/browser-commander/issues/126)" : ""}`
+    ? `${channel} has no launch control protocol supported by this manager${known.family === "safari" ? " (Safari setup: https://github.com/link-foundation/browser-commander/issues/126)" : ""}`
     : `unknown --browser-channel '${channel}'`;
   throw new Error(
     `${reason}; choose from ${launchChannels().join(", ")}. ${installedDescription()}`,

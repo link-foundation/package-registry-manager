@@ -18,12 +18,14 @@ pub mod plan;
 pub mod prerequisites;
 pub mod profile;
 pub mod publishers;
+pub mod python;
 pub mod registry_state;
 pub mod setup;
 pub mod sign_in_import;
 pub mod skips;
 pub mod tokens;
 mod webdriver_automation;
+pub mod workflow_proposal;
 pub mod workflows;
 
 pub use discovery::{inspect_repository, inspect_repository_with, InspectOptions};

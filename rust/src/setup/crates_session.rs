@@ -185,7 +185,7 @@ impl Session<'_> {
                 browser,
                 self.options.browser_profile,
                 self.options.verbose,
-                sign_in_domains(self.plan.registry),
+                &self.domains,
             )
             .await?,
         );
@@ -207,7 +207,7 @@ impl Session<'_> {
         if self.plan.registry == Registry::CratesIo {
             return Ok(resolved);
         }
-        let domains = sign_in_domains(self.plan.registry);
+        let domains = self.domains.clone();
         let preferred = self.default_source().await;
         resolved.import = if choice == "default" {
             Some(ImportSource {
@@ -217,13 +217,18 @@ impl Session<'_> {
                 profile: None,
             })
         } else {
-            find_sign_in_sources(&InstalledBrowsers, domains, preferred, self.options.verbose)
-                .into_iter()
-                .next()
-                .map(|source| ImportSource {
-                    browser: source.browser,
-                    profile: source.profile,
-                })
+            find_sign_in_sources(
+                &InstalledBrowsers,
+                &domains,
+                preferred,
+                self.options.verbose,
+            )
+            .into_iter()
+            .next()
+            .map(|source| ImportSource {
+                browser: source.browser,
+                profile: source.profile,
+            })
         };
         if resolved.import.is_none() {
             let names = if domains.is_empty() {
