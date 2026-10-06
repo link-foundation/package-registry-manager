@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 
+import { launchChannels } from "./browser-catalogue.mjs";
 import { parseBrowserOptions } from "./browser-options.mjs";
 import { isDirectExecution } from "./direct-execution.mjs";
 import { inspectRepository } from "./discovery.mjs";
@@ -14,6 +15,7 @@ import { buildPlans } from "./plan.mjs";
 import { probeEnvironment, renderPrerequisites } from "./prerequisites.mjs";
 import { probeRegistryState } from "./registry-state.mjs";
 import { BROWSER_MODES, defaultBrowserProfile, executePlan } from "./setup.mjs";
+import { importSources } from "./sign-in-import.mjs";
 
 export { isDirectExecution };
 
@@ -62,17 +64,16 @@ Setup options:
   --browser <default|automated>   Open sign-in and approval pages in your
                                   default browser, or in the automated
                                   profile too (default: default)
-  --browser-channel <channel>     Installed browser channel: chrome, chromium,
-                                  brave, msedge, msedge-beta, msedge-dev, or
-                                  msedge-canary (default: chrome)
+  --browser-channel <channel>     Installed browser channel (default: chrome):
+                                  ${launchChannels().join(", ")}
   --browser-executable <path>     Installed browser executable to launch
                                   instead of the channel's
   --browser-profile <path>        Dedicated automation profile, used to fill
                                   forms (default: per-user state directory)
   --browser-import <browser>[:<profile>]|default|auto
-                                  Copy data from your chrome, edge, brave,
-                                  chromium, or firefox profile into the
-                                  automated profile first; default takes the
+                                  Copy data from your installed browser profile:
+                                  ${importSources().join(", ")}
+                                  into the automated profile; default takes the
                                   system default browser, auto the first
                                   browser signed in to the registry
   --browser-import-scope <full|domains>

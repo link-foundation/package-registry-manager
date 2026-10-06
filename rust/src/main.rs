@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use lino_arguments::Parser;
+use package_registry_manager::browser_catalogue::launch_channels;
 use package_registry_manager::browser_options::{
     parse_browser_options, BrowserArgs, BrowserOptions,
 };
@@ -18,9 +19,24 @@ use package_registry_manager::registry_state::{Endpoints, RegistryClient};
 use package_registry_manager::setup::{
     default_browser_profile, execute_plan, BrowserMode, ExecuteOptions,
 };
+use package_registry_manager::sign_in_import::import_sources;
 use package_registry_manager::{
     inspect_repository_with, InspectOptions, Inspection, Package, PlanMode, Registry, SetupPlan,
 };
+
+fn browser_channel_help() -> String {
+    format!(
+        "Installed browser channel: {}.",
+        launch_channels().join(", ")
+    )
+}
+
+fn browser_import_help() -> String {
+    format!(
+        "Copy data from an installed profile (<browser>[:<profile>]): {}. default takes the system default browser, auto the first browser signed in to the registry.",
+        import_sources().join(", ")
+    )
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -122,9 +138,7 @@ enum Commands {
         #[arg(long)]
         keep_session: bool,
 
-        /// Installed browser channel: chrome, chromium, brave, msedge,
-        /// msedge-beta, msedge-dev, or msedge-canary.
-        #[arg(long, default_value = "chrome")]
+        #[arg(long, default_value = "chrome", help = browser_channel_help())]
         browser_channel: String,
 
         /// Installed browser executable to launch instead of the channel's.
@@ -141,11 +155,7 @@ enum Commands {
         #[arg(long)]
         browser_profile: Option<PathBuf>,
 
-        /// Copy data from your chrome, edge, brave, chromium, or firefox
-        /// profile (`<browser>[:<profile>]`) into the automated profile first;
-        /// default takes the system default browser, auto the first browser
-        /// signed in to the registry.
-        #[arg(long, value_name = "BROWSER[:PROFILE]|default|auto")]
+        #[arg(long, value_name = "BROWSER[:PROFILE]|default|auto", help = browser_import_help())]
         browser_import: Option<String>,
 
         /// Import the whole profile, or only the registry's sign-in cookies

@@ -180,3 +180,15 @@ fn prints_the_package_version() {
         format!("package-registry-manager {}\n", env!("CARGO_PKG_VERSION"))
     );
 }
+
+#[test]
+fn help_lists_every_catalogue_import_and_launch_channel() {
+    let output = run(&["setup", "--help"], None);
+    let help = String::from_utf8_lossy(&output.stdout);
+    for id in package_registry_manager::sign_in_import::import_sources()
+        .into_iter()
+        .chain(package_registry_manager::browser_catalogue::launch_channels())
+    {
+        assert!(help.contains(id), "{id} in\n{help}");
+    }
+}

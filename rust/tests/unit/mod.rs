@@ -1,4 +1,5 @@
 mod approvals;
+mod browser_catalogue;
 mod browser_options;
 mod browser_profile;
 mod crates_api;

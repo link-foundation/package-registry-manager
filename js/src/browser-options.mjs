@@ -1,10 +1,12 @@
 import path from "node:path";
 
 import {
+  findBrowserSource,
   LAUNCH_RESTRICTION_PRESETS,
   LAUNCH_RESTRICTIONS,
 } from "browser-commander";
 
+import { installedDescription, validateChannel } from "./browser-catalogue.mjs";
 import {
   IMPORT_CHOICES,
   IMPORT_SCOPES,
@@ -50,7 +52,7 @@ export function parseBrowserOptions({
   profileGiven = false,
 } = {}) {
   const options = {
-    channel,
+    channel: attach === "extension" ? channel : validateChannel(channel),
     executable: executable ? path.resolve(executable) : null,
     import: importFrom ? parseImport(importFrom) : null,
     importScope: parseImportScope(importScope, importFrom),
@@ -82,21 +84,18 @@ export function parseBrowserOptions({
 }
 
 /** Parses `<browser>[:profile]`, `default`, or `auto`. */
-export function parseImport(spec) {
+export function parseImport(spec, discovery = {}) {
   const separator = spec.indexOf(":");
   const browser = separator === -1 ? spec : spec.slice(0, separator);
   const profile = separator === -1 ? null : spec.slice(separator + 1);
   const choice = IMPORT_CHOICES.includes(browser);
-  if (
-    !importBrowsers().includes(browser) ||
-    profile === "" ||
-    (choice && profile !== null)
-  ) {
+  const source = findBrowserSource(browser);
+  if ((!source && !choice) || profile === "" || (choice && profile !== null)) {
     throw new Error(
-      `--browser-import must be <${importSources().join("|")}>[:profile], default, or auto`,
+      `--browser-import must be <${importSources().join("|")}>[:profile], default, or auto. ${installedDescription(discovery)}`,
     );
   }
-  return { browser, profile };
+  return { browser: source?.id ?? browser, profile };
 }
 
 /**
@@ -184,10 +183,7 @@ export function validateRestrictions(names) {
 
 /** The installed browser a snapshot copies for a launch channel. */
 export function snapshotBrowser(channel) {
-  if (channel.startsWith("msedge")) {
-    return "edge";
-  }
-  return ["brave", "chromium"].includes(channel) ? channel : "chrome";
+  return findBrowserSource(channel)?.id ?? channel;
 }
 
 /** Describes where forms are filled, for the browser prerequisite. */

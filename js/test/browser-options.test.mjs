@@ -91,7 +91,7 @@ test("attaches to a snapshot of the user's own profile", () => {
     [
       "msedge-beta",
       "snapshot:Profile 2",
-      { browser: "edge", profile: "Profile 2" },
+      { browser: "edge-beta", profile: "Profile 2" },
     ],
     ["brave", "snapshot", { browser: "brave", profile: "Default" }],
   ]) {
@@ -103,12 +103,12 @@ test("attaches to a snapshot of the user's own profile", () => {
     assert.equal(options.userDataDir, undefined, "a snapshot is temporary");
   }
   assert.equal(snapshotBrowser("chromium"), "chromium");
-  assert.equal(snapshotBrowser("msedge-canary"), "edge");
+  assert.equal(snapshotBrowser("msedge-canary"), "edge-canary");
 });
 
 test("rejects invalid or conflicting browser options", () => {
   for (const [options, message] of [
-    [{ importFrom: "safari" }, /--browser-import must be/],
+    [{ importFrom: "netscape" }, /--browser-import must be/],
     [{ importFrom: "chrome:" }, /--browser-import must be/],
     [{ attach: "remote" }, /--browser-attach must be/],
     [{ attach: "snapshot:" }, /--browser-attach must be/],

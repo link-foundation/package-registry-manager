@@ -4,6 +4,7 @@ pub mod approvals;
 pub mod auth_urls;
 pub mod automation;
 pub mod browser;
+pub mod browser_catalogue;
 pub mod browser_options;
 pub mod containers;
 pub mod crates_api;
