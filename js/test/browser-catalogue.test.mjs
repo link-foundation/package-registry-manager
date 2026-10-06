@@ -126,6 +126,10 @@ test("reports discovered executable and profile roots without reading cookies", 
 test("accepts every launchable id and alias and rejects unsupported engines", () => {
   for (const channel of launchChannels()) {
     assert.equal(parseBrowserOptions({ channel }).channel, channel);
+    assert.equal(
+      parseBrowserOptions({ channel: channel.toUpperCase() }).channel,
+      channel.toUpperCase(),
+    );
   }
   for (const channel of ["firefox", "librewolf", "safari", "duckduckgo"]) {
     assert.throws(

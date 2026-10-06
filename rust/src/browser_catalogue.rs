@@ -202,11 +202,11 @@ pub fn installed_description() -> String {
 
 /// Reject unavailable engines before creating an automated profile.
 pub fn validate_channel(channel: &str) -> Result<()> {
-    let channels = launch_channels();
-    if channels.contains(&channel) {
+    let source = find_browser_source(channel);
+    if source.is_some_and(|source| source.control_protocol.as_deref() == Some("cdp")) {
         return Ok(());
     }
-    let reason = find_browser_source(channel).map_or_else(
+    let reason = source.map_or_else(
         || format!("unknown --browser-channel '{channel}'"),
         |source| format!(
             "{channel} requires {} control, which browser-commander's real launcher does not support yet (https://github.com/link-foundation/browser-commander/issues/114)",
@@ -215,7 +215,7 @@ pub fn validate_channel(channel: &str) -> Result<()> {
     );
     bail!(
         "{reason}; choose from {}. {}",
-        channels.join(", "),
+        launch_channels().join(", "),
         installed_description()
     )
 }

@@ -105,10 +105,10 @@ export function installedDescription(options = {}) {
 
 /** Reject unavailable engines before creating an automated profile. */
 export function validateChannel(channel) {
-  if (launchChannels().includes(channel)) {
+  const known = findBrowserSource(channel);
+  if (known?.controlProtocol === "cdp") {
     return channel;
   }
-  const known = findBrowserSource(channel);
   const reason = known
     ? `${channel} requires ${known.controlProtocol ?? known.family} control, which browser-commander's real launcher does not support yet (https://github.com/link-foundation/browser-commander/issues/114)`
     : `unknown --browser-channel '${channel}'`;

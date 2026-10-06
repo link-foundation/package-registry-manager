@@ -68,6 +68,11 @@ fn preserves_legacy_and_packaged_default_browser_identifiers() {
 #[test]
 fn launches_and_snapshots_every_supported_channel_and_alias() {
     for channel in launch_channels() {
+        assert!(parse_browser_options(&BrowserArgs {
+            channel: channel.to_uppercase(),
+            ..BrowserArgs::default()
+        })
+        .is_ok());
         let options = parse_browser_options(&BrowserArgs {
             channel: channel.to_owned(),
             import: Some("firefox".to_owned()),
