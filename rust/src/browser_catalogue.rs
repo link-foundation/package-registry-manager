@@ -227,7 +227,7 @@ pub fn validate_channel(channel: &str) -> Result<()> {
     let reason = source.map_or_else(
         || format!("unknown --browser-channel '{channel}'"),
         |source| {
-            let upstream = if source.family == "webkit" {
+            let upstream = if source.family == "safari" {
                 "; Safari launch support is tracked at https://github.com/link-foundation/browser-commander/issues/126"
             } else { "" };
             format!("{channel} has no launch control protocol in browser-commander's catalogue{upstream}")

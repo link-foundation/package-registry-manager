@@ -206,3 +206,16 @@ fn accepts_every_channel_with_a_control_protocol_and_selects_its_engine() {
         }
     }
 }
+
+#[test]
+fn safari_launch_errors_link_to_the_upstream_capability_issue() {
+    for channel in ["safari", "safari-technology-preview", "safari-tp"] {
+        let error = parse_browser_options(&BrowserArgs {
+            channel: channel.to_owned(),
+            ..BrowserArgs::default()
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("browser-commander/issues/126"), "{error}");
+    }
+}
