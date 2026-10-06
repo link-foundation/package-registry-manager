@@ -55,7 +55,11 @@ export function parseBrowserOptions({
     channel: attach === "extension" ? channel : validateChannel(channel),
     executable: executable ? path.resolve(executable) : null,
     import: importFrom ? parseImport(importFrom) : null,
-    importScope: parseImportScope(importScope, importFrom),
+    importScope:
+      (importScope === undefined || importScope === null) &&
+      findBrowserSource(channel)?.controlProtocol === "bidi"
+        ? "domains"
+        : parseImportScope(importScope, importFrom),
     attach: attach ? parseAttach(attach) : null,
     preferences: parsePreferences(preferences),
     restrictions: validateRestrictions(restrictions),
@@ -80,7 +84,32 @@ export function parseBrowserOptions({
       "--browser-attach extension cannot be combined with --browser-executable, --browser-pref, or --browser-restriction",
     );
   }
+  validateEngineOptions(options);
   return options;
+}
+
+/** Rejects capabilities the installed upstream non-CDP launchers lack. */
+function validateEngineOptions(options) {
+  if (
+    options.attach?.mode === "extension" ||
+    findBrowserSource(options.channel)?.controlProtocol === "cdp"
+  ) {
+    return;
+  }
+  const unsupported = options.attach
+    ? "--browser-attach snapshot"
+    : options.restrictions.length
+      ? "--browser-restriction"
+      : Object.keys(options.preferences).length
+        ? "--browser-pref"
+        : options.import && options.importScope === "full"
+          ? "--browser-import-scope full"
+          : null;
+  if (unsupported) {
+    throw new Error(
+      `${unsupported} is unavailable for ${options.channel} in the installed browser-commander; use --browser-import-scope domains for sign-in cookies`,
+    );
+  }
 }
 
 /** Parses `<browser>[:profile]`, `default`, or `auto`. */

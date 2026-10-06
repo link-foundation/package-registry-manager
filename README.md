@@ -152,10 +152,14 @@ no extra switches. Every change to that is opt-in:
 
 - `--browser-executable <path>` launches a specific browser binary instead of
   the channel's.
-- `--browser-channel <channel>` selects any Chromium browser in Browser
-  Commander's catalogue, including Opera, Opera GX, Yandex, Vivaldi, Arc,
+- `--browser-channel <channel>` selects any browser with a launch control
+  protocol in Browser Commander's catalogue, including Opera, Opera GX, Yandex, Vivaldi, Arc,
   Whale, 360, QQ, and Sogou. Existing aliases such as `msedge` also work.
-  `--help` lists the current launchable channels from the installed dependency.
+  Firefox, Firefox Developer/Nightly, LibreWolf, Waterfox, Zen, Floorp and Tor
+  use WebDriver BiDi. Install Firefox (or the chosen fork) and geckodriver;
+  JavaScript includes selenium-webdriver, while Rust uses native WebDriver.
+  Each Firefox variant uses its own dedicated profile beside the default
+  Chromium profile. `--help` lists launchable channels from the dependency.
 - `--browser-import <browser>[:<profile>]` copies
   cookies, history, and other data from one of your browser profiles into the
   dedicated profile before it starts, so registry sessions carry over without
@@ -169,16 +173,19 @@ no extra switches. Every change to that is opt-in:
   `--browser-import-scope domains` imports only the cookies of the registry's
   sign-in domains (`crates.io` and `github.com` for crates.io, `npmjs.com`
   for npm, `pypi.org` and `github.com` for PyPI) instead of the whole profile;
-  it is the default for `default` and `auto`.
+  it is the default for `default`, `auto`, and all Firefox-target imports.
 - Without `--browser-import`, the profile stays fresh. When a sign-in step
   finds no session and an installed browser holds cookies for the registry's
   sign-in domains, the CLI asks once whether to import only those cookies.
   Safari imports require permission to read its protected profile files on
   macOS. Catalogue entries describe discovery; available data classes depend
   on the source and Browser Commander's migration support. DuckDuckGo is
-  currently detection-only. The real launcher and target writers used here
-  still require Chromium: Firefox-family, Safari, and WebKit targets await
-  [upstream support](https://github.com/link-foundation/browser-commander/issues/114).
+  currently detection-only. Firefox imports sign-in cookies through BiDi;
+  full target migration, snapshots, `--browser-pref`, and Chromium launch
+  restrictions are unavailable for Firefox in the current upstream release
+  and produce explicit errors. Safari and Safari Technology Preview are
+  import sources; selecting them as launch channels reports that the catalogue
+  has no control protocol, pending [Safari launcher support](https://github.com/link-foundation/browser-commander/issues/126).
 - `--browser-attach snapshot[:<profile>]` fills forms in a temporary copy of
   your own profile of the `--browser-channel` browser (default `Default`),
   which is deleted afterwards. `--browser-attach extension` drives your
@@ -401,7 +408,7 @@ The CLIs intentionally use the same options and JSON schema:
 | `--yes` | Pre-confirm publishing, secret changes, and form submission; requires `--execute` |
 | `--no-browser` | Print the setup URL after validation; requires `--execute` |
 | `--browser <default\|automated>` | Open sign-in and approval URLs in the default browser (default) or the automation profile |
-| `--browser-channel <name>` | Choose an installed Chromium browser or alias from Browser Commander's catalogue; `--help` lists launchable channels (default: `chrome`) |
+| `--browser-channel <name>` | Choose an installed launchable browser or alias from Browser Commander's catalogue; `--help` lists launchable channels (default: `chrome`) |
 | `--browser-executable <path>` | Launch this browser executable instead of the channel's |
 | `--browser-profile <path>` | Choose the dedicated automation profile used to fill forms (default: per-user state directory) |
 | `--browser-import <browser>[:<profile>]\|default\|auto` | Import from any browser id in Browser Commander's catalogue; `default` selects the system default browser and `auto` discovers a registry sign-in |

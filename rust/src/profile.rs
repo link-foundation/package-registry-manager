@@ -31,6 +31,25 @@ pub fn default_browser_profile() -> Result<PathBuf> {
     ))
 }
 
+/// A distinct dedicated profile for each non-CDP browser channel.
+pub fn default_browser_profile_for_channel(channel: &str) -> Result<PathBuf> {
+    let profile = default_browser_profile()?;
+    Ok(browser_commander::find_browser_source(channel).map_or_else(
+        || profile.clone(),
+        |source| {
+            if source
+                .control_protocol
+                .as_deref()
+                .is_some_and(|protocol| protocol != "cdp")
+            {
+                profile.with_file_name(format!("{PROFILE}-{}", source.id))
+            } else {
+                profile.clone()
+            }
+        },
+    ))
+}
+
 /// [`default_browser_profile`] for an explicit operating system (a value of
 /// [`std::env::consts::OS`]), environment, and home directory.
 #[must_use]

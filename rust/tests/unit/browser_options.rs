@@ -321,3 +321,74 @@ fn writes_the_companion_extension_next_to_the_dedicated_profile() {
          If it is not installed, open chrome://extensions, turn on Developer mode, click \"Load unpacked\", and choose:\n  /x"
     );
 }
+
+#[test]
+fn firefox_import_defaults_to_sign_in_domains_and_reports_missing_capabilities() {
+    use package_registry_manager::browser_options::ImportScope;
+    let browser = parse_browser_options(&BrowserArgs {
+        channel: "librewolf".to_owned(),
+        import: Some("chrome:Profile 1".to_owned()),
+        ..BrowserArgs::default()
+    })
+    .unwrap();
+    assert_eq!(browser.import_scope, ImportScope::Domains);
+    let options = launch_options(&browser, &profile(), false, &["npmjs.com"]);
+    assert_eq!(options.migrate_include, Some(vec!["cookies".to_owned()]));
+    assert_eq!(options.migrate_domains, vec!["npmjs.com".to_owned()]);
+    for (args, capability) in [
+        (
+            BrowserArgs {
+                attach: Some("snapshot".to_owned()),
+                ..BrowserArgs::default()
+            },
+            "snapshot",
+        ),
+        (
+            BrowserArgs {
+                preferences: strings(&["a=1"]),
+                ..BrowserArgs::default()
+            },
+            "preferences",
+        ),
+        (
+            BrowserArgs {
+                restrictions: strings(&["no-extensions"]),
+                ..BrowserArgs::default()
+            },
+            "restrictions",
+        ),
+        (
+            BrowserArgs {
+                import: Some("chrome".to_owned()),
+                import_scope: Some("full".to_owned()),
+                ..BrowserArgs::default()
+            },
+            "full-profile migration",
+        ),
+    ] {
+        let error = parse_browser_options(&BrowserArgs {
+            channel: "firefox".to_owned(),
+            ..args
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains(capability), "{error}");
+    }
+}
+
+#[test]
+fn firefox_variants_have_separate_default_profiles() {
+    use package_registry_manager::profile::default_browser_profile_for_channel;
+    let chrome = default_browser_profile().unwrap();
+    assert_eq!(
+        default_browser_profile_for_channel("msedge").unwrap(),
+        chrome
+    );
+    let firefox = default_browser_profile_for_channel("firefox").unwrap();
+    assert_eq!(firefox.parent(), chrome.parent());
+    assert_eq!(firefox.file_name().unwrap(), "browser-profile-firefox");
+    assert_ne!(
+        firefox,
+        default_browser_profile_for_channel("librewolf").unwrap()
+    );
+}

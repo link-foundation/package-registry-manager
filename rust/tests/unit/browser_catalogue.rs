@@ -87,7 +87,7 @@ fn launches_and_snapshots_every_supported_channel_and_alias() {
             find_browser_source(channel).unwrap().id
         );
     }
-    for channel in ["firefox", "librewolf", "safari", "duckduckgo", "netscape"] {
+    for channel in ["safari", "duckduckgo", "netscape"] {
         let error = parse_browser_options(&BrowserArgs {
             channel: channel.to_owned(),
             ..BrowserArgs::default()
@@ -97,7 +97,7 @@ fn launches_and_snapshots_every_supported_channel_and_alias() {
         assert!(error.contains(if channel == "netscape" {
             "unknown --browser-channel"
         } else {
-            "real launcher does not support yet"
+            "no launch control protocol"
         }));
         assert!(error.contains("Installed browsers found:"));
     }
@@ -178,4 +178,44 @@ fn discovers_executables_and_profile_roots_on_each_platform() {
         ),
         ["vivaldi", "whale", "360se", "qq"]
     );
+}
+
+#[test]
+fn accepts_every_channel_with_a_control_protocol_and_selects_its_engine() {
+    use browser_commander::EngineType;
+    for source in browser_sources()
+        .iter()
+        .filter(|source| source.control_protocol.is_some())
+    {
+        for channel in std::iter::once(&source.id).chain(&source.aliases) {
+            assert!(launch_channels().contains(&channel.as_str()), "{channel}");
+            let browser = parse_browser_options(&BrowserArgs {
+                channel: channel.clone(),
+                ..BrowserArgs::default()
+            })
+            .unwrap();
+            let options = launch_options(&browser, Path::new("/profile"), false, &[]);
+            assert_eq!(
+                options.engine,
+                if source.control_protocol.as_deref() == Some("cdp") {
+                    EngineType::Chromiumoxide
+                } else {
+                    EngineType::Fantoccini
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn safari_launch_errors_link_to_the_upstream_capability_issue() {
+    for channel in ["safari", "safari-technology-preview", "safari-tp"] {
+        let error = parse_browser_options(&BrowserArgs {
+            channel: channel.to_owned(),
+            ..BrowserArgs::default()
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("browser-commander/issues/126"), "{error}");
+    }
 }

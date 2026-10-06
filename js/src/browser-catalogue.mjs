@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { constants, existsSync, realpathSync } from "node:fs";
+import { access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -7,10 +8,10 @@ import { BROWSER_IDS, findBrowserSource } from "browser-commander";
 /** Catalogue entries reached through Browser Commander's public exports. */
 export const browserSources = () => BROWSER_IDS.map(findBrowserSource);
 
-/** The installed channels supported by Browser Commander's real launcher. */
+/** Catalogue channels with a launch control protocol. */
 export function launchChannels() {
   return browserSources()
-    .filter((source) => source.controlProtocol === "cdp")
+    .filter((source) => source.controlProtocol)
     .flatMap((source) => [source.id, ...(source.aliases ?? [])]);
 }
 
@@ -121,13 +122,88 @@ export function installedDescription(options = {}) {
 /** Reject unavailable engines before creating an automated profile. */
 export function validateChannel(channel) {
   const known = findBrowserSource(channel);
-  if (known?.controlProtocol === "cdp") {
+  if (known?.controlProtocol) {
     return channel;
   }
   const reason = known
-    ? `${channel} requires ${known.controlProtocol ?? known.family} control, which browser-commander's real launcher does not support yet (https://github.com/link-foundation/browser-commander/issues/114)`
+    ? `${channel} has no launch control protocol in browser-commander's catalogue${known.family === "safari" ? " (Safari setup: https://github.com/link-foundation/browser-commander/issues/126)" : ""}`
     : `unknown --browser-channel '${channel}'`;
   throw new Error(
     `${reason}; choose from ${launchChannels().join(", ")}. ${installedDescription()}`,
   );
+}
+
+/** Resolves the selected installed binary using catalogue paths and PATH. */
+export async function resolveExecutable(
+  { channel, executablePath },
+  discovery = {},
+) {
+  const platform = discovery.platform ?? process.platform;
+  const environment = discovery.environment ?? process.env;
+  const options = {
+    ...discovery,
+    platform,
+    environment:
+      platform === "win32"
+        ? Object.fromEntries(
+            Object.entries(environment).map(([key, value]) => [
+              key.toUpperCase(),
+              value,
+            ]),
+          )
+        : environment,
+  };
+  const source = findBrowserSource(channel);
+  const candidates = executablePath
+    ? [executablePath]
+    : installedCandidates({ ...source, roots: {} }, options);
+  for (const candidate of candidates) {
+    try {
+      await (discovery.access ?? access)(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Continue through the catalogue's executable paths and PATH names.
+    }
+  }
+  throw new Error(
+    `could not find an installed ${channel} browser; use --browser-executable`,
+  );
+}
+
+/** Refuses a source profile even when reached through a symlink. */
+export function assertDedicatedProfile(profile, discovery = {}) {
+  const physical = (file) => {
+    try {
+      return realpathSync(file);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+      return path.join(physical(path.dirname(file)), path.basename(file));
+    }
+  };
+  const requested = physical(path.resolve(profile));
+  const roots = browserSources().flatMap((source) =>
+    installedCandidates(
+      {
+        ...source,
+        executables: {},
+        executableNames: [],
+      },
+      discovery,
+    ),
+  );
+  for (const root of roots) {
+    const relative = path.relative(physical(path.resolve(root)), requested);
+    if (
+      relative === "" ||
+      (!relative.startsWith(`..${path.sep}`) &&
+        relative !== ".." &&
+        !path.isAbsolute(relative))
+    ) {
+      throw new Error(
+        "automation requires a dedicated profile, not a browser default profile; use --browser-import to reuse sign-in",
+      );
+    }
+  }
 }

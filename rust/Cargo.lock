@@ -517,9 +517,9 @@ dependencies = [
 
 [[package]]
 name = "command-stream"
-version = "1.4.1"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06da956d1fc46ac96695767f8ffc9f04311f18d0bf92174cbef9aeef20df64b1"
+checksum = "6706b72a8cbf8b0be21e4303872809f17c696b7f0f841b0788fce785bf6c0b79"
 dependencies = [
  "async-trait",
  "chrono",

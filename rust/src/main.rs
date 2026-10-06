@@ -16,9 +16,7 @@ use package_registry_manager::prerequisites::{
     probe_environment, render_prerequisites, BrowserDisplay, BrowserSummary,
 };
 use package_registry_manager::registry_state::{Endpoints, RegistryClient};
-use package_registry_manager::setup::{
-    default_browser_profile, execute_plan, BrowserMode, ExecuteOptions,
-};
+use package_registry_manager::setup::{execute_plan, BrowserMode, ExecuteOptions};
 use package_registry_manager::sign_in_import::import_sources;
 use package_registry_manager::{
     inspect_repository_with, InspectOptions, Inspection, Package, PlanMode, Registry, SetupPlan,
@@ -330,7 +328,11 @@ async fn main() -> Result<()> {
             // Only a run that may start the automated browser needs the profile.
             let profile = match browser_profile {
                 Some(profile) => std::path::absolute(profile)?,
-                None if execute || browser == BrowserMode::Automated => default_browser_profile()?,
+                None if execute || browser == BrowserMode::Automated => {
+                    package_registry_manager::profile::default_browser_profile_for_channel(
+                        &browser_options.channel,
+                    )?
+                }
                 None => PathBuf::new(),
             };
             let options = PlanOptions {

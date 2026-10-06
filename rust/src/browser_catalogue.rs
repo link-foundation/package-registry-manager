@@ -60,12 +60,17 @@ pub fn catalogue_name(id: &str) -> &str {
         .map_or(id, String::as_str)
 }
 
-/// Channels and aliases supported by Browser Commander's real launcher.
+/// Channels and aliases with a launch control protocol in the catalogue.
 #[must_use]
 pub fn launch_channels() -> Vec<&'static str> {
     browser_sources()
         .iter()
-        .filter(|source| source.control_protocol.as_deref() == Some("cdp"))
+        .filter(|source| {
+            source
+                .control_protocol
+                .as_deref()
+                .is_some_and(|protocol| !protocol.is_empty())
+        })
         .flat_map(|source| {
             std::iter::once(source.id.as_str()).chain(source.aliases.iter().map(String::as_str))
         })
@@ -211,15 +216,22 @@ pub fn installed_description() -> String {
 /// Reject unavailable engines before creating an automated profile.
 pub fn validate_channel(channel: &str) -> Result<()> {
     let source = find_browser_source(channel);
-    if source.is_some_and(|source| source.control_protocol.as_deref() == Some("cdp")) {
+    if source.is_some_and(|source| {
+        source
+            .control_protocol
+            .as_deref()
+            .is_some_and(|protocol| !protocol.is_empty())
+    }) {
         return Ok(());
     }
     let reason = source.map_or_else(
         || format!("unknown --browser-channel '{channel}'"),
-        |source| format!(
-            "{channel} requires {} control, which browser-commander's real launcher does not support yet (https://github.com/link-foundation/browser-commander/issues/114)",
-            source.control_protocol.as_deref().unwrap_or(&source.family)
-        ),
+        |source| {
+            let upstream = if source.family == "safari" {
+                "; Safari launch support is tracked at https://github.com/link-foundation/browser-commander/issues/126"
+            } else { "" };
+            format!("{channel} has no launch control protocol in browser-commander's catalogue{upstream}")
+        },
     );
     bail!(
         "{reason}; choose from {}. {}",

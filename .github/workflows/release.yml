@@ -614,7 +614,7 @@ jobs:
 
       - name: Audit JavaScript dependencies
         if: matrix.os == 'ubuntu-24.04' && matrix.node == 24
-        run: npm audit --audit-level=high --prefix js
+        run: npm run audit --prefix js
 
       - name: Verify JavaScript package contents
         if: matrix.os == 'ubuntu-24.04' && matrix.node == 24
