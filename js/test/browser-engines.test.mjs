@@ -193,12 +193,18 @@ test("default profiles keep Firefox variants separate from Chromium", () => {
 });
 
 test("refuses a default Firefox profile before opening it", () => {
+  const homeDir = path.resolve("fake-home");
+  const directories = {
+    linux: [".mozilla", "firefox"],
+    darwin: ["Library", "Application Support", "Firefox"],
+    win32: ["AppData", "Roaming", "Mozilla", "Firefox"],
+  };
   assert.throws(
     () =>
-      assertDedicatedProfile(path.resolve("fake-home/.mozilla/firefox/abc"), {
-        homeDir: path.resolve("fake-home"),
-        environment: {},
-      }),
+      assertDedicatedProfile(
+        path.join(homeDir, ...directories[process.platform], "abc"),
+        { homeDir, environment: {} },
+      ),
     /dedicated profile/,
   );
 });
