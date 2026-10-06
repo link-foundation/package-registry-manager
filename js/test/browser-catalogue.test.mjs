@@ -83,7 +83,9 @@ test("lists all imports and supported launch channels in CLI help", () => {
 });
 
 test("preserves the selected Chromium target and its snapshot profile", () => {
-  for (const id of launchChannels()) {
+  for (const id of launchChannels().filter(
+    (channel) => findBrowserSource(channel).controlProtocol === "cdp",
+  )) {
     const options = parseBrowserOptions({ channel: id, importFrom: "firefox" });
     const launch = launchOptions(options, "/profile");
     assert.equal(launch.channel, id);
@@ -132,7 +134,9 @@ test("accepts every launchable id and alias and rejects unsupported engines", ()
       channel.toUpperCase(),
     );
   }
-  for (const channel of ["safari", "duckduckgo"]) {
+  for (const channel of BROWSER_IDS.filter(
+    (id) => !["cdp", "bidi"].includes(findBrowserSource(id).controlProtocol),
+  )) {
     assert.throws(
       () => parseBrowserOptions({ channel }),
       /no launch control protocol/,

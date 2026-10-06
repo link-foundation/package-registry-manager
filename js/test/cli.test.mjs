@@ -204,3 +204,43 @@ test("rejects --open-with together with --no-browser", async () => {
     },
   );
 });
+
+test("setup --all selects all publishable manifests and accepts a registry filter (#33)", async () => {
+  const all = await execute(process.execPath, [
+    cli,
+    "setup",
+    "--all",
+    "--repository",
+    fixture,
+    "--offline",
+  ]);
+  assert.match(all.stdout, /npm: @acme\/widgets/);
+  assert.match(all.stdout, /crates-io: acme-widgets/);
+  assert.match(all.stdout, /pypi:/);
+  assert.match(all.stdout, /Dry run only/);
+  const filtered = await execute(process.execPath, [
+    cli,
+    "setup",
+    "--all",
+    "--registry",
+    "npm",
+    "--repository",
+    fixture,
+    "--offline",
+  ]);
+  assert.match(filtered.stdout, /npm:/);
+  assert.doesNotMatch(filtered.stdout, /crates-io:/);
+  await assert.rejects(
+    execute(process.execPath, [
+      cli,
+      "setup",
+      "--all",
+      "--package",
+      "tool",
+      "--repository",
+      fixture,
+      "--offline",
+    ]),
+    /mutually exclusive/,
+  );
+});

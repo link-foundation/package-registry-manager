@@ -16,7 +16,7 @@ use package_registry_manager::prerequisites::{
     probe_environment, render_prerequisites, BrowserDisplay, BrowserSummary,
 };
 use package_registry_manager::registry_state::{Endpoints, RegistryClient};
-use package_registry_manager::setup::{execute_plan, BrowserMode, ExecuteOptions};
+use package_registry_manager::setup::{execute_plans_with, BrowserMode, ExecuteOptions};
 use package_registry_manager::sign_in_import::import_sources;
 use package_registry_manager::{
     inspect_repository_with, InspectOptions, Inspection, Package, PlanMode, Registry, SetupPlan,
@@ -88,10 +88,14 @@ enum Commands {
         #[command(flatten)]
         publisher: PublisherArgs,
     },
-    /// Bootstrap or attach trusted publishing for one package.
+    /// Bootstrap or attach trusted publishing for one package or the whole repository.
     Setup {
-        #[arg(long, value_parser = parse_registry)]
-        registry: Registry,
+        #[arg(long, value_parser = parse_registry, required_unless_present = "all")]
+        registry: Option<Registry>,
+
+        /// Set up every publishable package in one browser session.
+        #[arg(long, conflicts_with = "package")]
+        all: bool,
 
         /// Select a package when a repository has multiple packages for a registry.
         #[arg(long)]
@@ -188,6 +192,10 @@ struct PublisherArgs {
     #[arg(long, value_name = "FILE")]
     workflow: Option<String>,
 
+    /// Propose missing publishing jobs in a draft PR; --workflow chooses its target.
+    #[arg(long)]
+    add_publish_job: bool,
+
     /// GitHub environment of the trusted publisher.
     #[arg(long, value_name = "NAME")]
     environment: Option<String>,
@@ -204,10 +212,11 @@ impl PublisherArgs {
                 "--workflow must be a workflow file name in .github/workflows, such as release.yml"
             );
         }
-        if !repository
-            .join(".github/workflows")
-            .join(workflow)
-            .is_file()
+        if !self.add_publish_job
+            && !repository
+                .join(".github/workflows")
+                .join(workflow)
+                .is_file()
         {
             bail!("--workflow: .github/workflows/{workflow} does not exist");
         }
@@ -248,7 +257,7 @@ async fn main() -> Result<()> {
     let selected = match &args.command {
         Commands::Inspect => return output_inspection(&inspection, args.format),
         Commands::Plan { registry, .. } => registry.iter().copied().collect::<BTreeSet<_>>(),
-        Commands::Setup { registry, .. } => BTreeSet::from([*registry]),
+        Commands::Setup { registry, .. } => registry.iter().copied().collect::<BTreeSet<_>>(),
     };
     let environment = probe_environment(
         args.offline,
@@ -261,6 +270,15 @@ async fn main() -> Result<()> {
         &endpoints,
     )
     .await;
+    let python = if inspection.packages.iter().any(|package| {
+        package.registry == Registry::PyPi
+            && package.publishable
+            && (selected.is_empty() || selected.contains(&Registry::PyPi))
+    }) {
+        Some(package_registry_manager::python::probe_python(args.verbose).await)
+    } else {
+        None
+    };
     match args.command {
         Commands::Inspect => Ok(()),
         Commands::Plan {
@@ -271,6 +289,8 @@ async fn main() -> Result<()> {
             publisher,
         } => {
             let options = PlanOptions {
+                python,
+                add_publish_job: publisher.add_publish_job,
                 verify_release,
                 workflow: publisher.workflow(&args.repository)?,
                 publisher_environment: publisher.environment()?,
@@ -291,6 +311,7 @@ async fn main() -> Result<()> {
         }
         Commands::Setup {
             registry: _,
+            all,
             package,
             dry_run: _,
             execute,
@@ -336,6 +357,8 @@ async fn main() -> Result<()> {
                 None => PathBuf::new(),
             };
             let options = PlanOptions {
+                python,
+                add_publish_job: publisher.add_publish_job,
                 verify_release,
                 workflow: publisher.workflow(&args.repository)?,
                 publisher_environment: publisher.environment()?,
@@ -345,10 +368,17 @@ async fn main() -> Result<()> {
                 manual,
             };
             let plans = build_plans_with(&inspection, &selected, &options);
-            let plan = select_plan(&plans, package.as_deref())?;
-            output_plans(std::slice::from_ref(plan), args.format)?;
-            execute_plan(
-                plan,
+            let selected_plans = if all {
+                plans
+                    .into_iter()
+                    .filter(|plan| plan.package.publishable)
+                    .collect::<Vec<_>>()
+            } else {
+                vec![select_plan(&plans, package.as_deref())?.clone()]
+            };
+            output_plans(&selected_plans, args.format)?;
+            execute_plans_with(
+                &selected_plans,
                 &ExecuteOptions {
                     repository: &args.repository,
                     browser,
@@ -360,10 +390,14 @@ async fn main() -> Result<()> {
                     open_with: open_with.as_deref(),
                     keep_session,
                     verbose: args.verbose,
-                    endpoints: options.endpoints,
+                    endpoints: options.endpoints.clone(),
                     poll_interval: Duration::from_secs(5),
                     wait_timeout: Duration::from_secs(20 * 60),
                 },
+                Some(&inspection),
+                options.workflow.as_deref(),
+                options.publisher_environment.as_deref(),
+                all,
             )
             .await
         }

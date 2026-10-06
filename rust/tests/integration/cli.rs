@@ -84,6 +84,44 @@ fn setup_is_safe_by_default() {
 }
 
 #[test]
+fn setup_all_selects_every_publishable_package_and_accepts_a_registry_filter() {
+    let repository = polyglot();
+    let output = run(
+        &["--repository", &repository, "--offline", "setup", "--all"],
+        None,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "npm: @acme/widgets",
+        "crates-io: acme-widgets",
+        "pypi: acme-widgets",
+        "Dry run only",
+    ] {
+        assert!(stdout.contains(expected), "{expected} in {stdout}");
+    }
+    let output = run(
+        &[
+            "--repository",
+            &repository,
+            "--offline",
+            "setup",
+            "--all",
+            "--registry",
+            "npm",
+        ],
+        None,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("npm: @acme/widgets"));
+    assert!(!stdout.contains("crates-io:"));
+    let output = Command::new(env!("CARGO_BIN_EXE_package-registry-manager"))
+        .args(["--offline", "setup", "--all", "--package", "tool"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
 fn plan_reports_registry_state_in_json() {
     let registry = MockRegistry::start(|_| None);
     let repository = polyglot();

@@ -14,7 +14,11 @@ import { parseRegistry } from "./model.mjs";
 import { buildPlans } from "./plan.mjs";
 import { probeEnvironment, renderPrerequisites } from "./prerequisites.mjs";
 import { probeRegistryState } from "./registry-state.mjs";
-import { BROWSER_MODES, defaultBrowserProfile, executePlan } from "./setup.mjs";
+import {
+  BROWSER_MODES,
+  defaultBrowserProfile,
+  executePlans,
+} from "./setup.mjs";
 import { importSources } from "./sign-in-import.mjs";
 
 export { isDirectExecution };
@@ -25,6 +29,7 @@ Commands:
   inspect                         Discover supported package manifests
   plan [--registry <registry>]    Print ordered setup plans
   setup --registry <registry>     Bootstrap or attach trusted publishing
+  setup --all                     Set up every publishable package in one session
 
 Global options:
   -h, --help                      Print this help
@@ -41,6 +46,8 @@ Plan and setup options:
   --workflow <file>               Trusted-publisher workflow file in
                                   .github/workflows, when detection finds
                                   several or the wrong one
+  --add-publish-job                Propose missing publishing jobs in a draft PR;
+                                  --workflow chooses its target file
   --environment <name>            GitHub environment of the trusted publisher
   --package <name>                Plan only this package, or select it for
                                   setup when a registry has several
@@ -104,11 +111,13 @@ export async function main(args = process.argv.slice(2)) {
       offline: { type: "boolean", default: false },
       "verify-release": { type: "boolean", default: false },
       workflow: { type: "string" },
+      "add-publish-job": { type: "boolean", default: false },
       environment: { type: "string" },
       "dry-run": { type: "boolean", default: false },
       registry: { type: "string", multiple: true },
       package: { type: "string" },
       execute: { type: "boolean", default: false },
+      all: { type: "boolean", default: false },
       yes: { type: "boolean", default: false },
       "no-browser": { type: "boolean", default: false },
       "open-with": { type: "string" },
@@ -175,6 +184,12 @@ export async function main(args = process.argv.slice(2)) {
   const environment = await probeEnvironment({
     offline: values.offline,
     verbose: values.verbose,
+    python: inspection.packages.some(
+      (item) =>
+        item.registry === "pypi" &&
+        item.publishable &&
+        (registries.length === 0 || registries.includes("pypi")),
+    ),
     npm: inspection.packages.some(
       (item) =>
         item.registry === "npm" &&
@@ -185,7 +200,12 @@ export async function main(args = process.argv.slice(2)) {
   const planOptions = {
     verifyRelease: values["verify-release"],
     manual: values.manual,
-    workflow: await workflowOverride(repository, values.workflow),
+    workflow: await workflowOverride(
+      repository,
+      values.workflow,
+      values["add-publish-job"],
+    ),
+    addPublishJob: values["add-publish-job"],
     publisherEnvironment: nonEmpty(values.environment, "--environment"),
     environment,
     browser: browserSummary(command, values, browserOptions),
@@ -198,7 +218,10 @@ export async function main(args = process.argv.slice(2)) {
     outputPlans(plans, values.format);
     return;
   }
-  if (registries.length !== 1) {
+  if (values.all && values.package) {
+    throw new Error("--all and --package are mutually exclusive");
+  }
+  if (!values.all && registries.length !== 1) {
     throw new Error("setup requires exactly one --registry <registry>");
   }
   if (values["dry-run"] && values.execute) {
@@ -215,27 +238,36 @@ export async function main(args = process.argv.slice(2)) {
   }
 
   const plans = buildPlans(inspection, registries, planOptions);
-  const plan = selectPlan(plans, values.package);
-  outputPlans([plan], values.format);
-  await executePlan(plan, {
-    repository,
-    execute: values.execute,
-    yes: values.yes,
-    noBrowser: values["no-browser"],
-    openWith: nonEmpty(values["open-with"], "--open-with"),
-    keepSession: values["keep-session"],
-    browser: values.browser,
-    browserOptions,
-    browserProfile: path.resolve(
-      values["browser-profile"] ??
-        defaultBrowserProfile({ channel: browserOptions.channel }),
-    ),
-    verbose: values.verbose,
-    verifyRelease: values["verify-release"],
-  });
+  const selected = values.all
+    ? plans.filter((plan) => plan.package.publishable)
+    : [selectPlan(plans, values.package)];
+  outputPlans(selected, values.format);
+  await executePlans(
+    selected,
+    {
+      inspection,
+      workflow: planOptions.workflow,
+      publisherEnvironment: planOptions.publisherEnvironment,
+      repository,
+      execute: values.execute,
+      yes: values.yes,
+      noBrowser: values["no-browser"],
+      openWith: nonEmpty(values["open-with"], "--open-with"),
+      keepSession: values["keep-session"],
+      browser: values.browser,
+      browserOptions,
+      browserProfile: path.resolve(
+        values["browser-profile"] ??
+          defaultBrowserProfile({ channel: browserOptions.channel }),
+      ),
+      verbose: values.verbose,
+      verifyRelease: values["verify-release"],
+    },
+    values.all,
+  );
 }
 
-async function workflowOverride(repository, workflow) {
+async function workflowOverride(repository, workflow, adding = false) {
   if (workflow === undefined) {
     return undefined;
   }
@@ -249,7 +281,7 @@ async function workflowOverride(repository, workflow) {
     (metadata) => metadata.isFile(),
     () => false,
   );
-  if (!found) {
+  if (!found && !adding) {
     throw new Error(`--workflow: .github/workflows/${workflow} does not exist`);
   }
   return workflow;

@@ -375,3 +375,46 @@ test("splits jobs by indentation and ignores comments", () => {
   );
   assert.deepEqual(parsed.header, ["on: push", "env:", "  A: b", ""]);
 });
+
+test("follows node, bash and Python scripts running python -m twine (#33)", async () => {
+  for (const [runner, script, contents] of [
+    [
+      "node",
+      "scripts/publish-to-pypi.mjs",
+      "await $`cd python && python -m twine upload dist/*`;",
+    ],
+    ["bash", "scripts/publish.sh", "python -m twine upload dist/*"],
+    [
+      "python",
+      "scripts/publish.py",
+      'subprocess.run(["python", "-m", "twine", "upload", "dist/*"])',
+    ],
+  ]) {
+    const root = await repository({
+      "python/pyproject.toml": '[project]\nname="tool"\nversion="1.0.0"\n',
+      [script]: contents,
+      ".github/workflows/release.yml": `on: workflow_dispatch\njobs:\n  python-release:\n    permissions: {id-token: write}\n    steps:\n      - run: ${runner} ${script}\n`,
+    });
+    const inspection = await inspectRepository(root);
+    assert.equal(inspection.packages[0].workflow, "release.yml", runner);
+    assert.deepEqual(inspection.packages[0].workflow_jobs, ["python-release"]);
+  }
+});
+
+test("warns and blocks trusted-publisher setup without a publishing job (#33)", async () => {
+  const root = await repository({ "package.json": '{"name":"tool"}' });
+  const inspection = await inspectRepository(root);
+  assert.match(
+    inspection.packages[0].warnings.join("\n"),
+    /no workflow publishes tool to npm; CI releases will not reach it/,
+  );
+  const [plan] = buildPlans(inspection);
+  assert.match(plan.skipped_reason, /publishing job/);
+  assert.equal(plan.trusted_publisher, undefined);
+  assert.deepEqual(
+    plan.steps.map((step) => step.id),
+    ["add-publishing-workflow"],
+  );
+  const [override] = buildPlans(inspection, [], { workflow: "release.yml" });
+  assert.equal(override.trusted_publisher.workflow, "release.yml");
+});

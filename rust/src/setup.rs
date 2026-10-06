@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::approvals::{
-    approval_deadline, next_link, oidc_release_note, LinkKind, APPROVAL_ATTEMPTS, TWO_FACTOR_HINT,
+    approval_deadline, next_link, LinkKind, APPROVAL_ATTEMPTS, TWO_FACTOR_HINT,
 };
 use crate::auth_urls::{
     node_options_with_shim, resolve_program, run_interactive, write_tty_shim, CommandOutput,
@@ -21,7 +21,7 @@ use crate::browser_options::BrowserOptions;
 use crate::default_browser::{detect_default_browser, open_with_command};
 use crate::flows::CLEANUP_CONDITIONS;
 use crate::model::Registry;
-use crate::model::{CommandSpec, PlanMode, SetupPlan, SetupStep, StepKind};
+use crate::model::{CommandSpec, SetupPlan, SetupStep, StepKind};
 use crate::npm_package::{
     lists_trusted_publisher, packed_entry, report_pack_warnings, trust_created, verify_bins,
     PUBLISH_REJECTED,
@@ -29,13 +29,14 @@ use crate::npm_package::{
 use crate::pages::{pages_change_warning, report_pages, PagesState, PAGES_CHANGES};
 use crate::plan::package_directory;
 use crate::prerequisites::two_factor_mode;
-use crate::profile::protect_legacy_profile;
 use crate::registry_state::{npm_trusted, truthy, Endpoints, Lookup, RegistryClient};
 use crate::tokens::{
     cargo_home, read_cargo_token, report_token_secrets, TokenState, CRATES_TOKENS_URL,
 };
 
+mod batch;
 mod crates_session;
+pub use batch::{execute_plan, execute_plans, execute_plans_with};
 
 const PREFILLED_FORMS: [&str; 2] = ["configure-trusted-publisher", "create-pending-publisher"];
 const INTERACTIVE_CHECKS: [&str; 2] = ["check-trust", "verify-trusted-publisher"];
@@ -79,47 +80,6 @@ pub struct ExecuteOptions<'a> {
     pub wait_timeout: Duration,
 }
 
-/// Run a setup plan. Without `execute` it only reports a dry run. Steps whose
-/// `when` condition does not hold are skipped, so a re-run after a partial
-/// success resumes where the previous run stopped.
-#[allow(clippy::future_not_send)] // Browser Commander's native CDP adapter is intentionally !Sync.
-pub async fn execute_plan(plan: &SetupPlan, options: &ExecuteOptions<'_>) -> Result<()> {
-    if !plan.package.publishable {
-        bail!(
-            "{} is not publishable: {}",
-            plan.package.name,
-            plan.package.problems.join("; ")
-        );
-    }
-    if plan.mode == Some(PlanMode::Complete) {
-        let remaining = if plan.steps.is_empty() {
-            "nothing to do."
-        } else {
-            "only the repository checks remain."
-        };
-        println!(
-            "{} already publishes through trusted publishing; {remaining}",
-            plan.package.name
-        );
-        if plan.steps.is_empty() {
-            return Ok(());
-        }
-    }
-    if !options.execute {
-        println!("Dry run only. Re-run with --execute to run these steps and open the registry.");
-        return Ok(());
-    }
-    protect_legacy_profile(options.repository, options.browser_profile, options.verbose).await?;
-    let mut session = Session::new(plan, options);
-    let result = session.run().await;
-    session.cleanup().await;
-    result?;
-    if let Some(prefill) = &plan.oidc_publisher {
-        println!("\n{}", oidc_release_note(&prefill.workflow));
-    }
-    Ok(())
-}
-
 struct Session<'a> {
     plan: &'a SetupPlan,
     options: &'a ExecuteOptions<'a>,
@@ -128,6 +88,7 @@ struct Session<'a> {
     values: BTreeMap<String, String>,
     token_secrets: Vec<String>,
     browser: Option<Automation>,
+    domains: Vec<&'static str>,
     temporary: Option<tempfile::TempDir>,
     shim: Option<(tempfile::TempDir, PathBuf)>,
     /// The default browser's name, when detected.
@@ -154,6 +115,7 @@ impl<'a> Session<'a> {
             values: BTreeMap::new(),
             token_secrets: Vec::new(),
             browser: None,
+            domains: crate::sign_in_import::sign_in_domains(plan.registry).to_vec(),
             temporary: None,
             shim: None,
             browser_name: None,
@@ -194,7 +156,8 @@ impl<'a> Session<'a> {
 
     /// Runs every cleanup step of the plan whose condition holds, including
     /// those after a step that failed (#24).
-    async fn cleanup(&mut self) {
+    async fn cleanup(&mut self, defer_auth: bool, close_browser: bool) -> Vec<SetupStep> {
+        let mut deferred = Vec::new();
         let plan = self.plan;
         let cleanup = plan.steps.iter().filter(|step| {
             step.when
@@ -202,7 +165,18 @@ impl<'a> Session<'a> {
                 .is_some_and(|when| CLEANUP_CONDITIONS.contains(&when))
         });
         for step in cleanup {
-            if step.id == "sign-out" && self.keeps_session(step) {
+            if defer_auth
+                && ["sign-out", "crates-sign-out"].contains(&step.id.as_str())
+                && step.when.as_deref().is_some_and(|when| self.holds(when))
+            {
+                if step.id == "sign-out" && self.keeps_session(step) {
+                    println!(
+                        "Keeping the npm session (--keep-session); run npm logout to revoke it."
+                    );
+                } else {
+                    deferred.push(step.clone());
+                }
+            } else if step.id == "sign-out" && self.keeps_session(step) {
                 println!(
                     "Keeping the npm session (--keep-session): its token stays in npm's user \
                      configuration until you run npm logout, and the next run reuses it while \
@@ -223,11 +197,14 @@ impl<'a> Session<'a> {
                 }
             }
         }
-        if let Some(browser) = self.browser.take() {
-            browser.close().await;
+        if close_browser {
+            if let Some(browser) = self.browser.take() {
+                browser.close().await;
+            }
         }
         self.temporary = None;
         self.shim = None;
+        deferred
     }
 
     fn keeps_session(&self, step: &SetupStep) -> bool {
@@ -922,11 +899,11 @@ pub fn render(command: &CommandSpec) -> String {
         .join(" ")
 }
 
-fn is_yes(answer: &str) -> bool {
+pub(crate) fn is_yes(answer: &str) -> bool {
     matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
-fn prompt(message: &str) -> Result<String> {
+pub(crate) fn prompt(message: &str) -> Result<String> {
     print!("{message}");
     io::stdout().flush()?;
     let mut answer = String::new();

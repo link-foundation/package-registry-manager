@@ -1,6 +1,7 @@
 import { exec } from "command-stream";
 
 import { automatedDescription } from "./browser-options.mjs";
+import { probePython } from "./python.mjs";
 import { getJson, registryEndpoint } from "./registry-state.mjs";
 
 /** The Node.js versions npm 11 runs on. */
@@ -154,6 +155,7 @@ export async function probeEnvironment(options = {}) {
       : null;
   return {
     offline,
+    python: options.python ? await probePython({ verbose }) : undefined,
     node: nodeVersion,
     npm: npmVersion?.code === 0 ? npmVersion.stdout.trim() : null,
     trustNpm: spec,

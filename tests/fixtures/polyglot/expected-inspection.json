@@ -23,14 +23,20 @@
       "name": "acme-widgets",
       "version": "1.2.3",
       "manifest": "rust/Cargo.toml",
-      "publishable": true
+      "publishable": true,
+      "warnings": [
+        "no workflow publishes acme-widgets to crates-io; CI releases will not reach it"
+      ]
     },
     {
       "registry": "pypi",
       "name": "acme-widgets",
       "version": "1.2.3",
       "manifest": "python/pyproject.toml",
-      "publishable": true
+      "publishable": true,
+      "warnings": [
+        "no workflow publishes acme-widgets to pypi; CI releases will not reach it"
+      ]
     },
     {
       "registry": "go-modules",

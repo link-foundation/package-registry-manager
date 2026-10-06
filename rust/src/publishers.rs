@@ -35,7 +35,7 @@ static CRATES_JOB: LazyLock<Regex> = LazyLock::new(|| {
 });
 static PYPI_JOB: LazyLock<Regex> = LazyLock::new(|| {
     regex(
-        r"pypa/gh-action-pypi-publish|\btwine\s+upload\b|\b(?:uv|poetry|hatch|flit|pdm)\s+publish\b",
+        r"pypa/gh-action-pypi-publish|\b(?:python(?:3(?:\.\d+)?)?\s+-m\s+)?twine\s+upload\b|\b(?:uv|poetry|hatch|flit|pdm)\s+publish\b",
     )
 });
 static NPM_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:npm|pnpm|yarn)\b"));

@@ -27,11 +27,15 @@ pub struct PlanOptions {
     pub browser: BrowserDisplay,
     /// Trusted-publisher workflow file that overrides the detected one.
     pub workflow: Option<String>,
+    /// Propose a missing publishing job even when a target workflow is explicit.
+    pub add_publish_job: bool,
     /// GitHub environment of the trusted publisher, overriding the detected one.
     pub publisher_environment: Option<String>,
     /// crates.io: keep the manual first-publish token checklist instead of
     /// the crates.io API (`--manual`).
     pub manual: bool,
+    /// Installed Python interpreters, when the CLI has probed them.
+    pub python: Option<Vec<crate::python::PythonInterpreter>>,
 }
 
 /// Build setup plans for every publishable package found during inspection.
@@ -198,6 +202,25 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
             ..base_plan(inspection, package, Vec::new())
         };
     }
+    if trusted
+        && (workflow.is_none()
+            || (options.add_publish_job
+                && package.workflow.is_none()
+                && package.workflow_candidates.is_empty()))
+    {
+        return SetupPlan {
+            skipped_reason: Some(format!(
+                "no workflow publishes {} to {}; CI releases will not reach it; add a publishing job or pass --workflow <file> before attaching a trusted publisher",
+                package.name, package.registry
+            )),
+            ..base_plan(inspection, package, vec![SetupStep::new(
+                "add-publishing-workflow",
+                "Offer a publishing job in a reviewed pull request",
+                StepKind::Manual,
+                "Add the missing publishing job to the workflow used by the other registries, on a new branch and pull request. Review and merge it, then re-run setup to attach the trusted publisher.",
+            ).confirmed()])
+        };
+    }
     let context = FlowContext {
         directory: package_directory(&package.manifest),
         slug: owner_repo.map(|(owner, name)| format!("{owner}/{name}")),
@@ -247,6 +270,9 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
             environment,
             project: (package.registry == Registry::PyPi).then(|| package.name.clone()),
         });
+    }
+    if let Some(tools) = &options.python {
+        crate::python::apply_python(&mut plan, tools);
     }
     plan
 }

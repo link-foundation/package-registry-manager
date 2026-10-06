@@ -69,7 +69,7 @@ pub fn launch_channels() -> Vec<&'static str> {
             source
                 .control_protocol
                 .as_deref()
-                .is_some_and(|protocol| !protocol.is_empty())
+                .is_some_and(|protocol| ["cdp", "bidi"].contains(&protocol))
         })
         .flat_map(|source| {
             std::iter::once(source.id.as_str()).chain(source.aliases.iter().map(String::as_str))
@@ -220,7 +220,7 @@ pub fn validate_channel(channel: &str) -> Result<()> {
         source
             .control_protocol
             .as_deref()
-            .is_some_and(|protocol| !protocol.is_empty())
+            .is_some_and(|protocol| ["cdp", "bidi"].contains(&protocol))
     }) {
         return Ok(());
     }
@@ -230,7 +230,7 @@ pub fn validate_channel(channel: &str) -> Result<()> {
             let upstream = if source.family == "safari" {
                 "; Safari launch support is tracked at https://github.com/link-foundation/browser-commander/issues/126"
             } else { "" };
-            format!("{channel} has no launch control protocol in browser-commander's catalogue{upstream}")
+            format!("{channel} has no launch control protocol supported by this manager{upstream}")
         },
     );
     bail!(
