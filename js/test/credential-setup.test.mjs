@@ -150,6 +150,37 @@ test("token setup defaults to selected org repositories and verifies before revo
   }
 });
 
+test("credential approval omits configured secret identifiers (#38)", async () => {
+  const root = await fixture();
+  const identifier = "REGISTRY_SECRET_IDENTIFIER";
+  let message;
+  try {
+    await assert.rejects(
+      setupCredential({
+        plan: {
+          registry: "docker-hub",
+          package: { token_secrets: [identifier] },
+          repository: { github_owner: "acme", github_repository: "tool" },
+        },
+        options: {
+          repository: root,
+          secretCommand: async () => JSON.stringify({ present: false }),
+        },
+        prompt: async (text) => {
+          message = text;
+          return "n";
+        },
+        automatedPage: async () => assert.fail("creation was declined"),
+      }),
+      /credential creation declined/,
+    );
+    assert.ok(message);
+    assert.ok(!message.includes(identifier));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("unsupported gh-manager fails before any browser credential creation (#38)", async () => {
   const root = await fixture();
   let opened = false;

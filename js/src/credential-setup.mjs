@@ -144,7 +144,7 @@ export async function setupCredential(session) {
     !options.yes &&
     !/^y(?:es)?$/i.test(
       await session.prompt(
-        `Create and store scoped ${secret}, verify it, then revoke the replaced token? [y/N] `,
+        "Create and store a scoped credential, verify it, then revoke the replaced token? [y/N] ",
       ),
     )
   ) {

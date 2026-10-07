@@ -161,7 +161,7 @@ elsewhere; the evidence and current limits remain in PR 40 for review.
 ## Local validation
 
 All contributing-guide checks pass: Rust formatting and warning-free Clippy,
-403 Rust tests, 237 passing JavaScript tests (one opt-in browser test skipped in
+403 Rust tests, 238 passing JavaScript tests (one opt-in browser test skipped in
 the default suite), 98 release-script tests and 30 root-script tests. Both opt-in
 browser smoke tests also passed with installed Chrome under Xvfb. Required docs,
 file size and latest-upstream dependency checks pass. The JavaScript generated
@@ -225,3 +225,12 @@ Three new CodeQL review findings were investigated in PR #40:
 
 `ci-logs/security-before.log` preserves the backtracking and oversized-identity
 regressions before these changes. No scanning rule is disabled or dismissed.
+
+The separate CodeQL check for `0fa2bc7` then reported one remaining high-severity
+alert even though the Security workflow passed. Its annotation identified
+`rust/src/setup.rs:947`: [historical alert 7](https://github.com/link-foundation/package-registry-manager/security/code-scanning/7)
+was reopened through the new credential approval prompt, which printed a
+configured secret name. Both ports now use constant approval text. The declined
+creation regression failed before the fix (`ci-logs/credential-prompt-before.log`)
+and verifies that configured identifiers stay out of the prompt. No token value
+was involved in either metadata-output warning.

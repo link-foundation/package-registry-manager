@@ -242,7 +242,11 @@ impl Session<'_> {
         {
             return Ok(());
         }
-        if !self.options.yes && !is_yes(&prompt(&format!("Create and store scoped {secret}, verify it, then revoke the replaced token? [y/N] "))?) { bail!("credential creation declined"); }
+        if !self.options.yes
+            && !is_yes(&prompt("Create and store a scoped credential, verify it, then revoke the replaced token? [y/N] ")?)
+        {
+            bail!("credential creation declined");
+        }
         // Raw browser protocol tracing is disabled while values are read.
         if let Some(browser) = self.browser.take() {
             browser.close().await;
