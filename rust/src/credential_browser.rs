@@ -85,8 +85,16 @@ pub const READ_TOKEN: &str = r#"(() => {
 /// Build the registry policy or the conservative browser helper.
 #[must_use]
 pub fn revoked_script(id: &str) -> String {
-    let id = json!(id);
+    let points: Vec<_> = id
+        .chars()
+        .take(257)
+        .map(|character| u32::from(character).to_string())
+        .collect();
+    if points.is_empty() || points.len() > 256 {
+        return "false".into();
+    }
+    let points = points.join(",");
     format!(
-        r#"(() => {{ const list = document.querySelector('[data-testid="tokens-list"], [data-token-list]'); if (!list) return false; return ![...list.querySelectorAll('[data-token-id]')].some(row => row.dataset.tokenId === {id}); }})()"#
+        r#"(() => {{ const id = String.fromCodePoint({points}); const list = document.querySelector('[data-testid="tokens-list"], [data-token-list]'); if (!list) return false; return ![...list.querySelectorAll('[data-token-id]')].some(row => row.dataset.tokenId === id); }})()"#
     )
 }

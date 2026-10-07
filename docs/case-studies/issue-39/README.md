@@ -161,7 +161,7 @@ elsewhere; the evidence and current limits remain in PR 40 for review.
 ## Local validation
 
 All contributing-guide checks pass: Rust formatting and warning-free Clippy,
-402 Rust tests, 234 passing JavaScript tests (one opt-in browser test skipped in
+403 Rust tests, 237 passing JavaScript tests (one opt-in browser test skipped in
 the default suite), 98 release-script tests and 30 root-script tests. Both opt-in
 browser smoke tests also passed with installed Chrome under Xvfb. Required docs,
 file size and latest-upstream dependency checks pass. The JavaScript generated
@@ -216,3 +216,12 @@ manifest and lockfile now require 0.26.2; all five upstream checks pass again.
 Its [release notes](https://github.com/link-foundation/browser-commander/releases/tag/v0.26.2)
 describe release preflight and fixture changes. JavaScript checks and the real
 Chrome smoke test are repeated with the installed patch release.
+
+Three new CodeQL review findings were investigated in PR #40:
+
+- [Maven regexp](https://github.com/link-foundation/package-registry-manager/pull/40#discussion_r4205253131): optional duplicate dashes allow exponential backtracking. The finite probe in `experiments/issue-39/publisher-regex-probe.mjs` reproduced a 250-ms VM timeout with a 64-MiB JavaScript heap limit. Removing the ambiguous optional dash preserves single/double-dash flags and passes the probe.
+- [Browser code construction](https://github.com/link-foundation/package-registry-manager/pull/40#discussion_r4205253158): identifiers used JSON string encoding in an evaluated script. They now enter generated code only as numeric Unicode code points, with a 256-code-point limit. Missing, empty or oversized identities cannot prove revocation. DOM tests cover hostile script text, Unicode and oversize input.
+- [Credential status output](https://github.com/link-foundation/package-registry-manager/pull/40#discussion_r4205288075): the status interpolated a secret name and expiry metadata. Both ports now print constant status text. Token values continue to travel only through suppressed stdin transport.
+
+`ci-logs/security-before.log` preserves the backtracking and oversized-identity
+regressions before these changes. No scanning rule is disabled or dismissed.

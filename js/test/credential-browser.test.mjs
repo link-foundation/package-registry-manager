@@ -86,3 +86,26 @@ test("a missing token list cannot prove revocation", () => {
     true,
   );
 });
+
+test("unbounded token identifiers cannot prove revocation", () => {
+  assert.equal(
+    evaluate(revokedScript("x".repeat(257)), {
+      '[data-testid="tokens-list"], [data-token-list]': {
+        querySelectorAll: () => [],
+      },
+    }),
+    false,
+  );
+});
+
+test("registry token identifiers remain data when they contain script text", () => {
+  const id = 'old"; globalThis.injected = true; // </script> λ😀';
+  assert.equal(
+    evaluate(revokedScript(id), {
+      '[data-testid="tokens-list"], [data-token-list]': {
+        querySelectorAll: () => [{ dataset: { tokenId: id } }],
+      },
+    }),
+    false,
+  );
+});

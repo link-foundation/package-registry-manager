@@ -67,5 +67,16 @@ export const READ_TOKEN = `(() => {
 
 /** Verify absence only when the token list itself is visible and identifies rows. */
 export function revokedScript(id) {
-  return `(() => { const list = document.querySelector('[data-testid="tokens-list"], [data-token-list]'); if (!list) return false; return ![...list.querySelectorAll('[data-token-id]')].some(row => row.dataset.tokenId === ${JSON.stringify(id)}); })()`;
+  if (typeof id !== "string" || id.length > 512) {
+    return "false";
+  }
+  const characters = Array.from(id);
+  if (characters.length === 0 || characters.length > 256) {
+    return "false";
+  }
+  // Only numeric literals enter generated code; registry text remains data.
+  const points = characters
+    .map((character) => character.codePointAt(0))
+    .join(",");
+  return `(() => { const id = String.fromCodePoint(${points}); const list = document.querySelector('[data-testid="tokens-list"], [data-token-list]'); if (!list) return false; return ![...list.querySelectorAll('[data-token-id]')].some(row => row.dataset.tokenId === id); })()`;
 }

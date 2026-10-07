@@ -17,10 +17,7 @@ export const JOB_PATTERNS = new Map([
   ["nuget", /\bdotnet\s+nuget\s+push\b|\bnuget\s+push\b/],
   ["jsr", /\bdeno\s+publish\b|\bjsr\s+publish\b/],
   ["docker-hub", /docker\/login-action|\bdocker\s+(?:login|push)\b/],
-  [
-    "maven-central",
-    /\bmvn\s+(?:--?[^\s]+\s+)*deploy\b|\bgradle(?:w)?\s+publish\b/,
-  ],
+  ["maven-central", /\bmvn\s+(?:-\S+\s+)*deploy\b|\bgradle(?:w)?\s+publish\b/],
   ["vscode-marketplace", /\bvsce\s+publish\b/],
   ["open-vsx", /\bovsx\s+publish\b/],
   [

@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import { inspectRepository } from "../src/discovery.mjs";
 import { buildPlans } from "../src/plan.mjs";
@@ -10,6 +13,18 @@ import { detectPublisher, parseWorkflow } from "../src/publishers.mjs";
 import { readWorkflows } from "../src/workflows.mjs";
 
 const temporaries = [];
+
+test("Maven publisher matching stays bounded on hostile option text", async () => {
+  await promisify(execFile)(process.execPath, [
+    "--max-old-space-size=64",
+    fileURLToPath(
+      new URL(
+        "../../experiments/issue-39/publisher-regex-probe.mjs",
+        import.meta.url,
+      ),
+    ),
+  ]);
+});
 
 after(async () => {
   await Promise.all(

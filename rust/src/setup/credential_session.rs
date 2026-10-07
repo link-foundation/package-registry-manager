@@ -265,11 +265,8 @@ impl Session<'_> {
             visibility,
             secret: secret.clone(),
         };
-        let token = rotate_credential(&previous, &mut host).await?;
-        println!(
-            "  {secret} verified; expiry {}; replaced token revocation verified.",
-            token.expires_at.unwrap_or_default()
-        );
+        rotate_credential(&previous, &mut host).await?;
+        println!("  Credential verified; replaced token revocation verified.");
         Ok(())
     }
 

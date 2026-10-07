@@ -82,7 +82,7 @@ static NUGET_JOB: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\bdotnet\s+nuget\s+push\b|\bnuget\s+push\b"));
 static JSR_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:deno|jsr)\s+publish\b"));
 static MAVEN_JOB: LazyLock<Regex> =
-    LazyLock::new(|| regex(r"\bmvn\s+(?:--?[^\s]+\s+)*deploy\b|\bgradle(?:w)?\s+publish\b"));
+    LazyLock::new(|| regex(r"\bmvn\s+(?:-\S+\s+)*deploy\b|\bgradle(?:w)?\s+publish\b"));
 static VSCE_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\bvsce\s+publish\b"));
 static OVSX_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\bovsx\s+publish\b"));
 static CHROME_JOB: LazyLock<Regex> =

@@ -159,7 +159,7 @@ export async function setupCredential(session) {
     true,
   );
   const expiry = new Date(Date.now() + days * 86_400_000).toISOString();
-  const token = await rotateCredential(previous, {
+  await rotateCredential(previous, {
     create: async () => {
       await page.goto(provider.url);
       await session.prompt(
@@ -206,7 +206,5 @@ export async function setupCredential(session) {
     },
     revoked: async (id) => page.evaluate(revokedScript(id)),
   });
-  console.log(
-    `  ${secret} verified; expiry ${token.expires_at}; replaced token revocation verified.`,
-  );
+  console.log("  Credential verified; replaced token revocation verified.");
 }

@@ -1,5 +1,17 @@
 use anyhow::{bail, Result};
 use chrono::{Duration, Utc};
+
+#[test]
+fn unbounded_token_identifiers_cannot_prove_revocation() {
+    assert_eq!(
+        package_registry_manager::credential_browser::revoked_script(&"x".repeat(257)),
+        "false"
+    );
+    assert_eq!(
+        package_registry_manager::credential_browser::revoked_script(""),
+        "false"
+    );
+}
 use package_registry_manager::credential_cycle::{
     credential_policy, needs_rotation, rotate_credential, Credential, CredentialAdapter,
     CredentialMetadata,
