@@ -46,6 +46,10 @@ struct Args {
     #[arg(long, global = true, default_value = ".")]
     repository: PathBuf,
 
+    /// Bootstrap a pushed branch or pull-request head before merge.
+    #[arg(long = "ref", global = true)]
+    bootstrap_ref: Option<String>,
+
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
 
@@ -241,12 +245,23 @@ enum OutputFormat {
 async fn main() -> Result<()> {
     let args = Args::parse();
     let endpoints = Endpoints::from_env();
-    let discovered = inspect_repository_with(
-        &args.repository,
-        InspectOptions {
-            include_skipped: args.verbose,
-        },
-    )?;
+    let inspect_options = InspectOptions {
+        include_skipped: args.verbose,
+    };
+    let bootstrap_ref = args
+        .bootstrap_ref
+        .as_deref()
+        .map(package_registry_manager::bootstrap_reference::bootstrap_ref)
+        .transpose()?;
+    let discovered = if let Some(reference) = &bootstrap_ref {
+        package_registry_manager::bootstrap_reference::inspect_reference(
+            &args.repository,
+            reference,
+            inspect_options,
+        )?
+    } else {
+        inspect_repository_with(&args.repository, inspect_options)?
+    };
     let inspection = if args.offline {
         discovered
     } else {
@@ -289,6 +304,7 @@ async fn main() -> Result<()> {
             publisher,
         } => {
             let options = PlanOptions {
+                bootstrap_ref: bootstrap_ref.clone(),
                 python,
                 add_publish_job: publisher.add_publish_job,
                 verify_release,
@@ -357,6 +373,7 @@ async fn main() -> Result<()> {
                 None => PathBuf::new(),
             };
             let options = PlanOptions {
+                bootstrap_ref: bootstrap_ref.clone(),
                 python,
                 add_publish_job: publisher.add_publish_job,
                 verify_release,
@@ -576,6 +593,11 @@ fn output_plans(plans: &[SetupPlan], format: OutputFormat) -> Result<()> {
                     .map(|mode| format!(" ({mode})"))
                     .unwrap_or_default();
                 writeln!(output, "{}: {}{mode}", plan.registry, plan.package.name)?;
+                writeln!(
+                    output,
+                    "  credentials: {}",
+                    plan.credential_policy.description
+                )?;
                 if plan.mode == Some(PlanMode::Complete) {
                     writeln!(output, "  trusted publishing is already in use")?;
                 }

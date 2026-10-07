@@ -15,6 +15,8 @@ use crate::registry_state::Endpoints;
 /// Options that shape setup plans.
 #[derive(Debug, Clone, Default)]
 pub struct PlanOptions {
+    /// Pushed branch or PR head for the first publication.
+    pub bootstrap_ref: Option<String>,
     /// Append release-verification steps to flows that support them.
     pub verify_release: bool,
     /// Registry API base URLs used in lookup steps.
@@ -74,6 +76,7 @@ pub fn build_plans_with(
 
 fn base_plan(inspection: &Inspection, package: &Package, steps: Vec<SetupStep>) -> SetupPlan {
     SetupPlan {
+        credential_policy: crate::credential_cycle::credential_policy(package.registry),
         schema_version: 1,
         registry: package.registry,
         package: package.clone(),
@@ -105,7 +108,7 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
         | Registry::CratesIo
         | Registry::PyPi
         | Registry::DockerHub
-        | Registry::Ghcr => return flow_plan(inspection, package, options),
+        | Registry::Ghcr | Registry::RubyGems | Registry::NuGet | Registry::Jsr => return flow_plan(inspection, package, options),
         Registry::GoModules => vec![
                 check(
                     "test-module",
@@ -122,36 +125,10 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
                 )
                 .url("https://go.dev/ref/mod#publishing-a-module"),
         ],
-        Registry::NuGet => vec![
-                check(
-                    "pack-package",
-                    "Build the NuGet package",
-                    "Create the package locally without pushing it.",
-                    "dotnet",
-                    &["pack", "--configuration", "Release"],
-                ),
-                browser(
-                    "configure-trusted-publishing",
-                    "Configure NuGet trusted publishing",
-                    "Sign in and add a GitHub Actions federated credential for this package.",
-                    "https://www.nuget.org/account/TrustedPublishing"
-                ),
-        ],
-        Registry::MavenCentral => vec![
-                check(
-                    "verify-build",
-                    "Verify the Maven build",
-                    "Run the build lifecycle without deploying an artifact.",
-                    "mvn",
-                    &["--batch-mode", "verify"],
-                ),
-                browser(
-                    "verify-namespace",
-                    "Verify a Central namespace",
-                    "Sign in to the Central Portal and verify the namespace used by the package coordinates.",
-                    "https://central.sonatype.com/publishing/namespaces"
-                ),
-        ],
+        Registry::MavenCentral | Registry::VsCodeMarketplace | Registry::OpenVsx | Registry::ChromeWebStore => {
+            if package.workflow.is_none() && options.workflow.is_none() { return SetupPlan { skipped_reason: Some(format!("no workflow publishes {} to {}; pass --workflow <file> for an explicit setup target",package.name,package.registry)), ..base_plan(inspection,package,Vec::new()) }; }
+            crate::extra_flows::token_flow(package)
+        },
         Registry::Packagist => vec![
                 check(
                     "validate-package",
@@ -239,6 +216,7 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
         Registry::CratesIo => crates_flow,
         Registry::PyPi => pypi_flow,
         Registry::DockerHub => docker_hub_flow,
+        Registry::RubyGems | Registry::NuGet | Registry::Jsr => crate::extra_flows::trusted_flow,
         _ => ghcr_flow,
     };
     let mode = plan_mode(package);
@@ -254,6 +232,15 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
             .collect(),
         _ => flow(package, &context),
     };
+    if let Some(reference) = &options.bootstrap_ref {
+        if let Some(fetch) = steps
+            .iter_mut()
+            .find(|step| step.id == "fetch-default-branch")
+        {
+            fetch.command.as_mut().expect("fetch command").args[2].clone_from(reference);
+            fetch.title = format!("Fetch bootstrap ref {reference}");
+        }
+    }
     // Pages readiness belongs to the repository, so it is checked in every mode.
     if let (Some(slug), Some(pages)) = (&context.slug, &repository.pages_workflow) {
         steps.extend(pages_steps(slug, pages));

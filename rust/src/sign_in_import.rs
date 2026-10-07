@@ -30,6 +30,14 @@ pub const fn sign_in_domains(registry: Registry) -> &'static [&'static str] {
         Registry::CratesIo => &["crates.io", "github.com"],
         Registry::Npm => &["npmjs.com"],
         Registry::PyPi => &["pypi.org", "github.com"],
+        Registry::RubyGems => &["rubygems.org", "github.com"],
+        Registry::NuGet => &["nuget.org", "login.microsoftonline.com"],
+        Registry::Jsr => &["jsr.io", "github.com"],
+        Registry::DockerHub => &["docker.com", "docker.io"],
+        Registry::MavenCentral => &["sonatype.com"],
+        Registry::VsCodeMarketplace => &["dev.azure.com", "login.microsoftonline.com"],
+        Registry::OpenVsx => &["open-vsx.org", "github.com"],
+        Registry::ChromeWebStore => &["google.com"],
         _ => &[],
     }
 }

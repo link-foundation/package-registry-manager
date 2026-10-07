@@ -192,7 +192,7 @@ impl Session<'_> {
         Ok(())
     }
 
-    async fn launch_browser(&self) -> Result<BrowserOptions> {
+    pub(super) async fn launch_browser(&self) -> Result<BrowserOptions> {
         let browser = self.options.browser_options;
         let Some(choice) = browser
             .import

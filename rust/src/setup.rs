@@ -36,6 +36,7 @@ use crate::tokens::{
 
 mod batch;
 mod crates_session;
+mod credential_session;
 pub use batch::{execute_plan, execute_plans, execute_plans_with};
 
 const PREFILLED_FORMS: [&str; 2] = ["configure-trusted-publisher", "create-pending-publisher"];
@@ -215,6 +216,17 @@ impl<'a> Session<'a> {
 
     async fn run_step(&mut self, step: &SetupStep) -> Result<()> {
         match step.kind {
+            StepKind::Check if step.id == "check-name-policy" => {
+                crate::npm_policy::check_name_policy(
+                    &self.plan.package.name,
+                    &self
+                        .options
+                        .endpoints
+                        .base(Registry::Npm)
+                        .unwrap_or_default(),
+                )
+                .await
+            }
             StepKind::Check if step.command.is_some() => self.check(step).await,
             StepKind::Check if step.id == "verify-bins" => self.verify_bins().await,
             StepKind::Check if step.id == "verify-token-revoked" => {
@@ -227,9 +239,19 @@ impl<'a> Session<'a> {
             StepKind::Command => self.command(step).await,
             StepKind::Wait => self.wait(step).await,
             StepKind::Browser => self.browser_step(step).await,
+            StepKind::Api if step.id == "manage-registry-token" => self.setup_credential().await,
             StepKind::Api => self.api_step(step).await,
             StepKind::Manual => {
                 println!("{}", step.description);
+                if step.id == "confirm-oidc-cleanup" {
+                    if self.holds("oidc-release-verified") {
+                        return Ok(());
+                    }
+                    if !is_yes(&prompt("Has a new release succeeded through OIDC without a stored registry token? [y/N] ")?) {
+                        bail!("a verified OIDC release is required before deleting token secrets");
+                    }
+                    return Ok(());
+                }
                 if let Some(url) = &step.url {
                     println!("  {url}");
                 }
@@ -508,6 +530,11 @@ impl<'a> Session<'a> {
             self.run_process(step, true).await?
         };
         if result.code != 0 {
+            if step.id == "first-publish"
+                && crate::npm_policy::policy_refusal(&format!("{}{}", result.stderr, result.stdout))
+            {
+                bail!("npm refused this name under its policy; no retry. Choose @owner/name or a longer descriptive name.");
+            }
             match step.id.as_str() {
                 "attach-trusted-publisher" => {
                     eprintln!("warning: npm trust failed; falling back to the browser form");
@@ -554,6 +581,16 @@ impl<'a> Session<'a> {
 
     fn record_pack(&mut self, output: &str) -> Result<()> {
         let packed = packed_entry(output)?;
+        if packed["name"].as_str() != Some(&self.plan.package.name)
+            || self
+                .plan
+                .package
+                .version
+                .as_deref()
+                .is_some_and(|version| packed["version"].as_str() != Some(version))
+        {
+            bail!("bootstrap ref package identity/version differs from inspection; inspect the selected ref again before publication");
+        }
         for file in packed["files"].as_array().into_iter().flatten() {
             println!(
                 "  {:>8}  {}",
@@ -581,7 +618,7 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
-    async fn wait(&self, step: &SetupStep) -> Result<()> {
+    async fn wait(&mut self, step: &SetupStep) -> Result<()> {
         let url = self.expand_text(step.url.as_deref().unwrap_or_default());
         let deadline = Instant::now() + self.options.wait_timeout;
         loop {
@@ -589,6 +626,9 @@ impl<'a> Session<'a> {
                 if truthy(&document)
                     && (step.id != "confirm-provenance" || self.is_trusted_release(&document))
                 {
+                    if step.id == "confirm-provenance" {
+                        self.conditions.insert("oidc-release-verified");
+                    }
                     println!("  {url} is ready");
                     return Ok(());
                 }

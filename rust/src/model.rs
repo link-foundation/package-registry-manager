@@ -26,10 +26,17 @@ pub enum Registry {
     DockerHub,
     #[serde(rename = "ghcr")]
     Ghcr,
+    #[serde(rename = "rubygems")]
+    RubyGems,
+    Jsr,
+    #[serde(rename = "vscode-marketplace")]
+    VsCodeMarketplace,
+    OpenVsx,
+    ChromeWebStore,
 }
 
 impl Registry {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 14] = [
         Self::Npm,
         Self::CratesIo,
         Self::PyPi,
@@ -39,6 +46,11 @@ impl Registry {
         Self::Packagist,
         Self::DockerHub,
         Self::Ghcr,
+        Self::RubyGems,
+        Self::Jsr,
+        Self::VsCodeMarketplace,
+        Self::OpenVsx,
+        Self::ChromeWebStore,
     ];
 
     #[must_use]
@@ -53,6 +65,11 @@ impl Registry {
             Self::Packagist => "Packagist",
             Self::DockerHub => "Docker Hub",
             Self::Ghcr => "GitHub Container Registry",
+            Self::RubyGems => "RubyGems",
+            Self::Jsr => "JSR",
+            Self::VsCodeMarketplace => "VS Code Marketplace",
+            Self::OpenVsx => "Open VSX",
+            Self::ChromeWebStore => "Chrome Web Store",
         }
     }
 }
@@ -69,6 +86,11 @@ impl fmt::Display for Registry {
             Self::Packagist => "packagist",
             Self::DockerHub => "docker-hub",
             Self::Ghcr => "ghcr",
+            Self::RubyGems => "rubygems",
+            Self::Jsr => "jsr",
+            Self::VsCodeMarketplace => "vscode-marketplace",
+            Self::OpenVsx => "open-vsx",
+            Self::ChromeWebStore => "chrome-web-store",
         })
     }
 }
@@ -79,6 +101,11 @@ impl FromStr for Registry {
     fn from_str(value: &str) -> Result<Self> {
         let normalized = value.to_ascii_lowercase().replace(['.', '_'], "-");
         match normalized.as_str() {
+            "ruby" | "gem" | "rubygems" => Ok(Self::RubyGems),
+            "jsr" => Ok(Self::Jsr),
+            "vscode" | "vsce" | "vscode-marketplace" => Ok(Self::VsCodeMarketplace),
+            "ovsx" | "open-vsx" => Ok(Self::OpenVsx),
+            "chrome-web-store" => Ok(Self::ChromeWebStore),
             "npm" => Ok(Self::Npm),
             "cargo" | "crate" | "crates" | "crates-io" => Ok(Self::CratesIo),
             "python" | "pypi" => Ok(Self::PyPi),
@@ -89,7 +116,7 @@ impl FromStr for Registry {
             "docker" | "dockerhub" | "docker-hub" | "docker-io" => Ok(Self::DockerHub),
             "ghcr" | "ghcr-io" | "github-container-registry" => Ok(Self::Ghcr),
             _ => bail!(
-                "unsupported registry '{value}'; expected npm, crates-io, pypi, go-modules, nuget, maven-central, packagist, docker-hub, or ghcr"
+                "unsupported registry '{value}'; expected npm, crates-io, pypi, go-modules, nuget, maven-central, packagist, docker-hub, ghcr, rubygems, jsr, vscode-marketplace, open-vsx, or chrome-web-store"
             ),
         }
     }
@@ -345,6 +372,7 @@ pub struct Prerequisite {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupPlan {
+    pub credential_policy: crate::credential_cycle::CredentialPolicy,
     pub schema_version: u8,
     pub registry: Registry,
     pub package: Package,

@@ -37,7 +37,7 @@ fn copy_tree(source: &Path, destination: &Path) {
 }
 
 #[test]
-fn discovers_every_maintained_registry_and_repository_metadata() {
+fn discovers_the_baseline_polyglot_registries_and_repository_metadata() {
     let (_temporary, root) = fixture();
     let inspection = inspect_repository(&root).expect("inspect fixture");
     let registries = inspection
@@ -46,7 +46,20 @@ fn discovers_every_maintained_registry_and_repository_metadata() {
         .map(|package| package.registry)
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(registries, BTreeSet::from(Registry::ALL));
+    assert_eq!(
+        registries,
+        BTreeSet::from([
+            Registry::Npm,
+            Registry::CratesIo,
+            Registry::PyPi,
+            Registry::GoModules,
+            Registry::NuGet,
+            Registry::MavenCentral,
+            Registry::Packagist,
+            Registry::DockerHub,
+            Registry::Ghcr
+        ])
+    );
     assert_eq!(inspection.packages.len(), 9);
     assert_eq!(inspection.repository.github_owner.as_deref(), Some("acme"));
     assert_eq!(

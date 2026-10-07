@@ -24,7 +24,10 @@
       "version": null,
       "manifest": "Dockerfile",
       "publishable": true,
-      "workflow": "release.yml"
+      "workflow": "release.yml",
+      "token_secrets": [
+        "DOCKERHUB_TOKEN"
+      ]
     },
     {
       "registry": "ghcr",

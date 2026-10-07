@@ -69,12 +69,14 @@ fn plans_a_bootstrap_for_a_package_missing_from_npm() {
         [
             "validate-package",
             "check-registry",
+            "check-name-policy",
             "check-sign-in",
             "fetch-default-branch",
             "prepare-worktree",
             "pack",
             "test-install",
             "verify-bins",
+            "publish-dry-run",
             "sign-in",
             "check-2fa",
             "enable-2fa",
@@ -87,9 +89,10 @@ fn plans_a_bootstrap_for_a_package_missing_from_npm() {
             "attach-trusted-publisher",
             "configure-trusted-publisher",
             "verify-trusted-publisher",
-            "audit-token-secrets",
-            "delete-token-secret",
             "rerun-release",
+            "audit-token-secrets",
+            "confirm-oidc-cleanup",
+            "delete-token-secret",
             "sign-out",
             "remove-worktree",
         ]
@@ -142,7 +145,7 @@ fn keeps_every_conditional_step_when_the_registry_state_is_unknown() {
     assert_eq!(plan.mode, None);
     let ids = ids(&plan);
     assert_eq!(
-        ids[ids.len() - 6..ids.len() - 2],
+        ids[ids.len() - 9..ids.len() - 5],
         [
             "trigger-release",
             "find-release-run",

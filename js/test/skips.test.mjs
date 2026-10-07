@@ -140,3 +140,23 @@ test("matches globs against a path and its parents", () => {
   assert.equal(testDirectory("package.json"), null);
   assert.equal(testDirectory("src/testing/package.json"), null);
 });
+
+test("browser-commander snapshots and experiments stay skipped (#37)", async () => {
+  const root = await repository({
+    "js/package.json": npmPackage("browser-commander"),
+    "docs/case-studies/issue-55/template-snapshots/js/package.json": npmPackage(
+      "@link-foundation/example-package-name",
+    ),
+    "experiments/issue-128/cookie-fixture-equivalence/Cargo.toml":
+      '[package]\nname = "cookie-equiv"\nversion = "1.0.0"\n',
+    "archive/case-studies/package.json": npmPackage("snapshot"),
+    ".github/workflows/js.yml":
+      "on: push\njobs:\n  publish:\n    steps:\n      - run: npm publish\n        working-directory: js\n",
+  });
+  const inspection = await inspectRepository(root, { includeSkipped: true });
+  assert.deepEqual(
+    inspection.packages.map((item) => item.name),
+    ["browser-commander"],
+  );
+  assert.equal(inspection.skipped.length, 3);
+});

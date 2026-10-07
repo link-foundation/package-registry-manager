@@ -26,6 +26,8 @@ import {
 } from "./browser.mjs";
 import { detectDefaultBrowser, openWithCommand } from "./default-browser.mjs";
 import { CLEANUP_CONDITIONS } from "./flows.mjs";
+import { setupCredential } from "./credential-setup.mjs";
+import { checkNamePolicy, policyRefusal } from "./npm-policy.mjs";
 import { pagesSettingsUrl, pagesState } from "./pages.mjs";
 import { packageDirectory } from "./plan.mjs";
 import { twoFactorMode } from "./prerequisites.mjs";
@@ -148,6 +150,9 @@ export class SetupSession {
   async runStep(step) {
     switch (step.kind) {
       case "check":
+        if (step.id === "check-name-policy") {
+          return checkNamePolicy(this.plan.package.name, this.options);
+        }
         if (step.id === "check-registry") {
           return this.checkRegistry();
         }
@@ -167,9 +172,25 @@ export class SetupSession {
       case "browser":
         return this.browser(step);
       case "api":
-        return runCratesApiStep(this, step);
+        return step.id === "manage-registry-token"
+          ? setupCredential(this)
+          : runCratesApiStep(this, step);
       default:
         console.log(step.description);
+        if (step.id === "confirm-oidc-cleanup") {
+          if (this.conditions.has("oidc-release-verified")) {
+            return;
+          }
+          const answer = await this.prompt(
+            "Has a new release succeeded through OIDC without a stored registry token? [y/N] ",
+          );
+          if (!/^(?:y|yes)$/i.test(answer)) {
+            throw new Error(
+              "a verified OIDC release is required before deleting token secrets",
+            );
+          }
+          return;
+        }
         if (step.url) {
           console.log(`  ${step.url}`);
         }
@@ -448,6 +469,14 @@ export class SetupSession {
         ? await this.capture(step)
         : await this.runProcess(step, true);
     if (result.code !== 0) {
+      if (
+        step.id === "first-publish" &&
+        policyRefusal(String(result.stderr) + String(result.stdout))
+      ) {
+        throw new Error(
+          "npm refused this name under its policy; no retry. Choose @owner/name or a longer descriptive name.",
+        );
+      }
       if (step.id === "attach-trusted-publisher") {
         console.error(
           "warning: npm trust failed; falling back to the browser form",
@@ -500,6 +529,15 @@ export class SetupSession {
 
   recordPack(output) {
     const packed = packedEntry(output);
+    if (
+      packed.name !== this.plan.package.name ||
+      (this.plan.package.version &&
+        packed.version !== this.plan.package.version)
+    ) {
+      throw new Error(
+        "bootstrap ref package identity/version differs from inspection; inspect the selected ref again before publication",
+      );
+    }
     for (const file of packed.files ?? []) {
       console.log(`  ${String(file.size).padStart(8)}  ${file.path}`);
     }
@@ -524,6 +562,9 @@ export class SetupSession {
         (step.id !== "confirm-provenance" ||
           isTrustedRelease(document, this.values))
       ) {
+        if (step.id === "confirm-provenance") {
+          this.conditions.add("oidc-release-verified");
+        }
         console.log(`  ${url} is ready`);
         return;
       }
@@ -614,16 +655,16 @@ export class SetupSession {
    * The automated page, launched once. The crates.io sign-in step offers
    * `--browser-import default|auto` itself, once it knows a sign-in is missing.
    */
-  async automatedPage(browser = this.options.browserOptions) {
+  async automatedPage(browser = this.options.browserOptions, quiet = false) {
     if (!this.automation) {
       const domains = this.options.domains ?? signInDomains(this.plan.registry);
       this.automation = await connectAutomation({
         browser: await launchBrowser(browser, domains, {
           deferred: this.plan.registry === "crates-io",
-          verbose: this.options.verbose,
+          verbose: quiet ? false : this.options.verbose,
         }),
         profile: this.options.browserProfile,
-        verbose: this.options.verbose,
+        verbose: quiet ? false : this.options.verbose,
         domains,
       });
     }

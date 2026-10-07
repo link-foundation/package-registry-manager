@@ -1,3 +1,5 @@
+import { tokenSecrets } from "./publishers.mjs";
+import { stripComments } from "./source-code.mjs";
 import { grantsPackagesWrite, publishingWorkflow } from "./workflows.mjs";
 
 export const CONTAINER_FILES = new Set(["Dockerfile", "Containerfile"]);
@@ -27,7 +29,8 @@ export function containerPackages(dockerfiles, workflows, coordinates) {
       continue;
     }
     const name =
-      literalImage(workflow.contents, host) ?? defaultImage(coordinates);
+      literalImage(stripComments(workflow.contents), host) ??
+      defaultImage(coordinates);
     const item = {
       registry,
       name: name ?? "unknown-image",
@@ -36,6 +39,10 @@ export function containerPackages(dockerfiles, workflows, coordinates) {
       publishable: Boolean(name),
       workflow: workflow.name,
     };
+    const secrets = tokenSecrets(workflows, registry);
+    if (secrets.length) {
+      item.token_secrets = [...new Set(secrets.map((secret) => secret.secret))];
+    }
     if (!name) {
       item.problems = [
         "the image name could not be derived from the workflow or a GitHub remote",

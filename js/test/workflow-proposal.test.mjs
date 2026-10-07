@@ -238,3 +238,24 @@ test(
     }
   },
 );
+
+test("publish proposals guard exact existing versions and follow release output (#38)", () => {
+  const contents =
+    "on: push\njobs:\n  release:\n    outputs:\n      published_version: ${{ steps.release.outputs.version }}\n    steps:\n      - run: ./release.sh\n";
+  const proposal = workflowProposal(inspection, packages, [
+    { name: "release.yml", contents },
+  ]);
+  assert.match(proposal.contents, /needs: release/);
+  assert.match(proposal.contents, /needs.release.outputs.published_version/);
+  assert.match(proposal.contents, /id: version-check/);
+  assert.match(proposal.contents, /Cache-Control/);
+  assert.match(
+    proposal.contents,
+    /steps.version-check.outputs.publish == 'true'/,
+  );
+  assert.match(proposal.contents, /skip-existing: true/);
+  assert.match(
+    proposal.contents,
+    /ref: \$\{\{ github.event.repository.default_branch \}\}/,
+  );
+});

@@ -4,6 +4,33 @@ use package_registry_manager::{Registry, SetupStep};
 
 use crate::tokens::{crate_package, strings};
 
+#[test]
+fn requires_verified_oidc_before_unused_secret_deletion() {
+    for registry in [
+        Registry::Npm,
+        Registry::PyPi,
+        Registry::CratesIo,
+        Registry::RubyGems,
+        Registry::NuGet,
+        Registry::Jsr,
+    ] {
+        let steps = package_registry_manager::tokens::token_secret_steps(
+            &crate_package(registry),
+            "acme/demo",
+        );
+        assert_eq!(
+            ids(&steps),
+            [
+                "audit-token-secrets",
+                "confirm-oidc-cleanup",
+                "delete-token-secret"
+            ]
+        );
+        assert_eq!(steps[1].kind, package_registry_manager::StepKind::Manual);
+        assert_eq!(steps[1].when.as_deref(), Some("token-secret-present"));
+    }
+}
+
 fn ids(steps: &[SetupStep]) -> Vec<&str> {
     steps.iter().map(|step| step.id.as_str()).collect()
 }
@@ -37,6 +64,7 @@ fn plans_the_first_publish_token_as_a_confirmed_verified_exception() {
             "verify-token-revoked",
             "configure-trusted-publisher",
             "audit-token-secrets",
+            "confirm-oidc-cleanup",
             "delete-token-secret",
             "sign-out",
             "remove-worktree",
@@ -86,6 +114,7 @@ fn plans_the_first_publish_token_as_a_confirmed_verified_exception() {
             "wait-for-registry",
             "configure-trusted-publisher",
             "audit-token-secrets",
+            "confirm-oidc-cleanup",
             "delete-token-secret",
         ]
     );

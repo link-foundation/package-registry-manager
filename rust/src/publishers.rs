@@ -10,10 +10,18 @@ use regex::Regex;
 use serde_json::Value as JsonValue;
 
 use crate::model::Registry;
+use crate::source_code::{command_position, strip_comments};
 use crate::workflows::Workflow;
 
 /// Registries whose trusted publisher is bound to a workflow file.
-pub const TRUSTED_REGISTRIES: [Registry; 3] = [Registry::Npm, Registry::CratesIo, Registry::PyPi];
+pub const TRUSTED_REGISTRIES: [Registry; 6] = [
+    Registry::Npm,
+    Registry::CratesIo,
+    Registry::PyPi,
+    Registry::RubyGems,
+    Registry::NuGet,
+    Registry::Jsr,
+];
 
 // Scripts usually pass the subcommand as a separate argument, as in
 // `spawnSync("npm", ["publish"])` or `Command::new("cargo")` followed by
@@ -57,10 +65,6 @@ static CHANGESETS_PUBLISH: LazyLock<Regex> =
     LazyLock::new(|| regex(r"^\s*publish(?:-script)?\s*:\s*(.+?)\s*$"));
 static LOCAL_WORKFLOW: LazyLock<Regex> =
     LazyLock::new(|| regex(r#"^\s*uses\s*:\s*["']?\./\.github/workflows/([\w.-]+\.ya?ml)"#));
-static SCRIPT_COMMENT: LazyLock<Regex> = LazyLock::new(|| regex(r"^\s*(?:#|//|/?\*)"));
-static COMMAND_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
-    regex(r"^\s*(?:(?:npx|bunx|exec|sudo|env|time|command|pnpm\s+exec|yarn|\w+=\S*)\s+)*$")
-});
 static JOB_HEADER: LazyLock<Regex> = LazyLock::new(|| regex(r#"^\s*["']?([\w-]+)["']?\s*:\s*$"#));
 static WORKING_DIRECTORY: LazyLock<Regex> =
     LazyLock::new(|| regex(r"^\s*working-directory\s*:\s*(.+?)\s*$"));
@@ -72,11 +76,41 @@ static INLINE_NAME: LazyLock<Regex> = LazyLock::new(|| regex(r"\bname\s*:\s*([^,
 static NESTED_NAME: LazyLock<Regex> = LazyLock::new(|| regex(r"^\s*name\s*:\s*(.+)$"));
 static TRAILING_COMMENT: LazyLock<Regex> = LazyLock::new(|| regex(r"\s+#.*$"));
 
+static RUBYGEMS_JOB: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"\bgem\s+push\b|rubygems/release-gem"));
+static NUGET_JOB: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"\bdotnet\s+nuget\s+push\b|\bnuget\s+push\b"));
+static JSR_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:deno|jsr)\s+publish\b"));
+static MAVEN_JOB: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"\bmvn\s+(?:-\S+\s+)*deploy\b|\bgradle(?:w)?\s+publish\b"));
+static VSCE_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\bvsce\s+publish\b"));
+static OVSX_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\bovsx\s+publish\b"));
+static CHROME_JOB: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"chrome-webstore-upload|chrome-web-store|chromewebstore"));
+static DOCKER_JOB: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"docker/login-action|\bdocker\s+(?:login|push)\b"));
+static GEM_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\bgem\b"));
+static NUGET_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:dotnet|nuget)\b"));
+static JSR_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:deno|jsr)\b"));
+static VSCE_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\bvsce\b"));
+static OVSX_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\bovsx\b"));
+static MAVEN_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:mvn|gradle)\b"));
+static PUSH_ARGUMENT: LazyLock<Regex> = LazyLock::new(|| regex(r#"["'`]push["'`]"#));
+static DEPLOY_ARGUMENT: LazyLock<Regex> = LazyLock::new(|| regex(r#"["'`]deploy["'`]"#));
+
 fn job_pattern(registry: Registry) -> Option<&'static Regex> {
     match registry {
         Registry::Npm => Some(&NPM_JOB),
         Registry::CratesIo => Some(&CRATES_JOB),
         Registry::PyPi => Some(&PYPI_JOB),
+        Registry::RubyGems => Some(&RUBYGEMS_JOB),
+        Registry::NuGet => Some(&NUGET_JOB),
+        Registry::Jsr => Some(&JSR_JOB),
+        Registry::MavenCentral => Some(&MAVEN_JOB),
+        Registry::VsCodeMarketplace => Some(&VSCE_JOB),
+        Registry::OpenVsx => Some(&OVSX_JOB),
+        Registry::ChromeWebStore => Some(&CHROME_JOB),
+        Registry::DockerHub => Some(&DOCKER_JOB),
         _ => None,
     }
 }
@@ -86,6 +120,12 @@ fn script_pattern(registry: Registry) -> Option<(&'static Regex, &'static Regex)
         Registry::Npm => Some((&NPM_PROGRAM, &PUBLISH_ARGUMENT)),
         Registry::CratesIo => Some((&CARGO_PROGRAM, &PUBLISH_ARGUMENT)),
         Registry::PyPi => Some((&PYPI_PROGRAM, &UPLOAD_ARGUMENT)),
+        Registry::RubyGems => Some((&GEM_PROGRAM, &PUSH_ARGUMENT)),
+        Registry::NuGet => Some((&NUGET_PROGRAM, &PUSH_ARGUMENT)),
+        Registry::Jsr => Some((&JSR_PROGRAM, &PUBLISH_ARGUMENT)),
+        Registry::MavenCentral => Some((&MAVEN_PROGRAM, &DEPLOY_ARGUMENT)),
+        Registry::VsCodeMarketplace => Some((&VSCE_PROGRAM, &PUBLISH_ARGUMENT)),
+        Registry::OpenVsx => Some((&OVSX_PROGRAM, &PUBLISH_ARGUMENT)),
         _ => None,
     }
 }
@@ -107,6 +147,21 @@ pub const fn registry_token_secrets(registry: Registry) -> &'static [&'static st
             "PYPI_PASSWORD",
             "TWINE_PASSWORD",
         ],
+        Registry::RubyGems => &["GEM_HOST_API_KEY", "RUBYGEMS_API_KEY"],
+        Registry::NuGet => &["NUGET_API_KEY", "NUGET_TOKEN"],
+        Registry::Jsr => &["JSR_TOKEN"],
+        Registry::DockerHub => &["DOCKERHUB_TOKEN", "DOCKER_HUB_TOKEN", "DOCKER_PASSWORD"],
+        Registry::MavenCentral => &[
+            "MAVEN_CENTRAL_TOKEN",
+            "MAVEN_CENTRAL_PASSWORD",
+            "OSSRH_TOKEN",
+            "OSSRH_PASSWORD",
+            "SONATYPE_TOKEN",
+            "CENTRAL_TOKEN",
+        ],
+        Registry::VsCodeMarketplace => &["VSCE_PAT", "VSCE_TOKEN"],
+        Registry::OpenVsx => &["OVSX_PAT", "OVSX_TOKEN"],
+        Registry::ChromeWebStore => &["CHROME_WEB_STORE_REFRESH_TOKEN", "CHROME_REFRESH_TOKEN"],
         _ => &[],
     }
 }
@@ -117,6 +172,7 @@ const fn trusted_publishing_hint(registry: Registry) -> &'static str {
         Registry::CratesIo => {
             "crates.io trusted publishing (`rust-lang/crates-io-auth-action` with `id-token: write`)"
         }
+        Registry::RubyGems => "RubyGems trusted publishing (id-token: write)", Registry::NuGet => "NuGet/login short-lived OIDC API key (id-token: write)", Registry::Jsr => "JSR repository-linked OIDC (id-token: write)",
         _ => "PyPI trusted publishing (`pypa/gh-action-pypi-publish` with `id-token: write`)",
     }
 }
@@ -167,7 +223,8 @@ pub struct TokenSecret {
 /// parser is bundled. Full-line comments are dropped.
 #[must_use]
 pub fn parse_workflow(contents: &str) -> ParsedWorkflow {
-    let lines = contents
+    let stripped = strip_comments(contents, "workflow.yml");
+    let lines = stripped
         .lines()
         .filter(|line| !line.trim_start().starts_with('#'))
         .map(str::to_owned)
@@ -272,7 +329,7 @@ pub fn detect_publisher(root: &Path, workflows: &[Workflow], registry: Registry)
     }
     let trusted = found
         .iter()
-        .filter(|item| item.id_token)
+        .filter(|item| !TRUSTED_REGISTRIES.contains(&registry) || item.id_token)
         .collect::<Vec<_>>();
     let files = unique(trusted.iter().map(|item| item.workflow.clone()));
     if files.len() > 1 {
@@ -364,8 +421,7 @@ pub fn token_secrets(workflows: &[Workflow], registry: Registry) -> Vec<TokenSec
     for workflow in workflows {
         for name in registry_token_secrets(registry) {
             let pattern = regex(&format!(r"\bsecrets\.{name}\b"));
-            if workflow
-                .contents
+            if strip_comments(&workflow.contents, "workflow.yml")
                 .lines()
                 .any(|line| !line.trim_start().starts_with('#') && pattern.is_match(line))
             {
@@ -382,8 +438,14 @@ pub fn token_secrets(workflows: &[Workflow], registry: Registry) -> Vec<TokenSec
 /// Explain how to replace a long-lived token secret with trusted publishing.
 #[must_use]
 pub fn token_secret_warning(registry: Registry, secret: &TokenSecret) -> String {
+    if !TRUSTED_REGISTRIES.contains(&registry) {
+        return format!(
+            "{} reads secrets.{}; ensure a scoped expiring publishing token through gh-manager",
+            secret.workflow, secret.secret
+        );
+    }
     format!(
-        "{} reads secrets.{}; publish with {} and delete the long-lived token",
+        "{} reads secrets.{}; publish with {} and delete the long-lived token after verification",
         secret.workflow,
         secret.secret,
         trusted_publishing_hint(registry)
@@ -394,14 +456,15 @@ fn job_publishes(root: &Path, parsed: &ParsedWorkflow, job: &Job, registry: Regi
     let Some(pattern) = job_pattern(registry) else {
         return false;
     };
-    if publishing_line(&job.lines, pattern) {
+    let executable = executable_lines(&job.lines);
+    if publishing_line(&executable, pattern) {
         return true;
     }
     let directories = working_directories(parsed.header.iter().chain(&job.lines));
     let mut scripts = Vec::new();
-    for script in script_references(&job.lines) {
+    for script in script_references(&executable) {
         let lines = read_inside(root, &directories, &script)
-            .map(|contents| code_lines(&contents))
+            .map(|contents| code_lines(&contents, &script))
             .unwrap_or_default();
         if script_publishes(&lines, registry) {
             return true;
@@ -426,8 +489,11 @@ fn job_publishes(root: &Path, parsed: &ParsedWorkflow, job: &Job, registry: Regi
     }
     // A package script may run from the job, its changesets command, or a
     // script, as in `$`npm run changeset:publish``.
-    for line in job.lines.iter().chain(&commands).chain(&scripts) {
+    for line in executable.iter().chain(&commands).chain(&scripts) {
         for captures in RUN_SCRIPT.captures_iter(line) {
+            if !command_position(&line[..captures.get(0).expect("match").start()]) {
+                continue;
+            }
             let name = captures
                 .get(1)
                 .or_else(|| captures.get(2))
@@ -467,15 +533,55 @@ fn only_called(header: &[String]) -> bool {
 }
 
 fn publishing_line(lines: &[String], pattern: &Regex) -> bool {
-    lines
-        .iter()
-        .any(|line| pattern.is_match(line) && !line.contains("--dry-run"))
+    lines.iter().any(|line| {
+        !line.contains("--dry-run")
+            && pattern.find_iter(line).any(|found| {
+                command_position(&line[..found.start()])
+                    || regex(r#"^\s*-?\s*uses\s*:\s*['"]?[\w./-]*$"#)
+                        .is_match(&line[..found.start()])
+            })
+    })
 }
 
-fn code_lines(contents: &str) -> Vec<String> {
-    contents
+/// Extract executable run blocks and action references; names and env values are inert.
+#[must_use]
+pub fn executable_lines(lines: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut block_indent = None;
+    let run = regex(r"^\s*-?\s*run\s*:\s*(.*)$");
+    for line in lines {
+        let indent = indent_of(line);
+        if block_indent.is_some_and(|level| line.trim().is_empty() || indent > level) {
+            result.push(line.clone());
+            continue;
+        }
+        block_indent = None;
+        if regex(r"^\s*-?\s*uses\s*:").is_match(line) {
+            result.push(line.clone());
+        }
+        let Some(captures) = run.captures(line) else {
+            continue;
+        };
+        if regex(r"^[|>][-+\d]*$").is_match(&captures[1]) {
+            block_indent = Some(
+                indent
+                    + if line.trim_start().starts_with('-') {
+                        2
+                    } else {
+                        0
+                    },
+            );
+        } else {
+            result.push(unquote(&captures[1]).to_owned());
+        }
+    }
+    result
+}
+
+fn code_lines(contents: &str, script: &str) -> Vec<String> {
+    strip_comments(contents, script)
         .lines()
-        .filter(|line| !line.contains("--dry-run") && !SCRIPT_COMMENT.is_match(line))
+        .filter(|line| !line.contains("--dry-run"))
         .map(str::to_owned)
         .collect()
 }
@@ -495,20 +601,14 @@ fn script_publishes(lines: &[String], registry: Registry) -> bool {
     }
     lines.iter().enumerate().any(|(index, line)| {
         program.is_match(line)
+            && regex(
+                r"(?:exec|spawn|run|Command::new|subprocess|system|(?:npm|pnpm|yarn)\s*\(\s*\[)",
+            )
+            .is_match(line)
             && lines[index..(index + SCRIPT_WINDOW).min(lines.len())]
                 .iter()
                 .any(|nearby| subcommand.is_match(nearby))
     })
-}
-
-// A script mentions `cargo publish` in messages and comments too; it runs it
-// only where the command starts a line, a shell command or a string literal.
-fn command_position(prefix: &str) -> bool {
-    let segment = prefix
-        .rsplit(['"', '\'', '`', ';', '&', '|', '('])
-        .next()
-        .unwrap_or_default();
-    COMMAND_PREFIX.is_match(segment)
 }
 
 fn package_script(contents: &str, name: &str) -> Option<String> {

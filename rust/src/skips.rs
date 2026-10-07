@@ -14,13 +14,16 @@ use crate::workflows::Workflow;
 pub const CONFIG_FILE: &str = ".package-registry-manager.json";
 
 /// Directories that hold tests and examples rather than released packages.
-pub const TEST_DIRECTORIES: [&str; 6] = [
+pub const TEST_DIRECTORIES: [&str; 9] = [
     "tests",
     "test",
     "fixtures",
     "__fixtures__",
     "__tests__",
     "examples",
+    "docs",
+    "experiments",
+    "case-studies",
 ];
 
 /// Read the ignore list from `.package-registry-manager.json`, whose `ignore`

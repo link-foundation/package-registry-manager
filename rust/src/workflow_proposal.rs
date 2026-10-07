@@ -26,7 +26,12 @@ fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
 
-fn job(package: &Package, index: usize, environment: Option<&str>) -> Result<String> {
+fn job(
+    package: &Package,
+    index: usize,
+    environment: Option<&str>,
+    producer: Option<&str>,
+) -> Result<String> {
     if package.manifest.split('/').any(|part| {
         part.is_empty()
             || part == "."
@@ -44,6 +49,26 @@ fn job(package: &Package, index: usize, environment: Option<&str>) -> Result<Str
         "    runs-on: ubuntu-latest".into(), "    timeout-minutes: 15".into(),
         "    permissions:".into(), "      contents: read".into(), "      id-token: write".into(),
     ];
+    if let Some(producer) = producer {
+        lines[1] = format!(
+            "    if: ({}) && needs.{producer}.outputs.published_version != ''",
+            lines[1].trim_start_matches("    if: ")
+        );
+        lines.extend([
+            format!("    needs: {producer}"),
+            "    env:".into(),
+            format!("      RELEASE_VERSION: ${{{{ needs.{producer}.outputs.published_version }}}}"),
+        ]);
+    }
+    lines.extend([
+        "    concurrency:".into(),
+        format!(
+            "      group: prm-publish-{}-{}-${{{{ github.ref }}}}",
+            package.registry,
+            index + 1
+        ),
+        "      cancel-in-progress: false".into(),
+    ]);
     if let Some(environment) = environment {
         lines.push(format!("    environment: {}", quote(environment)));
     }
@@ -56,7 +81,10 @@ fn job(package: &Package, index: usize, environment: Option<&str>) -> Result<Str
         "        with:".into(),
         "          persist-credentials: false".into(),
     ]);
-    let steps: Vec<String> = match package.registry {
+    if producer.is_some() {
+        lines.push("          ref: ${{ github.event.repository.default_branch }}".into());
+    }
+    let mut steps: Vec<String> = match package.registry {
         Registry::Npm => [
             "      - uses: actions/setup-node@v6",
             "        with:",
@@ -65,6 +93,7 @@ fn job(package: &Package, index: usize, environment: Option<&str>) -> Result<Str
             "      - run: npm install",
             "      - run: npm run build --if-present",
             "      - run: npm publish --provenance --access public",
+            "        if: steps.version-check.outputs.publish == 'true'",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -72,8 +101,10 @@ fn job(package: &Package, index: usize, environment: Option<&str>) -> Result<Str
         Registry::CratesIo => [
             "      - uses: dtolnay/rust-toolchain@stable",
             "      - uses: rust-lang/crates-io-auth-action@v1",
+            "        if: steps.version-check.outputs.publish == 'true'",
             "        id: auth",
             "      - run: cargo publish",
+            "        if: steps.version-check.outputs.publish == 'true'",
             "        env:",
             "          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}",
         ]
@@ -95,6 +126,7 @@ fn job(package: &Package, index: usize, environment: Option<&str>) -> Result<Str
             "      - run: python -m build".into(),
             "      - uses: pypa/gh-action-pypi-publish@release/v1".into(),
             "        with:".into(),
+            "          skip-existing: true".into(),
             format!(
                 "          packages-dir: {}",
                 quote(&format!(
@@ -109,6 +141,22 @@ fn job(package: &Package, index: usize, environment: Option<&str>) -> Result<Str
         ],
         registry => bail!("no publishing job template for {registry}"),
     };
+    if matches!(package.registry, Registry::Npm | Registry::CratesIo) {
+        let before = steps
+            .iter()
+            .position(|line| {
+                line.contains(if package.registry == Registry::Npm {
+                    "- run: npm publish"
+                } else {
+                    "- uses: rust-lang/crates-io-auth-action"
+                })
+            })
+            .expect("publish step");
+        steps.splice(
+            before..before,
+            crate::version_guard::version_guard(package.registry == Registry::Npm),
+        );
+    }
     lines.extend(steps);
     Ok(format!("{}\n", lines.join("\n")))
 }
@@ -146,6 +194,19 @@ pub fn workflow_proposal(
     }
     let contents = workflows.iter().find(|item| item.name == workflow).map_or("name: Package release\non:\n  workflow_dispatch:\n  release:\n    types: [published]\npermissions:\n  contents: read\njobs:\n", |item| item.contents.as_str());
     let parsed = parse_workflow(contents);
+    let producers: Vec<_> = parsed
+        .jobs
+        .iter()
+        .filter(|job| {
+            job.lines
+                .iter()
+                .any(|line| line.trim_start().starts_with("published_version:"))
+        })
+        .collect();
+    if producers.len() > 1 {
+        bail!("several jobs expose published_version; choose the release dependency manually");
+    }
+    let producer = producers.first().map(|job| job.name.as_str());
     let environments: BTreeSet<_> = inspection
         .packages
         .iter()
@@ -163,6 +224,7 @@ pub fn workflow_proposal(
                 package,
                 index,
                 chosen_environment.or_else(|| environments.first().copied().flatten()),
+                producer,
             )
         })
         .collect::<Result<Vec<_>>>()?

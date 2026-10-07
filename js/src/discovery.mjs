@@ -2,6 +2,7 @@ import { readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import { CONTAINER_FILES, containerPackages } from "./containers.mjs";
+import { packageWorkflows, auditWrappers } from "./package-coverage.mjs";
 import { REGISTRIES } from "./model.mjs";
 import {
   TRUSTED_REGISTRIES,
@@ -39,6 +40,8 @@ const MANIFEST_NAMES = new Set([
   "build.gradle",
   "build.gradle.kts",
   "composer.json",
+  "jsr.json",
+  "deno.json",
 ]);
 
 /**
@@ -73,7 +76,9 @@ export async function inspectRepository(repository, options = {}) {
     const directory = testDirectory(manifest);
     return (
       directory === null ||
-      (publishable && referencedByWorkflow(workflows, manifest)) ||
+      (!["docs", "experiments", "case-studies"].includes(directory) &&
+        publishable &&
+        referencedByWorkflow(workflows, manifest)) ||
       skip(manifest, testDirectoryReason(directory))
     );
   };
@@ -103,14 +108,82 @@ export async function inspectRepository(repository, options = {}) {
   for (const registry of TRUSTED_REGISTRIES) {
     publishers.set(registry, await detectPublisher(root, workflows, registry));
   }
+  // Extension packages can publish to both marketplaces independently.
+  for (const item of [...parsed].filter(Boolean)) {
+    if (item.registry !== "npm") {
+      continue;
+    }
+    const data = JSON.parse(await readManifest(path.join(root, item.manifest)));
+    if (data.publisher && data.engines?.vscode) {
+      for (const registry of ["vscode-marketplace", "open-vsx"]) {
+        const publisher = await detectPublisher(root, workflows, registry);
+        if (publisher.workflow) {
+          publishers.set(registry, publisher);
+          parsed.push({
+            ...item,
+            registry,
+            name: `${data.publisher}.${item.name}`,
+          });
+        }
+      }
+    }
+  }
+  publishers.set(
+    "maven-central",
+    await detectPublisher(root, workflows, "maven-central"),
+  );
   const containerFiles = dockerfiles
     .map((item) => relativePath(root, item))
     .filter((item) => !ignored(item) && kept(item, true));
-  const packages = parsed
-    .filter(Boolean)
-    .filter((item) => kept(item.manifest, item.publishable))
-    .map((item) => withPublisher(item, workflows, publishers))
-    .concat(containerPackages(containerFiles, workflows, coordinates))
+  const counts = new Map();
+  for (const item of parsed.filter(Boolean)) {
+    if (!testDirectory(item.manifest)) {
+      counts.set(item.registry, (counts.get(item.registry) ?? 0) + 1);
+    }
+  }
+  const chrome = await detectPublisher(root, workflows, "chrome-web-store");
+  const chromePackages = chrome.workflow
+    ? [
+        withPublisher(
+          packageInfo(
+            "chrome-web-store",
+            coordinates.github_repository ?? "chrome-extension",
+            null,
+            `.github/workflows/${chrome.workflow}`,
+          ),
+          workflows,
+          new Map([["chrome-web-store", chrome]]),
+        ),
+      ]
+    : [];
+  const packages = (
+    await Promise.all(
+      parsed
+        .filter(Boolean)
+        .filter((item) => kept(item.manifest, item.publishable))
+        .map(async (item) => {
+          const scoped =
+            counts.get(item.registry) > 1 &&
+            TRUSTED_REGISTRIES.includes(item.registry)
+              ? new Map([
+                  [
+                    item.registry,
+                    await detectPublisher(
+                      root,
+                      packageWorkflows(workflows, item),
+                      item.registry,
+                    ),
+                  ],
+                ])
+              : publishers;
+          return withPublisher(item, workflows, scoped);
+        }),
+    )
+  )
+    .concat(
+      containerPackages(containerFiles, workflows, coordinates),
+      chromePackages,
+    )
     .sort((left, right) => {
       const registryOrder =
         REGISTRIES.indexOf(left.registry) - REGISTRIES.indexOf(right.registry);
@@ -122,6 +195,7 @@ export async function inspectRepository(repository, options = {}) {
       );
     });
 
+  await auditWrappers(root, packages);
   const inspection = {
     schema_version: 1,
     repository: {
@@ -206,7 +280,7 @@ async function collectManifests(directory, manifests, dockerfiles) {
     } else if (
       entry.isFile() &&
       (MANIFEST_NAMES.has(entry.name) ||
-        /\.(?:csproj|fsproj|vbproj)$/.test(entry.name))
+        /\.(?:csproj|fsproj|vbproj|gemspec)$/.test(entry.name))
     ) {
       manifests.push(item);
     }
@@ -217,6 +291,13 @@ async function parseManifest(manifestPath, manifest) {
   const contents = await readManifest(manifestPath);
   const filename = path.basename(manifestPath);
   switch (filename) {
+    case "jsr.json":
+    case "deno.json": {
+      const value = JSON.parse(contents);
+      return value.name && value.version
+        ? packageInfo("jsr", value.name, value.version, manifest)
+        : null;
+    }
     case "package.json":
       return parseNpm(contents, manifest);
     case "Cargo.toml":
@@ -246,6 +327,15 @@ async function parseManifest(manifestPath, manifest) {
     case "composer.json":
       return parseComposer(contents, manifest);
     default:
+      if (filename.endsWith(".gemspec")) {
+        return packageInfo(
+          "rubygems",
+          capture(contents, /\.name\s*=\s*['"]([^'"]+)/) ??
+            "unknown-ruby-package",
+          capture(contents, /\.version\s*=\s*['"]([^'"]+)/),
+          manifest,
+        );
+      }
       if (/\.(?:csproj|fsproj|vbproj)$/.test(filename)) {
         return parseDotnet(contents, manifestPath, manifest);
       }

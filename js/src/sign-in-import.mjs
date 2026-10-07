@@ -15,6 +15,14 @@ export const IMPORT_SCOPES = ["domains", "full"];
 
 /** The domains whose cookies hold each registry's sign-in. */
 export const SIGN_IN_DOMAINS = {
+  "docker-hub": ["docker.com", "docker.io"],
+  "maven-central": ["sonatype.com"],
+  "vscode-marketplace": ["dev.azure.com", "login.microsoftonline.com"],
+  "open-vsx": ["open-vsx.org", "github.com"],
+  "chrome-web-store": ["google.com"],
+  rubygems: ["rubygems.org", "github.com"],
+  nuget: ["nuget.org", "login.microsoftonline.com"],
+  jsr: ["jsr.io", "github.com"],
   "crates-io": ["crates.io", "github.com"],
   npm: ["npmjs.com"],
   pypi: ["pypi.org", "github.com"],

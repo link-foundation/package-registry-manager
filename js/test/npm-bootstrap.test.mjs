@@ -68,12 +68,14 @@ test("plans a bootstrap for a package missing from npm", async () => {
     [
       "validate-package",
       "check-registry",
+      "check-name-policy",
       "check-sign-in",
       "fetch-default-branch",
       "prepare-worktree",
       "pack",
       "test-install",
       "verify-bins",
+      "publish-dry-run",
       "sign-in",
       "check-2fa",
       "enable-2fa",
@@ -86,9 +88,10 @@ test("plans a bootstrap for a package missing from npm", async () => {
       "attach-trusted-publisher",
       "configure-trusted-publisher",
       "verify-trusted-publisher",
-      "audit-token-secrets",
-      "delete-token-secret",
       "rerun-release",
+      "audit-token-secrets",
+      "confirm-oidc-cleanup",
+      "delete-token-secret",
       "sign-out",
       "remove-worktree",
     ],
@@ -170,7 +173,7 @@ test("keeps every conditional step when the registry state is unknown", async ()
   const plan = await npmPlan({}, { verifyRelease: true });
   assert.equal(plan.mode, undefined);
   assert.deepEqual(
-    plan.steps.slice(-6, -2).map((step) => step.id),
+    plan.steps.slice(-9, -5).map((step) => step.id),
     [
       "trigger-release",
       "find-release-run",
@@ -321,8 +324,8 @@ async function runWithFakeTools(plan, registry, overrides = {}) {
       noBrowser: true,
       verbose: false,
       pollIntervalMs: 1,
-      // Browser steps wait for Enter; answer at once.
-      prompt: async () => "",
+      // Acknowledge simulated OIDC verification; browser steps wait for Enter.
+      prompt: async (message) => (message.endsWith("[y/N] ") ? "y" : ""),
       fetch: async (url) => {
         const found = registry(url);
         return {
@@ -379,6 +382,7 @@ test(
       `git worktree add --detach ${worktree} FETCH_HEAD`,
       `npm pack --ignore-scripts --json --pack-destination ${destination}`,
       `npm install --no-save --no-package-lock --no-audit --no-fund --ignore-scripts --prefix ${destination}/install ${destination}/pipeline-app-0.1.0.tgz`,
+      `npm publish ${destination}/pipeline-app-0.1.0.tgz --dry-run --ignore-scripts --access public --provenance=false`,
       "npm login --auth-type=web --browser=false",
       "npm profile get --json",
       `npm publish ${destination}/pipeline-app-0.1.0.tgz --access public --auth-type=web --browser=false --provenance=false`,
@@ -738,7 +742,9 @@ test(
     );
     for (const prefix of ["npm publish", "npx"]) {
       assert.equal(
-        commands.some((item) => item.startsWith(prefix)),
+        commands.some(
+          (item) => item.startsWith(prefix) && !item.includes("--dry-run"),
+        ),
         false,
         prefix,
       );

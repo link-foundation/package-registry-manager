@@ -3,6 +3,8 @@
 use regex::Regex;
 
 use crate::model::{Package, Registry};
+use crate::publishers::token_secrets;
+use crate::source_code::strip_comments;
 use crate::workflows::{grants_packages_write, publishing_workflow, Workflow};
 
 /// File names that describe a container image.
@@ -32,8 +34,8 @@ pub fn container_packages(
         let Some(workflow) = publishing_workflow(workflows, registry) else {
             continue;
         };
-        let name =
-            literal_image(&workflow.contents, host).or_else(|| default_image(owner, repository));
+        let name = literal_image(&strip_comments(&workflow.contents, "workflow.yml"), host)
+            .or_else(|| default_image(owner, repository));
         let mut item = Package::new(
             registry,
             name.clone().unwrap_or_else(|| "unknown-image".to_owned()),
@@ -41,6 +43,10 @@ pub fn container_packages(
             manifest.clone(),
         );
         item.workflow = Some(workflow.name.clone());
+        item.token_secrets = token_secrets(workflows, registry)
+            .into_iter()
+            .map(|secret| secret.secret)
+            .collect();
         if name.is_none() {
             item = item.unpublishable(
                 "the image name could not be derived from the workflow or a GitHub remote",

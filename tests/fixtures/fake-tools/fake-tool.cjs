@@ -99,6 +99,7 @@ if (tool === "npm") {
     }
     fs.writeFileSync(sidecar(tarball), JSON.stringify(manifest));
     const packed = {
+      name: manifest.name,
       filename: "pipeline-app-0.1.0.tgz",
       version: "0.1.0",
       size: 120,
@@ -113,6 +114,10 @@ if (tool === "npm") {
           : [packed],
       ),
     );
+  }
+  if (args[0] === "publish" && args.includes("--dry-run")) {
+    console.log("dry-run validated");
+    process.exit(0);
   }
   if (args[0] === "publish") {
     console.log("Authenticate your account at:");
