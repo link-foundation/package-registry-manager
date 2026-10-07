@@ -50,14 +50,20 @@
       "name": "Acme.Widgets",
       "version": "1.2.3",
       "manifest": "dotnet/Widgets.csproj",
-      "publishable": true
+      "publishable": true,
+      "warnings": [
+        "no workflow publishes Acme.Widgets to nuget; CI releases will not reach it"
+      ]
     },
     {
       "registry": "maven-central",
       "name": "com.acme:widgets",
       "version": "1.2.3",
       "manifest": "java/pom.xml",
-      "publishable": true
+      "publishable": true,
+      "warnings": [
+        "no workflow publishes com.acme:widgets to maven-central; CI releases will not reach it"
+      ]
     },
     {
       "registry": "packagist",

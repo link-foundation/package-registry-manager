@@ -449,3 +449,30 @@ fn blocks_setup_without_a_publishing_job_issue_33() {
         ["add-publishing-workflow"]
     );
 }
+
+#[test]
+fn credential_preflight_comments_and_inert_strings_are_not_publishers() {
+    for (script, contents) in [
+        ("scripts/preflight.sh", "echo ready # npm publish\n"),
+        ("scripts/preflight.py", "print('ready') # npm publish\n"),
+        ("scripts/preflight.mjs", "/* credentials only\nnpm publish\n*/\nconst help = 'npm publish';\nconsole.log(help);\n"),
+    ] {
+        let contents_workflow = format!("on: push\njobs:\n  preflight:\n    permissions: {{id-token: write}}\n    steps:\n      - run: node {script}\n");
+        let temporary = repository(&[(script, contents), (".github/workflows/python.yml", &contents_workflow)]);
+        let publisher = detect_publisher(temporary.path(), &read_workflows(temporary.path()).unwrap(), Registry::Npm);
+        assert_eq!(publisher.workflow, None, "{script}");
+    }
+}
+
+#[test]
+fn inert_workflow_text_is_not_a_publisher() {
+    let root = repository(&[]);
+    let workflows = workflow("preflight.yml", "on: workflow_dispatch\njobs:\n  preflight:\n    permissions: {id-token: write}\n    steps:\n      - name: npm publish\n        env:\n          HELP: npm publish\n        run: |\n          echo 'npm publish would fail'\n          npm whoami # npm publish\n");
+    assert!(detect_publisher(root.path(), &workflows, Registry::Npm)
+        .workflow
+        .is_none());
+    let comments = workflow("ci.yml", "run: npm whoami # ${{ secrets.NPM_TOKEN }}");
+    assert!(
+        package_registry_manager::publishers::token_secrets(&comments, Registry::Npm).is_empty()
+    );
+}

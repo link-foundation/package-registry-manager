@@ -6,6 +6,9 @@ import {
   npmFlow,
   pypiFlow,
 } from "./flows.mjs";
+import { credentialPolicy } from "./credential-cycle.mjs";
+import { trustedFlow, tokenFlow } from "./extra-flows.mjs";
+import { bootstrapRef } from "./bootstrap-reference.mjs";
 import { pagesSteps } from "./pages.mjs";
 import { planPrerequisites } from "./prerequisites.mjs";
 import { TRUSTED_REGISTRIES } from "./publishers.mjs";
@@ -17,6 +20,9 @@ const FLOWS = new Map([
   ["pypi", pypiFlow],
   ["docker-hub", dockerHubFlow],
   ["ghcr", ghcrFlow],
+  ["rubygems", trustedFlow],
+  ["nuget", trustedFlow],
+  ["jsr", trustedFlow],
 ]);
 
 /**
@@ -65,6 +71,9 @@ function buildPlan(inspection, packageInfo, options) {
     case "pypi":
     case "docker-hub":
     case "ghcr":
+    case "rubygems":
+    case "nuget":
+    case "jsr":
       return flowPlan(inspection, packageInfo, options);
     case "go-modules":
       steps = [
@@ -84,37 +93,17 @@ function buildPlan(inspection, packageInfo, options) {
         },
       ];
       break;
-    case "nuget":
-      steps = [
-        check(
-          "pack-package",
-          "Build the NuGet package",
-          "Create the package locally without pushing it.",
-          command("dotnet", ["pack", "--configuration", "Release"]),
-        ),
-        browser(
-          "configure-trusted-publishing",
-          "Configure NuGet trusted publishing",
-          "Sign in and add a GitHub Actions federated credential for this package.",
-          "https://www.nuget.org/account/TrustedPublishing",
-        ),
-      ];
-      break;
     case "maven-central":
-      steps = [
-        check(
-          "verify-build",
-          "Verify the Maven build",
-          "Run the build lifecycle without deploying an artifact.",
-          command("mvn", ["--batch-mode", "verify"]),
-        ),
-        browser(
-          "verify-namespace",
-          "Verify a Central namespace",
-          "Sign in to the Central Portal and verify the namespace used by the package coordinates.",
-          "https://central.sonatype.com/publishing/namespaces",
-        ),
-      ];
+    case "vscode-marketplace":
+    case "open-vsx":
+    case "chrome-web-store":
+      if (!packageInfo.workflow && !options.workflow) {
+        return {
+          ...basePlan(inspection, packageInfo, []),
+          skipped_reason: `no workflow publishes ${packageInfo.name} to ${packageInfo.registry}; pass --workflow <file> for an explicit setup target`,
+        };
+      }
+      steps = tokenFlow(packageInfo);
       break;
     case "packagist":
       steps = [
@@ -143,6 +132,7 @@ function basePlan(inspection, packageInfo, steps) {
   return {
     schema_version: 1,
     registry: packageInfo.registry,
+    credential_policy: credentialPolicy(packageInfo.registry),
     package: structuredClone(packageInfo),
     repository: structuredClone(inspection.repository),
     steps,
@@ -203,6 +193,14 @@ function flowPlan(inspection, packageInfo, options) {
     steps = [];
   } else if (mode === "attach") {
     steps = steps.filter((item) => !BOOTSTRAP_CONDITIONS.has(item.when));
+  }
+  if (options.ref) {
+    const ref = bootstrapRef(options.ref);
+    const fetch = steps.find((step) => step.id === "fetch-default-branch");
+    if (fetch) {
+      fetch.command.args = ["fetch", "origin", ref];
+      fetch.title = `Fetch bootstrap ref ${ref}`;
+    }
   }
   // Pages readiness belongs to the repository, so it is checked in every mode.
   const pages = inspection.repository.pages_workflow;

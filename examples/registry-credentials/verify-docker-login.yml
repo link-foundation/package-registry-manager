@@ -1,0 +1,21 @@
+# Copy to .github/workflows/verify-docker-login.yml on the default branch.
+name: Verify Docker Hub credential
+run-name: Verify Docker Hub credential ${{ inputs.prm_nonce }}
+on:
+  workflow_dispatch:
+    inputs:
+      prm_nonce:
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+# This verifies authentication. It does not prove repository-specific push scope.

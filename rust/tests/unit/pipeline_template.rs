@@ -173,11 +173,10 @@ fn plans_docker_hub_repository_token_variables_and_secret() {
         [
             "check-registry",
             "create-repository",
-            "create-access-token",
             "check-github-cli",
             "set-image-variable",
             "set-username-variable",
-            "set-token-secret",
+            "manage-registry-token",
         ]
     );
     let words = |text: &str| text.split(' ').map(str::to_owned).collect::<Vec<_>>();
@@ -190,9 +189,12 @@ fn plans_docker_hub_repository_token_variables_and_secret() {
         words("gh variable set DOCKERHUB_USERNAME --body acme --repo acme/pipeline-app")
     );
     assert_eq!(
-        argv(&plan, "set-token-secret"),
-        words("gh secret set DOCKERHUB_TOKEN --repo acme/pipeline-app"),
-        "the token is read by gh from the terminal, never passed as an argument"
+        plan.steps
+            .iter()
+            .find(|step| step.id == "manage-registry-token")
+            .unwrap()
+            .kind,
+        package_registry_manager::model::StepKind::Api
     );
     assert_eq!(
         plan.steps

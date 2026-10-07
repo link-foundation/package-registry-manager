@@ -246,6 +246,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
         )
         .command("npm", &["pkg", "get", "name", "version", "repository"]),
         check_registry_step("npm", context.state_url(package)),
+        step("check-name-policy", "Check npm name availability and policy", StepKind::Check, "Check exact and punctuation variants before approval. Server-side blocks can still refuse publication.").when("package-missing"),
         step(
             "check-sign-in",
             "Check the npm session",
@@ -297,6 +298,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
             "Compare the bin entries of the packed package.json with package.json and check that each installed bin prints its version for --version.",
         )
         .when("package-missing"),
+        step("publish-dry-run", "Validate first publication without upload", StepKind::Check, "Validate the reviewed tarball before asking for publication approval.").command("npm", &["publish", "{tarball}", "--dry-run", "--ignore-scripts", "--access", "public", "--provenance=false"]).when("package-missing").cwd(&package_cwd),
         // Sign in right before publishing, so the sign-in, publish, and trust
         // approvals happen together and npm can skip repeated 2FA prompts.
         step(
@@ -686,7 +688,7 @@ pub fn docker_hub_flow(package: &Package, context: &FlowContext<'_>) -> Vec<Setu
     let name = package.name.as_str();
     let namespace = name.split('/').next().unwrap_or_default();
     let repo = context.repo_args();
-    vec![
+    let mut steps = vec![
         check_registry_step("Docker Hub", context.state_url(package)),
         step(
             "create-repository",
@@ -699,13 +701,6 @@ pub fn docker_hub_flow(package: &Package, context: &FlowContext<'_>) -> Vec<Setu
             encode_uri_component(namespace)
         ))
         .when("package-missing"),
-        step(
-            "create-access-token",
-            "Create a Read & Write access token",
-            StepKind::Browser,
-            format!("Create a token with Read & Write access and a short expiry. Personal access tokens cannot be limited to one repository; an organization access token can be restricted to {name}. Keep the token only for the next step."),
-        )
-        .url("https://app.docker.com/settings/personal-access-tokens/create"),
         step(
             "check-github-cli",
             "Check the GitHub CLI session",
@@ -720,7 +715,13 @@ pub fn docker_hub_flow(package: &Package, context: &FlowContext<'_>) -> Vec<Setu
             StepKind::Command,
             "Store the image name as a repository variable.",
         )
-        .command("gh", &with_repo(&repo, &["variable", "set", "DOCKERHUB_IMAGE", "--body", name]))
+        .command(
+            "gh",
+            &with_repo(
+                &repo,
+                &["variable", "set", "DOCKERHUB_IMAGE", "--body", name],
+            ),
+        )
         .cwd("."),
         step(
             "set-username-variable",
@@ -730,19 +731,18 @@ pub fn docker_hub_flow(package: &Package, context: &FlowContext<'_>) -> Vec<Setu
         )
         .command(
             "gh",
-            &with_repo(&repo, &["variable", "set", "DOCKERHUB_USERNAME", "--body", namespace]),
+            &with_repo(
+                &repo,
+                &["variable", "set", "DOCKERHUB_USERNAME", "--body", namespace],
+            ),
         )
         .cwd("."),
-        step(
-            "set-token-secret",
-            "Set DOCKERHUB_TOKEN",
-            StepKind::Command,
-            "gh reads the token from the terminal without echoing it; the tool never sees it.",
-        )
-        .command("gh", &with_repo(&repo, &["secret", "set", "DOCKERHUB_TOKEN"]))
-        .cwd(".")
-        .confirmed(),
-    ]
+    ];
+    steps.extend(crate::credential_cycle::credential_steps(
+        Registry::DockerHub,
+        "DOCKERHUB_TOKEN",
+    ));
+    steps
 }
 
 /// GHCR: `GITHUB_TOKEN` pushes with `packages: write`; after the first push

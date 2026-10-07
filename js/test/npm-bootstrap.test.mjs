@@ -68,12 +68,14 @@ test("plans a bootstrap for a package missing from npm", async () => {
     [
       "validate-package",
       "check-registry",
+      "check-name-policy",
       "check-sign-in",
       "fetch-default-branch",
       "prepare-worktree",
       "pack",
       "test-install",
       "verify-bins",
+      "publish-dry-run",
       "sign-in",
       "check-2fa",
       "enable-2fa",
@@ -379,6 +381,7 @@ test(
       `git worktree add --detach ${worktree} FETCH_HEAD`,
       `npm pack --ignore-scripts --json --pack-destination ${destination}`,
       `npm install --no-save --no-package-lock --no-audit --no-fund --ignore-scripts --prefix ${destination}/install ${destination}/pipeline-app-0.1.0.tgz`,
+      `npm publish ${destination}/pipeline-app-0.1.0.tgz --dry-run --ignore-scripts --access public --provenance=false`,
       "npm login --auth-type=web --browser=false",
       "npm profile get --json",
       `npm publish ${destination}/pipeline-app-0.1.0.tgz --access public --auth-type=web --browser=false --provenance=false`,
@@ -738,7 +741,9 @@ test(
     );
     for (const prefix of ["npm publish", "npx"]) {
       assert.equal(
-        commands.some((item) => item.startsWith(prefix)),
+        commands.some(
+          (item) => item.startsWith(prefix) && !item.includes("--dry-run"),
+        ),
         false,
         prefix,
       );

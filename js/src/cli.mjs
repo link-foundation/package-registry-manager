@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 import { launchChannels } from "./browser-catalogue.mjs";
 import { parseBrowserOptions } from "./browser-options.mjs";
 import { isDirectExecution } from "./direct-execution.mjs";
+import { inspectReference } from "./bootstrap-reference.mjs";
 import { inspectRepository } from "./discovery.mjs";
 import { parseRegistry } from "./model.mjs";
 import { buildPlans } from "./plan.mjs";
@@ -49,6 +50,7 @@ Plan and setup options:
   --add-publish-job                Propose missing publishing jobs in a draft PR;
                                   --workflow chooses its target file
   --environment <name>            GitHub environment of the trusted publisher
+  --ref <branch|pr>               Bootstrap a pushed branch or PR head before merge
   --package <name>                Plan only this package, or select it for
                                   setup when a registry has several
 
@@ -105,6 +107,7 @@ export async function main(args = process.argv.slice(2)) {
     allowPositionals: true,
     strict: true,
     options: {
+      ref: { type: "string" },
       repository: { type: "string", default: "." },
       format: { type: "string", default: "text" },
       verbose: { type: "boolean", default: false },
@@ -165,9 +168,11 @@ export async function main(args = process.argv.slice(2)) {
   });
 
   const repository = path.resolve(values.repository);
-  const discovered = await inspectRepository(repository, {
-    includeSkipped: values.verbose,
-  });
+  const discovered = values.ref
+    ? await inspectReference(repository, values.ref, {
+        includeSkipped: values.verbose,
+      })
+    : await inspectRepository(repository, { includeSkipped: values.verbose });
   const inspection = values.offline
     ? discovered
     : await probeRegistryState(discovered, { verbose: values.verbose });
@@ -198,6 +203,7 @@ export async function main(args = process.argv.slice(2)) {
     ),
   });
   const planOptions = {
+    ref: values.ref,
     verifyRelease: values["verify-release"],
     manual: values.manual,
     workflow: await workflowOverride(
@@ -414,6 +420,9 @@ function outputPlans(plans, format) {
   for (const plan of plans) {
     const mode = plan.mode ? ` (${plan.mode})` : "";
     process.stdout.write(`${plan.registry}: ${plan.package.name}${mode}\n`);
+    process.stdout.write(
+      `  credentials: ${plan.credential_policy.description}\n`,
+    );
     if (plan.mode === "complete") {
       process.stdout.write("  trusted publishing is already in use\n");
     }

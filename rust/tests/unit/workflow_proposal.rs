@@ -118,3 +118,21 @@ fn rejects_ambiguous_workflows_and_paths_and_preserves_environment_override() {
     .unwrap();
     assert!(proposal.contents.contains("environment: 'release'"));
 }
+
+#[test]
+fn proposals_guard_versions_and_follow_release_output() {
+    let (_root, inspection) = fixture();
+    let workflows = vec![Workflow { name: "release.yml".into(), contents: "on: push\njobs:\n  release:\n    outputs:\n      published_version: ${{ steps.release.outputs.version }}\n    steps:\n      - run: ./release.sh\n".into() }];
+    let proposal =
+        workflow_proposal(&inspection, &inspection.packages, &workflows, None, None).unwrap();
+    for expected in [
+        "needs: release",
+        "needs.release.outputs.published_version",
+        "id: version-check",
+        "Cache-Control",
+        "steps.version-check.outputs.publish == 'true'",
+        "skip-existing: true",
+    ] {
+        assert!(proposal.contents.contains(expected), "{expected}");
+    }
+}

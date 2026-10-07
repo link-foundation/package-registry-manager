@@ -7,6 +7,8 @@ use anyhow::Result;
 use regex::Regex;
 
 use crate::model::Registry;
+use crate::publishers::{executable_lines, parse_workflow};
+use crate::source_code::{command_position, strip_comments};
 
 /// A workflow file under `.github/workflows`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,16 +23,6 @@ fn is_yaml(name: &str) -> bool {
     Path::new(name).extension().is_some_and(|extension| {
         extension.eq_ignore_ascii_case("yml") || extension.eq_ignore_ascii_case("yaml")
     })
-}
-
-// Container registries; npm, crates.io, and PyPI use the job-aware detection
-// in `publishers`.
-const fn publish_pattern(registry: Registry) -> Option<&'static str> {
-    match registry {
-        Registry::DockerHub => Some(r"(?i)\bDOCKER_?HUB_|\bdocker\.io/|hub\.docker\.com"),
-        Registry::Ghcr => Some(r"\bghcr\.io\b"),
-        _ => None,
-    }
 }
 
 /// Read `.yml` and `.yaml` workflow files sorted by file name.
@@ -54,15 +46,42 @@ pub fn read_workflows(root: &Path) -> Result<Vec<Workflow>> {
 /// Return the first workflow that publishes to the registry, if any.
 #[must_use]
 pub fn publishing_workflow(workflows: &[Workflow], registry: Registry) -> Option<&Workflow> {
-    let pattern = Regex::new(publish_pattern(registry)?).expect("static pattern must compile");
-    workflows
-        .iter()
-        .find(|workflow| pattern.is_match(&workflow.contents))
+    if ![Registry::DockerHub, Registry::Ghcr].contains(&registry) {
+        return None;
+    }
+    workflows.iter().find(|workflow| {
+        parse_workflow(&strip_comments(&workflow.contents, "workflow.yml"))
+            .jobs
+            .iter()
+            .any(|job| {
+                let text = job.lines.join("\n");
+                let matches =
+                    |pattern: &str| Regex::new(pattern).expect("static pattern").is_match(&text);
+                let pushes = executable_lines(&job.lines).iter().any(|line| {
+                    Regex::new(r"\bdocker\s+push\b")
+                        .expect("static pattern")
+                        .is_match(line)
+                        && command_position(line.split("docker").next().unwrap_or_default())
+                }) || matches(r"uses:\s*docker/build-push-action@")
+                    && matches(r"(?m)^\s*push:\s*true\b");
+                if !pushes {
+                    return false;
+                }
+                let ghcr = matches(r"\bghcr\.io\b");
+                if registry == Registry::Ghcr {
+                    ghcr
+                } else {
+                    matches(r"(?i)\bDOCKER_?HUB_|\bdocker\.io/|hub\.docker\.com")
+                        || matches(r"uses:\s*docker/login-action@") && !ghcr
+                }
+            })
+    })
 }
 
 /// Report whether a workflow grants `packages: write` to its token.
 #[must_use]
 pub fn grants_packages_write(contents: &str) -> bool {
+    let contents = strip_comments(contents, "workflow.yml");
     [
         r#"(?m)^\s*packages\s*:\s*['"]?write\b"#,
         r#"(?m)^\s*permissions\s*:\s*['"]?write-all\b"#,
@@ -71,6 +90,6 @@ pub fn grants_packages_write(contents: &str) -> bool {
     .any(|pattern| {
         Regex::new(pattern)
             .expect("static pattern must compile")
-            .is_match(contents)
+            .is_match(&contents)
     })
 }

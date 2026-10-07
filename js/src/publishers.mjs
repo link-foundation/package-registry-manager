@@ -1,10 +1,32 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { stripComments, commandPosition } from "./source-code.mjs";
 
 /** Registries whose trusted publisher is bound to a workflow file. */
-export const TRUSTED_REGISTRIES = Object.freeze(["npm", "crates-io", "pypi"]);
+export const TRUSTED_REGISTRIES = Object.freeze([
+  "npm",
+  "crates-io",
+  "pypi",
+  "rubygems",
+  "nuget",
+  "jsr",
+]);
 
-const JOB_PATTERNS = new Map([
+export const JOB_PATTERNS = new Map([
+  ["rubygems", /\bgem\s+push\b|rubygems\/release-gem/],
+  ["nuget", /\bdotnet\s+nuget\s+push\b|\bnuget\s+push\b/],
+  ["jsr", /\bdeno\s+publish\b|\bjsr\s+publish\b/],
+  ["docker-hub", /docker\/login-action|\bdocker\s+(?:login|push)\b/],
+  [
+    "maven-central",
+    /\bmvn\s+(?:--?[^\s]+\s+)*deploy\b|\bgradle(?:w)?\s+publish\b/,
+  ],
+  ["vscode-marketplace", /\bvsce\s+publish\b/],
+  ["open-vsx", /\bovsx\s+publish\b/],
+  [
+    "chrome-web-store",
+    /chrome-webstore-upload|chrome-web-store|chromewebstore/,
+  ],
   [
     "npm",
     /\b(?:npm|pnpm)\s+(?:-r\s+|--recursive\s+)?(?:stage\s+)?publish\b|\byarn\s+npm\s+publish\b|\bchangeset\s+publish\b|changesets\/action\/publish@|JS-DevTools\/npm-publish/,
@@ -24,6 +46,12 @@ const JOB_PATTERNS = new Map([
 // `.arg("publish")` within the next few lines.
 const SCRIPT_WINDOW = 3;
 const SCRIPT_PATTERNS = new Map([
+  ["rubygems", [/\bgem\b/, /["'`]push["'`]/]],
+  ["nuget", [/\b(?:dotnet|nuget)\b/, /["'`]push["'`]/]],
+  ["jsr", [/\b(?:deno|jsr)\b/, /["'`]publish["'`]/]],
+  ["maven-central", [/\b(?:mvn|gradle)\b/, /["'`]deploy["'`]/]],
+  ["vscode-marketplace", [/\bvsce\b/, /["'`]publish["'`]/]],
+  ["open-vsx", [/\bovsx\b/, /["'`]publish["'`]/]],
   ["npm", [/\b(?:npm|pnpm|yarn)\b/, /["'`]publish["'`]/]],
   ["crates-io", [/\bcargo\b/, /["'`]publish["'`]/]],
   [
@@ -33,6 +61,27 @@ const SCRIPT_PATTERNS = new Map([
 ]);
 
 const TOKEN_SECRETS = new Map([
+  ["rubygems", ["GEM_HOST_API_KEY", "RUBYGEMS_API_KEY"]],
+  ["nuget", ["NUGET_API_KEY", "NUGET_TOKEN"]],
+  ["jsr", ["JSR_TOKEN"]],
+  ["docker-hub", ["DOCKERHUB_TOKEN", "DOCKER_HUB_TOKEN", "DOCKER_PASSWORD"]],
+  [
+    "maven-central",
+    [
+      "MAVEN_CENTRAL_TOKEN",
+      "MAVEN_CENTRAL_PASSWORD",
+      "OSSRH_TOKEN",
+      "OSSRH_PASSWORD",
+      "SONATYPE_TOKEN",
+      "CENTRAL_TOKEN",
+    ],
+  ],
+  ["vscode-marketplace", ["VSCE_PAT", "VSCE_TOKEN"]],
+  ["open-vsx", ["OVSX_PAT", "OVSX_TOKEN"]],
+  [
+    "chrome-web-store",
+    ["CHROME_WEB_STORE_REFRESH_TOKEN", "CHROME_REFRESH_TOKEN"],
+  ],
   ["npm", ["NPM_TOKEN", "NPM_AUTH_TOKEN"]],
   [
     "crates-io",
@@ -61,9 +110,6 @@ const RUN_SCRIPT =
 const CHANGESETS_PUBLISH = /^\s*publish(?:-script)?\s*:\s*(.+?)\s*$/;
 const LOCAL_WORKFLOW =
   /^\s*uses\s*:\s*["']?\.\/\.github\/workflows\/([\w.-]+\.ya?ml)/;
-const SCRIPT_COMMENT = /^\s*(?:#|\/\/|\/?\*)/;
-const COMMAND_PREFIX =
-  /^\s*(?:(?:npx|bunx|exec|sudo|env|time|command|pnpm\s+exec|yarn|\w+=\S*)\s+)*$/;
 const MAX_SCRIPT_BYTES = 1024 * 1024;
 
 /**
@@ -71,7 +117,7 @@ const MAX_SCRIPT_BYTES = 1024 * 1024;
  * parser is bundled. Full-line comments are dropped.
  */
 export function parseWorkflow(contents) {
-  const lines = contents.split(/\r?\n/).filter((line) => !/^\s*#/.test(line));
+  const lines = stripComments(contents).split(/\r?\n/);
   const start = lines.findIndex((line) => /^jobs\s*:\s*$/.test(line));
   if (start === -1) {
     return { header: lines, jobs: [] };
@@ -145,7 +191,9 @@ export async function detectPublisher(root, workflows, registry) {
       });
     }
   }
-  const trusted = found.filter((item) => item.idToken);
+  const trusted = found.filter(
+    (item) => !TRUSTED_REGISTRIES.includes(registry) || item.idToken,
+  );
   const files = [...new Set(trusted.map((item) => item.workflow))];
   if (files.length > 1) {
     return {
@@ -215,7 +263,7 @@ export function tokenSecrets(workflows, registry) {
   const names = TOKEN_SECRETS.get(registry) ?? [];
   const found = [];
   for (const workflow of workflows) {
-    const lines = workflow.contents
+    const lines = stripComments(workflow.contents)
       .split(/\r?\n/)
       .filter((line) => !/^\s*#/.test(line));
     for (const name of names) {
@@ -231,7 +279,9 @@ export function tokenSecrets(workflows, registry) {
 
 /** Explains how to replace a long-lived token secret with trusted publishing. */
 export function tokenSecretWarning(registry, { workflow, secret }) {
-  return `${workflow} reads secrets.${secret}; publish with ${TRUSTED_PUBLISHING_HINTS.get(registry)} and delete the long-lived token`;
+  return TRUSTED_REGISTRIES.includes(registry)
+    ? `${workflow} reads secrets.${secret}; publish with ${TRUSTED_PUBLISHING_HINTS.get(registry) ?? `${registry} trusted publishing (id-token: write)`} and delete the long-lived token after verification`
+    : `${workflow} reads secrets.${secret}; ensure a scoped expiring publishing token through gh-manager`;
 }
 
 /** Names of the long-lived token secrets that trusted publishing replaces. */
@@ -250,14 +300,15 @@ async function anyJobPublishes(root, parsed, registry) {
 
 async function jobPublishes(root, parsed, job, registry) {
   const pattern = JOB_PATTERNS.get(registry);
-  if (publishingLine(job.lines, pattern)) {
+  const executable = executableLines(job.lines);
+  if (publishingLine(executable, pattern)) {
     return true;
   }
   const directories = workingDirectories([...parsed.header, ...job.lines]);
   const scripts = [];
-  for (const script of scriptReferences(job.lines)) {
+  for (const script of scriptReferences(executable)) {
     const contents = await readInside(root, directories, script);
-    const lines = contents === null ? [] : codeLines(contents);
+    const lines = contents === null ? [] : codeLines(contents, script);
     if (scriptPublishes(lines, registry)) {
       return true;
     }
@@ -274,8 +325,11 @@ async function jobPublishes(root, parsed, job, registry) {
   }
   // A package script may run from the job, its changesets command, or a
   // script, as in `$\`npm run changeset:publish\``.
-  for (const line of [...job.lines, ...commands, ...scripts]) {
+  for (const line of [...executable, ...commands, ...scripts]) {
     for (const match of line.matchAll(RUN_SCRIPT)) {
+      if (!commandPosition(line.slice(0, match.index))) {
+        continue;
+      }
       const manifest = await readInside(root, directories, "package.json");
       const command =
         manifest === null
@@ -312,17 +366,52 @@ function onlyCalled(header) {
 }
 
 function publishingLine(lines, pattern) {
+  if (!pattern) {
+    return false;
+  }
+  const matcher = new RegExp(pattern.source, "g");
   return lines.some(
-    (line) => pattern.test(line) && !line.includes("--dry-run"),
+    (line) =>
+      !line.includes("--dry-run") &&
+      [...line.matchAll(matcher)].some(
+        (match) =>
+          commandPosition(line.slice(0, match.index)) ||
+          /^\s*-?\s*uses\s*:\s*['"]?[\w./-]*$/.test(line.slice(0, match.index)),
+      ),
   );
 }
 
-function codeLines(contents) {
-  return contents
+/** Extract executable run blocks and action references; names and env values are inert. */
+export function executableLines(lines) {
+  const result = [];
+  let blockIndent = null;
+  for (const line of lines) {
+    const indent = indentOf(line);
+    if (blockIndent !== null && (line.trim() === "" || indent > blockIndent)) {
+      result.push(line);
+      continue;
+    }
+    blockIndent = null;
+    if (/^\s*-?\s*uses\s*:/.test(line)) {
+      result.push(line);
+    }
+    const match = /^\s*-?\s*run\s*:\s*(.*)$/.exec(line);
+    if (!match) {
+      continue;
+    }
+    if (/^[|>][-+\d]*$/.test(match[1])) {
+      blockIndent = indent + (line.trimStart().startsWith("-") ? 2 : 0);
+    } else {
+      result.push(unquote(match[1]));
+    }
+  }
+  return result;
+}
+
+function codeLines(contents, script) {
+  return stripComments(contents, script)
     .split(/\r?\n/)
-    .filter(
-      (line) => !line.includes("--dry-run") && !SCRIPT_COMMENT.test(line),
-    );
+    .filter((line) => !line.includes("--dry-run"));
 }
 
 function scriptPublishes(lines, registry) {
@@ -336,21 +425,21 @@ function scriptPublishes(lines, registry) {
   ) {
     return true;
   }
-  const [program, subcommand] = SCRIPT_PATTERNS.get(registry);
+  const patterns = SCRIPT_PATTERNS.get(registry);
+  if (!patterns) {
+    return false;
+  }
+  const [program, subcommand] = patterns;
   return lines.some(
     (line, index) =>
       program.test(line) &&
+      /(?:exec|spawn|run|Command::new|subprocess|system|(?:npm|pnpm|yarn)\s*\(\s*\[)/.test(
+        line,
+      ) &&
       lines
         .slice(index, index + SCRIPT_WINDOW)
         .some((nearby) => subcommand.test(nearby)),
   );
-}
-
-// A script mentions `cargo publish` in messages and comments too; it runs it
-// only where the command starts a line, a shell command or a string literal.
-function commandPosition(prefix) {
-  const segment = prefix.split(/["'`;&|(]/).at(-1);
-  return COMMAND_PREFIX.test(segment);
 }
 
 function packageScript(contents, name) {

@@ -190,6 +190,13 @@ fn setup_all_reuses_the_npm_session_and_logs_out_after_the_last_package() {
         r#"{"name":"second-package","version":"0.1.0"}"#,
     )
     .unwrap();
+    let workflow = repository.join(".github/workflows/release.yml");
+    let mut contents = fs::read_to_string(&workflow).unwrap();
+    contents = contents.replace(
+        "  docker-hub:",
+        "      - run: npm publish\n        working-directory: second\n  docker-hub:",
+    );
+    fs::write(workflow, contents).unwrap();
     let registry = MockRegistry::start(|path| {
         path.starts_with("/npm/")
             .then(|| r#"{"version":"0.1.0"}"#.to_owned())
@@ -258,6 +265,7 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
             format!(
                 "npm install --no-save --no-package-lock --no-audit --no-fund --ignore-scripts --prefix {destination}/install {destination}/pipeline-app-0.1.0.tgz"
             ),
+            format!("npm publish {destination}/pipeline-app-0.1.0.tgz --dry-run --ignore-scripts --access public --provenance=false"),
             "npm login --auth-type=web --browser=false".to_owned(),
             "npm profile get --json".to_owned(),
             format!(
@@ -472,7 +480,7 @@ fn reruns_npm_publish_with_a_fresh_approval_link_once_one_expired() {
     );
     let publishes = step_commands(&read_log(&state))
         .iter()
-        .filter(|command| command.starts_with("npm publish"))
+        .filter(|command| command.starts_with("npm publish") && !command.contains("--dry-run"))
         .count();
     assert_eq!(publishes, 2);
     assert!(
@@ -607,7 +615,9 @@ fn opens_the_npm_2fa_settings_and_stops_before_publishing_while_2fa_is_off() {
     );
     for prefix in ["npm publish", "npx"] {
         assert!(
-            !commands.iter().any(|command| command.starts_with(prefix)),
+            !commands
+                .iter()
+                .any(|command| command.starts_with(prefix) && !command.contains("--dry-run")),
             "{prefix}"
         );
     }

@@ -1,3 +1,4 @@
+import { credentialSteps } from "./credential-cycle.mjs";
 import { DEFAULT_TRUST_NPM, NPM_TFA_URL } from "./prerequisites.mjs";
 import {
   npmName,
@@ -256,6 +257,13 @@ export function npmFlow(packageInfo, context) {
     ),
     checkRegistryStep("npm", registryStateUrl(packageInfo)),
     step(
+      "check-name-policy",
+      "Check npm name availability and policy",
+      "check",
+      "Check exact and punctuation variants before approval. Server-side blocks can still refuse publication.",
+      { when: "package-missing" },
+    ),
+    step(
       "check-sign-in",
       "Check the npm session",
       "check",
@@ -307,6 +315,25 @@ export function npmFlow(packageInfo, context) {
       "check",
       "Compare the bin entries of the packed package.json with package.json and check that each installed bin prints its version for --version.",
       { when: "package-missing" },
+    ),
+    step(
+      "publish-dry-run",
+      "Validate first publication without upload",
+      "check",
+      "Validate the reviewed tarball before asking for publication approval.",
+      {
+        command: command("npm", [
+          "publish",
+          "{tarball}",
+          "--dry-run",
+          "--ignore-scripts",
+          "--access",
+          "public",
+          "--provenance=false",
+        ]),
+        when: "package-missing",
+        cwd: packageCwd(context.directory),
+      },
     ),
     // Sign in right before publishing, so the sign-in, publish, and trust
     // approvals happen together and npm can skip repeated 2FA prompts.
@@ -708,13 +735,6 @@ export function dockerHubFlow(packageInfo, context) {
       },
     ),
     step(
-      "create-access-token",
-      "Create a Read & Write access token",
-      "browser",
-      `Create a token with Read & Write access and a short expiry. Personal access tokens cannot be limited to one repository; an organization access token can be restricted to ${packageInfo.name}. Keep the token only for the next step.`,
-      { url: "https://app.docker.com/settings/personal-access-tokens/create" },
-    ),
-    step(
       "check-github-cli",
       "Check the GitHub CLI session",
       "check",
@@ -755,17 +775,7 @@ export function dockerHubFlow(packageInfo, context) {
         cwd: ".",
       },
     ),
-    step(
-      "set-token-secret",
-      "Set DOCKERHUB_TOKEN",
-      "command",
-      "gh reads the token from the terminal without echoing it; the tool never sees it.",
-      {
-        command: command("gh", ["secret", "set", "DOCKERHUB_TOKEN", ...repo]),
-        cwd: ".",
-        confirm: true,
-      },
-    ),
+    ...credentialSteps("docker-hub", "DOCKERHUB_TOKEN"),
   ];
 }
 

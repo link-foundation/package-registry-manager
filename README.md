@@ -8,6 +8,8 @@ cover the maintained language ecosystems in the hive-mind CI/CD guidance.
 [![Security](https://github.com/link-foundation/package-registry-manager/actions/workflows/security.yml/badge.svg)](https://github.com/link-foundation/package-registry-manager/actions/workflows/security.yml)
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](http://unlicense.org/)
 
+See the [bootstrap, wrapper and credential guide](docs/registry-setup.md) for branch/PR setup, dual npm names, registry policies and integration limits.
+
 ## Features
 
 - Discovers package manifests recursively while ignoring generated dependency,

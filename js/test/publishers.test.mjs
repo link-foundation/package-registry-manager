@@ -418,3 +418,118 @@ test("warns and blocks trusted-publisher setup without a publishing job (#33)", 
   const [override] = buildPlans(inspection, [], { workflow: "release.yml" });
   assert.equal(override.trusted_publisher.workflow, "release.yml");
 });
+
+test("credential preflight comments and inert strings are not publishers (#37)", async () => {
+  for (const [script, contents] of [
+    ["preflight.sh", "echo ready # npm publish\n"],
+    ["preflight.py", "print('ready') # npm publish\n"],
+    [
+      "preflight.mjs",
+      "/* credentials only\nnpm publish\n*/\nconst help = 'npm publish';\nconsole.log(help);\n",
+    ],
+  ]) {
+    const root = await repository({
+      [`scripts/${script}`]: contents,
+      ".github/workflows/python.yml": `on: push\njobs:\n  preflight:\n    permissions: {id-token: write}\n    steps:\n      - run: ${script.endsWith("sh") ? "bash" : script.endsWith("py") ? "python" : "node"} scripts/${script}\n`,
+    });
+    assert.equal(
+      (await detectPublisher(root, await readWorkflows(root), "npm")).workflow,
+      null,
+      script,
+    );
+  }
+});
+
+test("quoted URL and executed commands survive comment stripping (#37)", async () => {
+  const root = await repository({
+    "scripts/publish.mjs":
+      'const url = "https://example.org/#anchor";\nawait exec("npm", ["publish", url]); // publish\n',
+    ".github/workflows/js.yml":
+      "on: push\njobs:\n  publish:\n    permissions: {id-token: write}\n    steps:\n      - run: node scripts/publish.mjs\n",
+  });
+  assert.equal(
+    (await detectPublisher(root, await readWorkflows(root), "npm")).workflow,
+    "js.yml",
+  );
+});
+
+test("publishing coverage is checked for every wrapper manifest (#36, #37)", async () => {
+  const root = await repository({
+    "package.json": '{"name":"gh-upload","version":"1.0.0"}',
+    "packages/gh-upload-log/package.json":
+      '{"name":"gh-upload-log","version":"1.0.0","dependencies":{"gh-upload":"1.0.0"}}',
+    "packages/orphan/package.json": '{"name":"orphan","version":"1.0.0"}',
+    ".github/workflows/release.yml":
+      "on: push\njobs:\n  release:\n    permissions: {id-token: write}\n    steps:\n      - run: npm publish\n      - run: npm publish\n        working-directory: packages/gh-upload-log\n",
+  });
+  const inspection = await inspectRepository(root);
+  assert.equal(
+    inspection.packages.find((item) => item.name === "gh-upload-log").workflow,
+    "release.yml",
+  );
+  assert.equal(
+    inspection.packages.find((item) => item.name === "gh-upload").workflow,
+    "release.yml",
+  );
+  const orphan = inspection.packages.find((item) => item.name === "orphan");
+  assert.equal(orphan.workflow, undefined);
+  assert.match(
+    buildPlans(inspection).find((plan) => plan.package.name === "orphan")
+      .skipped_reason,
+    /no workflow publishes/,
+  );
+});
+
+test("inert workflow text and commented secret reads are not publishing (#37)", async () => {
+  const root = await repository({});
+  const workflows = [
+    {
+      name: "preflight.yml",
+      contents: `on: workflow_dispatch
+jobs:
+  preflight:
+    permissions: {id-token: write}
+    steps:
+      - name: npm publish
+        env:
+          HELP: npm publish
+        run: |
+          echo 'npm publish would fail'
+          npm whoami # npm publish
+`,
+    },
+  ];
+  const detected = await detectPublisher(root, workflows, "npm");
+  assert.equal(detected.workflow, null);
+  const { tokenSecrets } = await import("../src/publishers.mjs");
+  assert.deepEqual(
+    tokenSecrets(
+      [
+        {
+          name: "ci.yml",
+          contents: "run: npm whoami # ${{ secrets.NPM_TOKEN }}",
+        },
+      ],
+      "npm",
+    ),
+    [],
+  );
+});
+
+test("warns when an npm wrapper stops tracking its main package version (#36)", async () => {
+  const root = await repository({
+    "package.json": '{"name":"gh-upload","version":"2.0.0"}',
+    "packages/old/package.json":
+      '{"name":"gh-upload-log","version":"1.0.0","dependencies":{"gh-upload":"1.0.0"}}',
+    ".github/workflows/release.yml":
+      "on: push\njobs:\n  release:\n    permissions: {id-token: write}\n    steps:\n      - run: npm publish\n      - run: npm publish\n        working-directory: packages/old\n",
+  });
+  const inspected = await inspectRepository(root);
+  assert.ok(
+    inspected.packages
+      .find((item) => item.name === "gh-upload-log")
+      .warnings.some(
+        (warning) => warning.includes("wrapper") && warning.includes("2.0.0"),
+      ),
+  );
+});

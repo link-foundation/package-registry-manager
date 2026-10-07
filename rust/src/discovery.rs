@@ -91,14 +91,59 @@ pub fn inspect_repository_with(root: &Path, options: InspectOptions) -> Result<I
         .cloned()
         .collect::<Vec<_>>();
     let (github_owner, github_repository) = github_coordinates(&root, &coordinate_manifests)?;
-    let publishers = TRUSTED_REGISTRIES
+    let mut publishers = TRUSTED_REGISTRIES
         .iter()
         .map(|registry| (*registry, detect_publisher(&root, &workflows, *registry)))
         .collect::<BTreeMap<_, _>>();
+    for item in parsed.clone() {
+        if item.registry != Registry::Npm {
+            continue;
+        }
+        let data: JsonValue = serde_json::from_str(&read_manifest(&root.join(&item.manifest))?)?;
+        if let Some(publisher_name) =
+            data.get("publisher")
+                .and_then(JsonValue::as_str)
+                .filter(|_| {
+                    data.get("engines")
+                        .and_then(|engines| engines.get("vscode"))
+                        .is_some()
+                })
+        {
+            for registry in [Registry::VsCodeMarketplace, Registry::OpenVsx] {
+                let publisher = detect_publisher(&root, &workflows, registry);
+                if publisher.workflow.is_some() {
+                    publishers.insert(registry, publisher);
+                    let mut extension = item.clone();
+                    extension.registry = registry;
+                    extension.name = format!("{publisher_name}.{}", item.name);
+                    parsed.push(extension);
+                }
+            }
+        }
+    }
+    let central = detect_publisher(&root, &workflows, Registry::MavenCentral);
+    publishers.insert(Registry::MavenCentral, central);
+    let mut counts = BTreeMap::new();
+    for item in &parsed {
+        if test_directory(&item.manifest).is_none() {
+            *counts.entry(item.registry).or_insert(0_usize) += 1;
+        }
+    }
     let mut packages = parsed
         .into_iter()
         .filter(|item| kept(&workflows, &item.manifest, item.publishable, &mut skipped))
-        .map(|item| with_publisher(item, &workflows, &publishers))
+        .map(|item| {
+            if counts.get(&item.registry).copied().unwrap_or(0) > 1
+                && TRUSTED_REGISTRIES.contains(&item.registry)
+            {
+                let scoped = crate::package_coverage::package_workflows(&workflows, &item);
+                let publisher = detect_publisher(&root, &scoped, item.registry);
+                let publishers = BTreeMap::from([(item.registry, publisher)]);
+                with_publisher(item, &workflows, &publishers)
+            } else {
+                with_publisher(item, &workflows, &publishers)
+            }
+        })
         .collect::<Vec<_>>();
     let dockerfiles = dockerfiles
         .iter()
@@ -111,6 +156,22 @@ pub fn inspect_repository_with(root: &Path, options: InspectOptions) -> Result<I
         github_owner.as_deref(),
         github_repository.as_deref(),
     ));
+    let chrome = detect_publisher(&root, &workflows, Registry::ChromeWebStore);
+    if let Some(workflow) = &chrome.workflow {
+        let package = Package::new(
+            Registry::ChromeWebStore,
+            github_repository
+                .clone()
+                .unwrap_or_else(|| "chrome-extension".into()),
+            None,
+            format!(".github/workflows/{workflow}"),
+        );
+        packages.push(with_publisher(
+            package,
+            &workflows,
+            &BTreeMap::from([(Registry::ChromeWebStore, chrome)]),
+        ));
+    }
     packages.sort_by(|left, right| {
         (left.registry, &left.manifest, &left.name).cmp(&(
             right.registry,
@@ -118,6 +179,7 @@ pub fn inspect_repository_with(root: &Path, options: InspectOptions) -> Result<I
             &right.name,
         ))
     });
+    crate::package_coverage::audit_wrappers(&root, &mut packages)?;
     if options.include_skipped {
         skipped.sort_by(|left, right| left.manifest.cmp(&right.manifest));
     } else {
@@ -150,7 +212,10 @@ fn kept(
     let Some(directory) = test_directory(manifest) else {
         return true;
     };
-    if publishable && referenced_by_workflow(workflows, manifest) {
+    if !["docs", "experiments", "case-studies"].contains(&directory)
+        && publishable
+        && referenced_by_workflow(workflows, manifest)
+    {
         return true;
     }
     skipped.push(Skipped {
@@ -235,9 +300,11 @@ fn is_manifest(path: &Path) -> bool {
             | "build.gradle"
             | "build.gradle.kts"
             | "composer.json"
+            | "jsr.json"
+            | "deno.json"
     ) || matches!(
         path.extension().and_then(|extension| extension.to_str()),
-        Some("csproj" | "fsproj" | "vbproj")
+        Some("csproj" | "fsproj" | "vbproj" | "gemspec")
     )
 }
 
@@ -262,6 +329,23 @@ fn parse_manifest(path: &Path, root: &Path) -> Result<Option<Package>> {
         .unwrap_or_default();
 
     match name {
+        "jsr.json" | "deno.json" => {
+            let data: JsonValue = serde_json::from_str(contents)?;
+            Ok(data
+                .get("name")
+                .and_then(JsonValue::as_str)
+                .zip(json_string(&data, "version"))
+                .map(|(name, version)| {
+                    Package::new(Registry::Jsr, name.into(), Some(version), relative)
+                }))
+        }
+        _ if name.ends_with(".gemspec") => Ok(Some(Package::new(
+            Registry::RubyGems,
+            regex_capture(contents, r#"\.name\s*=\s*['"]([^'"]+)"#)
+                .unwrap_or_else(|| "unknown-ruby-package".into()),
+            regex_capture(contents, r#"\.version\s*=\s*['"]([^'"]+)"#),
+            relative,
+        ))),
         "package.json" => parse_npm(contents, relative),
         "Cargo.toml" => parse_cargo(contents, relative),
         "pyproject.toml" => parse_pyproject(contents, relative),

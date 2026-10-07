@@ -11,13 +11,14 @@ import path from "node:path";
 import { exec } from "command-stream";
 import { packageDirectory } from "./plan.mjs";
 import { parseWorkflow } from "./publishers.mjs";
+import { versionGuard } from "./version-guard.mjs";
 import { readWorkflows } from "./workflows.mjs";
 
 const quote = (text) => `'${text.replaceAll("'", "''")}'`;
 const RELEASE_IF =
   "github.event_name == 'release' || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))";
 
-function job(packageInfo, index, environment) {
+function job(packageInfo, index, environment, producer) {
   if (
     !/^(?:[\w@.-]+\/)*[\w@.-]+$/.test(packageInfo.manifest) ||
     packageInfo.manifest.split("/").some((part) => ["..", "."].includes(part))
@@ -27,7 +28,17 @@ function job(packageInfo, index, environment) {
   const directory = packageDirectory(packageInfo.manifest);
   const lines = [
     `  prm-publish-${packageInfo.registry}-${index + 1}:`,
-    `    if: ${RELEASE_IF}`,
+    `    if: (${RELEASE_IF})${producer ? ` && needs.${producer}.outputs.published_version != ''` : ""}`,
+    ...(producer
+      ? [
+          `    needs: ${producer}`,
+          "    env:",
+          `      RELEASE_VERSION: \${{ needs.${producer}.outputs.published_version }}`,
+        ]
+      : []),
+    "    concurrency:",
+    `      group: prm-publish-${packageInfo.registry}-${index + 1}-\${{ github.ref }}`,
+    "      cancel-in-progress: false",
     "    runs-on: ubuntu-latest",
     "    timeout-minutes: 15",
     "    permissions:",
@@ -41,6 +52,9 @@ function job(packageInfo, index, environment) {
     "      - uses: actions/checkout@v6",
     "        with:",
     "          persist-credentials: false",
+    ...(producer
+      ? ["          ref: ${{ github.event.repository.default_branch }}"]
+      : []),
   ];
   switch (packageInfo.registry) {
     case "npm":
@@ -51,15 +65,20 @@ function job(packageInfo, index, environment) {
         "      - run: npm install --global npm@^11",
         "      - run: npm install",
         "      - run: npm run build --if-present",
+        ...versionGuard("npm"),
         "      - run: npm publish --provenance --access public",
+        "        if: steps.version-check.outputs.publish == 'true'",
       );
       break;
     case "crates-io":
       lines.push(
         "      - uses: dtolnay/rust-toolchain@stable",
+        ...versionGuard("crates-io"),
         "      - uses: rust-lang/crates-io-auth-action@v1",
+        "        if: steps.version-check.outputs.publish == 'true'",
         "        id: auth",
         "      - run: cargo publish",
+        "        if: steps.version-check.outputs.publish == 'true'",
         "        env:",
         "          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}",
       );
@@ -77,6 +96,7 @@ function job(packageInfo, index, environment) {
         "      - run: python -m build",
         "      - uses: pypa/gh-action-pypi-publish@release/v1",
         "        with:",
+        "          skip-existing: true",
         `          packages-dir: ${quote(`${directory === "." ? "" : `${directory}/`}dist/`)}`,
       );
       break;
@@ -123,6 +143,15 @@ export function workflowProposal(
     workflows.find((item) => item.name === workflow)?.contents ??
     "name: Package release\non:\n  workflow_dispatch:\n  release:\n    types: [published]\npermissions:\n  contents: read\njobs:\n";
   const parsed = parseWorkflow(contents);
+  const producers = parsed.jobs.filter((item) =>
+    item.lines.some((line) => /^\s+published_version\s*:/.test(line)),
+  );
+  if (producers.length > 1) {
+    throw new Error(
+      "several jobs expose published_version; choose the release dependency manually",
+    );
+  }
+  const producer = producers[0]?.name;
   const environments = [
     ...new Set(
       inspection.packages
@@ -137,7 +166,7 @@ export function workflowProposal(
   }
   let addition = packages
     .map((item, index) =>
-      job(item, index, chosenEnvironment ?? environments[0]),
+      job(item, index, chosenEnvironment ?? environments[0], producer),
     )
     .join("\n");
   for (const item of parseWorkflow(`jobs:\n${addition}`).jobs) {

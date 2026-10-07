@@ -12,6 +12,9 @@ export const TEST_DIRECTORIES = Object.freeze([
   "__fixtures__",
   "__tests__",
   "examples",
+  "docs",
+  "experiments",
+  "case-studies",
 ]);
 
 /**

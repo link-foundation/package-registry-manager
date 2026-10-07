@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 
 import { npmPrefillScript } from "../src/browser.mjs";
 import { inspectRepository } from "../src/discovery.mjs";
-import { REGISTRIES } from "../src/model.mjs";
 import { buildPlans } from "../src/plan.mjs";
 
 let temporary;
@@ -33,11 +32,21 @@ after(async () => {
   await rm(temporary, { recursive: true, force: true });
 });
 
-test("discovers each maintained package registry", async () => {
+test("discovers the baseline polyglot registries", async () => {
   const inspection = await inspectRepository(repository);
   assert.deepEqual(
     [...new Set(inspection.packages.map((item) => item.registry))].sort(),
-    [...REGISTRIES].sort(),
+    [
+      "npm",
+      "crates-io",
+      "pypi",
+      "go-modules",
+      "nuget",
+      "maven-central",
+      "packagist",
+      "docker-hub",
+      "ghcr",
+    ].sort(),
   );
   assert.equal(inspection.packages.length, 9);
   assert.equal(inspection.repository.github_owner, "acme");

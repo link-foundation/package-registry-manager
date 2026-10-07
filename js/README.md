@@ -22,3 +22,4 @@ version after confirmation; later versions publish through CI. Missing CI
 publishing jobs are offered in a draft pull request, and PyPI builds select an
 interpreter satisfying `requires-python`. See the repository README for the
 registry walkthroughs and safety details.
+See the [bootstrap, wrapper and credential guide](https://github.com/link-foundation/package-registry-manager/blob/main/docs/registry-setup.md) for branch/PR setup, dual npm names, registry policies and integration limits.

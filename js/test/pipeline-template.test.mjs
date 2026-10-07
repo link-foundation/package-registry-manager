@@ -109,11 +109,10 @@ test("plans Docker Hub repository, token, variables, and secret", async () => {
     [
       "check-registry",
       "create-repository",
-      "create-access-token",
       "check-github-cli",
       "set-image-variable",
       "set-username-variable",
-      "set-token-secret",
+      "manage-registry-token",
     ],
   );
   const argv = Object.fromEntries(
@@ -141,10 +140,9 @@ test("plans Docker Hub repository, token, variables, and secret", async () => {
     "--repo",
     "acme/pipeline-app",
   ]);
-  assert.deepEqual(
-    argv["set-token-secret"],
-    ["gh", "secret", "set", "DOCKERHUB_TOKEN", "--repo", "acme/pipeline-app"],
-    "the token is read by gh from the terminal, never passed as an argument",
+  assert.equal(
+    plan.steps.find((step) => step.id === "manage-registry-token").kind,
+    "api",
   );
   assert.equal(
     plan.steps.find((step) => step.id === "create-repository").url,
