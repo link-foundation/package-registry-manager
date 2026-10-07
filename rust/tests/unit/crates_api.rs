@@ -390,6 +390,7 @@ fn plans_the_api_flow_by_default_and_the_checklist_with_manual() {
             "attach-trusted-publisher",
             "configure-trusted-publisher",
             "audit-token-secrets",
+            "confirm-oidc-cleanup",
             "delete-token-secret",
             "crates-sign-out",
             "remove-worktree",

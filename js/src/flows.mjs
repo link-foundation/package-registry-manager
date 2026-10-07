@@ -443,7 +443,6 @@ export function npmFlow(packageInfo, context) {
         "Confirm that npm lists the GitHub Actions trusted publisher.",
         { command: trustList, when: "trust-missing" },
       ),
-      ...tokenSecretSteps(packageInfo, context.slug),
       step(
         "rerun-release",
         "Re-run the failed release jobs",
@@ -466,6 +465,7 @@ export function npmFlow(packageInfo, context) {
     if (context.verifyRelease) {
       steps.push(...verifyReleaseSteps(context, registryStateUrl(packageInfo)));
     }
+    steps.push(...tokenSecretSteps(packageInfo, context.slug));
   }
   steps.push(
     step(

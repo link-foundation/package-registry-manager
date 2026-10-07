@@ -398,7 +398,6 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
             .command("npx", &trust_list)
             .when("trust-missing"),
         );
-        steps.extend(token_secret_steps(package, slug));
         steps.push(rerun_release_step(context));
         if context.verify_release {
             steps.extend(verify_release_steps(
@@ -407,6 +406,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
                 context.state_url(package),
             ));
         }
+        steps.extend(token_secret_steps(package, slug));
     }
     steps.extend([
         step(

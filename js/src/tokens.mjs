@@ -30,6 +30,14 @@ export function tokenSecretSteps(packageInfo, slug) {
       cwd: ".",
     },
     {
+      id: "confirm-oidc-cleanup",
+      title: "Confirm a successful OIDC release before deleting secrets",
+      kind: "manual",
+      description:
+        "Verify that a new release succeeded through OIDC without a stored registry token. Confirm registry acceptance and remove token references from every workflow before deleting unused secrets.",
+      when: "token-secret-present",
+    },
+    {
       id: "delete-token-secret",
       title: "Delete the leftover token secrets",
       kind: "command",

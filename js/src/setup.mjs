@@ -177,6 +177,20 @@ export class SetupSession {
           : runCratesApiStep(this, step);
       default:
         console.log(step.description);
+        if (step.id === "confirm-oidc-cleanup") {
+          if (this.conditions.has("oidc-release-verified")) {
+            return;
+          }
+          const answer = await this.prompt(
+            "Has a new release succeeded through OIDC without a stored registry token? [y/N] ",
+          );
+          if (!/^(?:y|yes)$/i.test(answer)) {
+            throw new Error(
+              "a verified OIDC release is required before deleting token secrets",
+            );
+          }
+          return;
+        }
         if (step.url) {
           console.log(`  ${step.url}`);
         }
@@ -548,6 +562,9 @@ export class SetupSession {
         (step.id !== "confirm-provenance" ||
           isTrustedRelease(document, this.values))
       ) {
+        if (step.id === "confirm-provenance") {
+          this.conditions.add("oidc-release-verified");
+        }
         console.log(`  ${url} is ready`);
         return;
       }

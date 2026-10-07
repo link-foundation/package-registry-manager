@@ -351,6 +351,7 @@ test("plans the API flow by default and the checklist with --manual", () => {
       "attach-trusted-publisher",
       "configure-trusted-publisher",
       "audit-token-secrets",
+      "confirm-oidc-cleanup",
       "delete-token-secret",
       "crates-sign-out",
       "remove-worktree",

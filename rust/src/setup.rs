@@ -243,6 +243,15 @@ impl<'a> Session<'a> {
             StepKind::Api => self.api_step(step).await,
             StepKind::Manual => {
                 println!("{}", step.description);
+                if step.id == "confirm-oidc-cleanup" {
+                    if self.holds("oidc-release-verified") {
+                        return Ok(());
+                    }
+                    if !is_yes(&prompt("Has a new release succeeded through OIDC without a stored registry token? [y/N] ")?) {
+                        bail!("a verified OIDC release is required before deleting token secrets");
+                    }
+                    return Ok(());
+                }
                 if let Some(url) = &step.url {
                     println!("  {url}");
                 }
@@ -609,7 +618,7 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
-    async fn wait(&self, step: &SetupStep) -> Result<()> {
+    async fn wait(&mut self, step: &SetupStep) -> Result<()> {
         let url = self.expand_text(step.url.as_deref().unwrap_or_default());
         let deadline = Instant::now() + self.options.wait_timeout;
         loop {
@@ -617,6 +626,9 @@ impl<'a> Session<'a> {
                 if truthy(&document)
                     && (step.id != "confirm-provenance" || self.is_trusted_release(&document))
                 {
+                    if step.id == "confirm-provenance" {
+                        self.conditions.insert("oidc-release-verified");
+                    }
                     println!("  {url} is ready");
                     return Ok(());
                 }

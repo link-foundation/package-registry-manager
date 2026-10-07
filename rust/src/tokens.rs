@@ -21,7 +21,7 @@ pub const CRATES_TOKENS_URL: &str = "https://crates.io/settings/tokens";
 /// Steps that list the repository's secrets and delete the long-lived
 /// registry tokens trusted publishing makes unnecessary, one confirmation each.
 #[must_use]
-pub fn token_secret_steps(package: &Package, slug: &str) -> [SetupStep; 2] {
+pub fn token_secret_steps(package: &Package, slug: &str) -> [SetupStep; 3] {
     let names = registry_token_secrets(package.registry).join(", ");
     [
         SetupStep::new(
@@ -32,6 +32,13 @@ pub fn token_secret_steps(package: &Package, slug: &str) -> [SetupStep; 2] {
         )
         .command("gh", &["secret", "list", "--repo", slug, "--json", "name"])
         .cwd("."),
+        SetupStep::new(
+            "confirm-oidc-cleanup",
+            "Confirm a successful OIDC release before deleting secrets",
+            StepKind::Manual,
+            "Verify that a new release succeeded through OIDC without a stored registry token. Confirm registry acceptance and remove token references from every workflow before deleting unused secrets.",
+        )
+        .when("token-secret-present"),
         SetupStep::new(
             "delete-token-secret",
             "Delete the leftover token secrets",

@@ -18,7 +18,7 @@ all comments. Deliver all changes in [PR #40](https://github.com/link-foundation
 - [x] Add release changelog fragment (the repository's automatic release trigger).
 - [x] Run focused tests, then all contributing-guide checks and script tests.
 - [x] Fetch current main (already included), review the implementation diff, and commit atomic changes.
-- [ ] Push only issue-39-c0ec0775d7d2; update title/body with all four closing references.
+- [x] Push only issue-39-c0ec0775d7d2; update title/body with all four closing references.
 - [ ] Inspect CI timestamps/SHAs, preserve failed logs, resolve failures, and wait for completion.
 - [ ] Confirm clean worktree and mark PR #40 ready.
 
@@ -32,7 +32,7 @@ all comments. Deliver all changes in [PR #40](https://github.com/link-foundation
 | #36.4 Optional old-name cross-link | Explicit deprecate command; README notice | Document opt-in README/deprecation cross-links and preserve both names by default. |
 | #37.1 Ignore script comments and nonexecuted publish text | Syntax parsers; conservative command-aware matching | Strip shell/Python/YAML and JS/Rust comments with quote awareness; detect command invocation forms and ignore inert documentation/string mentions; test preflight-only scripts. |
 | #37.2 Exclude snapshots and experiments | Directory exclusions; workflow-to-manifest association | Skip docs, experiments, and case-studies paths by default, report verbose skips, require genuine package-specific publishing coverage for automatic setup selection. Test browser-commander layout. |
-| #38 Registry decision table | Token default everywhere; explicit per-registry policy | Use trusted publishing for npm/PyPI/crates/RubyGems/NuGet/JSR; built-in GITHUB_TOKEN for GHCR; scoped expiring tokens for Docker Hub/Central/VS Code/Open VSX/Chrome Web Store. Print policy in plans. |
+| #38 Registry decision table and cleanup | Token default everywhere; explicit per-registry policy | Use trusted publishing for npm/PyPI/crates/RubyGems/NuGet/JSR; built-in GITHUB_TOKEN for GHCR; scoped expiring tokens for Docker Hub/Central/VS Code/Open VSX/Chrome Web Store. Print policy in plans. Require verified OIDC acceptance before deleting unused tokens. |
 | #38.1 Detect required token credentials | Secrets and registry publish/login commands | Detect each registry's publishing jobs and secret names, including docker/login-action and mvn/vsce/ovsx/webstore. |
 | #38.2 Check stored credentials | gh CLI metadata; gh-manager lifecycle operations | Integrate gh-manager secret status/ensure contract; consider absent, expiring, and validator-rejected credentials. |
 | #38.3 Browser token creation | Registry-specific forms/APIs using existing browser automation | Reuse dedicated profile and scoped sign-in import, select minimum publishing scope and expiration, keep token values out of output and command arguments. |
@@ -159,7 +159,7 @@ elsewhere; the evidence and current limits remain in PR 40 for review.
 ## Local validation
 
 All contributing-guide checks pass: Rust formatting and warning-free Clippy,
-400 Rust tests, 232 passing JavaScript tests (one opt-in browser test skipped in
+402 Rust tests, 234 passing JavaScript tests (one opt-in browser test skipped in
 the default suite), 98 release-script tests and 30 root-script tests. Both opt-in
 browser smoke tests also passed with installed Chrome under Xvfb. Required docs,
 file size and latest-upstream dependency checks pass. The JavaScript generated
@@ -175,3 +175,33 @@ scopes are not selected and a missing token list cannot prove revocation.
 Remote main remains `d4540c0e8d0378653478918a917ba46cd1c7c0ff` and is already an
 ancestor of this branch. The changelog fragment triggers the normal release;
 package versions are intentionally left to the release workflow.
+
+## CI investigation during review
+
+The first implementation head `4231058` had a broken-link check failure in run
+`37600537915`. Downloaded log `ci-logs/broken-links-37600537915.log`, lines 523–524,
+shows HTTP 404 for the new guide linked on `main`, where it does not exist until
+merge. Commit `2510552` uses relative guide links; the fresh link run
+`37600634562` passes on that SHA.
+
+A further minimal case exposed an inert `uses: docker/build-push-action` title and
+an unrelated action's `push: true` input being combined into a false publisher.
+`container-action-before.log` preserves the failure. Both ports now require the
+real build action and its own push input in the same executable step. Existing
+Docker Hub/GHCR fixtures and new regressions verify the result.
+
+The same code head also hit Rust 1.99's new `clippy::assert_is_empty` lint in CI.
+Job log `ci-logs/lint-112724223574.log`, lines 693–718, points to the regression
+assertion in `rust/tests/unit/publishers.rs:475`. The local Rust 1.98 Clippy did
+not yet have that lint. The assertion now uses `assert_eq!` so failures show the
+unexpected values; Rust 1.99 Clippy with `-D warnings` and the complete test suite
+pass without suppressing or weakening the lint.
+
+Final cleanup review found that the original npm/crates/PyPI flows could offer
+unused-secret deletion after publisher configuration without successful OIDC
+release evidence. `oidc-cleanup-before.log` reproduces the missing prerequisite.
+Both ports now require an explicit release-verification acknowledgement before
+deletion, including with `--yes`; npm's optional provenance verification runs
+first and supplies that evidence automatically. The regression covers all six
+trusted registries and refusal without deleting secrets. The remaining manual
+verification for other registries is explicit rather than assumed.

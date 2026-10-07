@@ -88,9 +88,10 @@ test("plans a bootstrap for a package missing from npm", async () => {
       "attach-trusted-publisher",
       "configure-trusted-publisher",
       "verify-trusted-publisher",
-      "audit-token-secrets",
-      "delete-token-secret",
       "rerun-release",
+      "audit-token-secrets",
+      "confirm-oidc-cleanup",
+      "delete-token-secret",
       "sign-out",
       "remove-worktree",
     ],
@@ -172,7 +173,7 @@ test("keeps every conditional step when the registry state is unknown", async ()
   const plan = await npmPlan({}, { verifyRelease: true });
   assert.equal(plan.mode, undefined);
   assert.deepEqual(
-    plan.steps.slice(-6, -2).map((step) => step.id),
+    plan.steps.slice(-9, -5).map((step) => step.id),
     [
       "trigger-release",
       "find-release-run",
@@ -323,8 +324,8 @@ async function runWithFakeTools(plan, registry, overrides = {}) {
       noBrowser: true,
       verbose: false,
       pollIntervalMs: 1,
-      // Browser steps wait for Enter; answer at once.
-      prompt: async () => "",
+      // Acknowledge simulated OIDC verification; browser steps wait for Enter.
+      prompt: async (message) => (message.endsWith("[y/N] ") ? "y" : ""),
       fetch: async (url) => {
         const found = registry(url);
         return {

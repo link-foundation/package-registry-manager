@@ -3,9 +3,10 @@
 //! queries on PATH and a mock registry.
 
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -105,7 +106,7 @@ fn setup_command(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("join PATH");
-    Command::new(env!("CARGO_BIN_EXE_package-registry-manager"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_package-registry-manager"))
         .args([
             "--repository",
             repository.to_str().expect("UTF-8 path"),
@@ -126,8 +127,21 @@ fn setup_command(
         .env("FAKE_STATE", state)
         .envs(env.iter().copied())
         .env_remove("NODE_OPTIONS")
-        .output()
-        .expect("run package-registry-manager")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run package-registry-manager");
+    // Finite acknowledgements for simulated browser steps and OIDC verification.
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all("y\n".repeat(16).as_bytes())
+        .expect("write acknowledgements");
+    child
+        .wait_with_output()
+        .expect("wait for package-registry-manager")
 }
 
 fn run_setup(repository: &Path, state: &Path, registry: &MockRegistry) -> Run {

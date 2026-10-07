@@ -92,6 +92,10 @@ delete unused known token names. It retains secrets referenced by any workflow;
 remove those references after migration. Organization credentials can be shared
 by other repositories and need an organization-wide audit before deletion.
 
+Cleanup requires an explicit successful-release confirmation even with `--yes`.
+For npm, `--verify-release` checks registry provenance before cleanup and supplies
+that confirmation automatically. Other registries require maintainer verification.
+
 ## Configure a token verification workflow
 
 Token setup requires `.package-registry-manager.json`:

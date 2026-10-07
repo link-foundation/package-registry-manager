@@ -21,6 +21,7 @@ import {
   cargoHome,
   registryToken,
   tokenState,
+  tokenSecretSteps,
   verifyTokenRevoked,
 } from "../src/tokens.mjs";
 
@@ -47,6 +48,42 @@ const websiteOnly = {
     { detail: "this action can only be performed on the crates.io website" },
   ],
 };
+
+test("requires a verified OIDC release before unused-secret deletion", async () => {
+  for (const registry of [
+    "npm",
+    "pypi",
+    "crates-io",
+    "rubygems",
+    "nuget",
+    "jsr",
+  ]) {
+    const steps = tokenSecretSteps({ registry }, "acme/demo");
+    assert.deepEqual(ids(steps), [
+      "audit-token-secrets",
+      "confirm-oidc-cleanup",
+      "delete-token-secret",
+    ]);
+    assert.equal(steps[1].when, "token-secret-present");
+    await assert.rejects(
+      executePlan(
+        {
+          registry,
+          package: { ...crate, registry },
+          steps: [{ ...steps[1], when: undefined }],
+        },
+        {
+          repository: temporary,
+          execute: true,
+          yes: true,
+          noBrowser: true,
+          prompt: async () => "n",
+        },
+      ),
+      /verified OIDC release is required/,
+    );
+  }
+});
 
 test("splits token secrets into ones still read and leftovers (#16)", () => {
   const output = JSON.stringify([
@@ -122,6 +159,7 @@ test("plans the first-publish token as a confirmed, verified exception", () => {
     "verify-token-revoked",
     "configure-trusted-publisher",
     "audit-token-secrets",
+    "confirm-oidc-cleanup",
     "delete-token-secret",
     "sign-out",
     "remove-worktree",
@@ -143,6 +181,7 @@ test("plans the first-publish token as a confirmed, verified exception", () => {
     "wait-for-registry",
     "configure-trusted-publisher",
     "audit-token-secrets",
+    "confirm-oidc-cleanup",
     "delete-token-secret",
   ]);
 });
