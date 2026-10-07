@@ -183,10 +183,12 @@ fn discovers_executables_and_profile_roots_on_each_platform() {
 #[test]
 fn accepts_every_channel_with_a_control_protocol_and_selects_its_engine() {
     use browser_commander::EngineType;
-    for source in browser_sources()
-        .iter()
-        .filter(|source| source.control_protocol.is_some())
-    {
+    for source in browser_sources().iter().filter(|source| {
+        source
+            .control_protocol
+            .as_deref()
+            .is_some_and(|protocol| ["cdp", "bidi"].contains(&protocol))
+    }) {
         for channel in std::iter::once(&source.id).chain(&source.aliases) {
             assert!(launch_channels().contains(&channel.as_str()), "{channel}");
             let browser = parse_browser_options(&BrowserArgs {
