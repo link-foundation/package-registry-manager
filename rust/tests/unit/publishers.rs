@@ -472,7 +472,8 @@ fn inert_workflow_text_is_not_a_publisher() {
         .workflow
         .is_none());
     let comments = workflow("ci.yml", "run: npm whoami # ${{ secrets.NPM_TOKEN }}");
-    assert!(
-        package_registry_manager::publishers::token_secrets(&comments, Registry::Npm).is_empty()
+    assert_eq!(
+        package_registry_manager::publishers::token_secrets(&comments, Registry::Npm),
+        []
     );
 }

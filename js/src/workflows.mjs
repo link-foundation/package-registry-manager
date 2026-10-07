@@ -3,6 +3,27 @@ import path from "node:path";
 import { parseWorkflow, executableLines } from "./publishers.mjs";
 import { stripComments, commandPosition } from "./source-code.mjs";
 
+function buildPush(lines) {
+  let building = false;
+  const start = lines.findIndex((line) => /^\s*steps\s*:/.test(line));
+  const first = lines
+    .slice(start + 1)
+    .find((line) => /^\s*-\s+[\w-]+\s*:/.test(line));
+  const stepIndent = first?.search(/\S/) ?? -1;
+  for (const line of lines) {
+    if (line.search(/\S/) === stepIndent && /^\s*-\s+[\w-]+\s*:/.test(line)) {
+      building = false;
+    }
+    if (/^\s*-?\s*uses\s*:\s*['"]?docker\/build-push-action@/.test(line)) {
+      building = true;
+    }
+    if (building && /^\s*push\s*:\s*true\b/.test(line)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Reads GitHub Actions workflow files sorted by filename. */
 export async function readWorkflows(root) {
   const directory = path.join(root, ".github/workflows");
@@ -39,9 +60,7 @@ export function publishingWorkflow(workflows, registry) {
             (line) =>
               /\bdocker\s+push\b/.test(line) &&
               commandPosition(line.slice(0, line.indexOf("docker"))),
-          ) ||
-          (/uses:\s*docker\/build-push-action@/.test(text) &&
-            /^\s*push:\s*true\b/m.test(text));
+          ) || buildPush(job.lines);
         if (!pushes) {
           return false;
         }
@@ -49,7 +68,8 @@ export function publishingWorkflow(workflows, registry) {
         return registry === "ghcr"
           ? ghcr
           : /\bDOCKER_?HUB_|\bdocker\.io\/|hub\.docker\.com/i.test(text) ||
-              (/uses:\s*docker\/login-action@/.test(text) && !ghcr);
+              (/^\s*-?\s*uses\s*:\s*['"]?docker\/login-action@/m.test(text) &&
+                !ghcr);
       }),
     ) ?? null
   );

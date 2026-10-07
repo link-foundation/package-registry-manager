@@ -239,3 +239,16 @@ fn multiple_npm_manifests_keep_root_reusable_publishing_workflow() {
         .workflow
         .is_none());
 }
+
+#[test]
+fn inert_build_push_names_and_unrelated_push_inputs_are_not_publishers() {
+    for contents in [
+        "on: push\njobs:\n  preflight:\n    steps:\n      - name: 'uses: docker/build-push-action@v6'\n        run: echo ready\n      - uses: acme/check@v1\n        with:\n          push: true\n          registry: ghcr.io\n",
+        "on: push\njobs:\n  preflight:\n    steps:\n      - uses: docker/build-push-action@v6\n        with:\n          push: false\n          tags: ghcr.io/acme/tool\n      - uses: acme/check@v1\n        with:\n          push: true\n",
+    ] {
+        let workflows = [Workflow { name: "preflight.yml".into(), contents: contents.into() }];
+        for registry in [Registry::DockerHub, Registry::Ghcr] {
+            assert!(publishing_workflow(&workflows, registry).is_none());
+        }
+    }
+}

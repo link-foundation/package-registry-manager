@@ -107,3 +107,14 @@ test("multiple npm manifests retain the root reusable publishing workflow", asyn
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("inert build-push action names and another action's push input are not publishers", () => {
+  for (const contents of [
+    "on: push\njobs:\n  preflight:\n    steps:\n      - name: 'uses: docker/build-push-action@v6'\n        run: echo ready\n      - uses: acme/check@v1\n        with:\n          push: true\n          registry: ghcr.io\n",
+    "on: push\njobs:\n  preflight:\n    steps:\n      - uses: docker/build-push-action@v6\n        with:\n          push: false\n          tags: ghcr.io/acme/tool\n      - uses: acme/check@v1\n        with:\n          push: true\n",
+  ]) {
+    const workflows = [{ name: "preflight.yml", contents }];
+    assert.equal(publishingWorkflow(workflows, "docker-hub"), null);
+    assert.equal(publishingWorkflow(workflows, "ghcr"), null);
+  }
+});

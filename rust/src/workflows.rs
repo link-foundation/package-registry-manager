@@ -25,6 +25,32 @@ fn is_yaml(name: &str) -> bool {
     })
 }
 
+fn build_push(lines: &[String]) -> bool {
+    let step = Regex::new(r"^\s*-\s+[\w-]+\s*:").expect("static pattern");
+    let start = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("steps:"));
+    let step_indent = start
+        .and_then(|index| lines[index + 1..].iter().find(|line| step.is_match(line)))
+        .map(|line| line.len() - line.trim_start().len());
+    let action = Regex::new(r#"^\s*-?\s*uses\s*:\s*['"]?docker/build-push-action@"#)
+        .expect("static pattern");
+    let push = Regex::new(r"^\s*push\s*:\s*true\b").expect("static pattern");
+    let mut building = false;
+    for line in lines {
+        if Some(line.len() - line.trim_start().len()) == step_indent && step.is_match(line) {
+            building = false;
+        }
+        if action.is_match(line) {
+            building = true;
+        }
+        if building && push.is_match(line) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Read `.yml` and `.yaml` workflow files sorted by file name.
 pub fn read_workflows(root: &Path) -> Result<Vec<Workflow>> {
     let Ok(entries) = fs::read_dir(root.join(".github/workflows")) else {
@@ -62,8 +88,7 @@ pub fn publishing_workflow(workflows: &[Workflow], registry: Registry) -> Option
                         .expect("static pattern")
                         .is_match(line)
                         && command_position(line.split("docker").next().unwrap_or_default())
-                }) || matches(r"uses:\s*docker/build-push-action@")
-                    && matches(r"(?m)^\s*push:\s*true\b");
+                }) || build_push(&job.lines);
                 if !pushes {
                     return false;
                 }
@@ -72,7 +97,7 @@ pub fn publishing_workflow(workflows: &[Workflow], registry: Registry) -> Option
                     ghcr
                 } else {
                     matches(r"(?i)\bDOCKER_?HUB_|\bdocker\.io/|hub\.docker\.com")
-                        || matches(r"uses:\s*docker/login-action@") && !ghcr
+                        || matches(r#"(?m)^\s*-?\s*uses\s*:\s*['"]?docker/login-action@"#) && !ghcr
                 }
             })
     })
