@@ -19,8 +19,10 @@ all comments. Deliver all changes in [PR #40](https://github.com/link-foundation
 - [x] Run focused tests, then all contributing-guide checks and script tests.
 - [x] Fetch current main (already included), review the implementation diff, and commit atomic changes.
 - [x] Push only issue-39-c0ec0775d7d2; update title/body with all four closing references.
-- [ ] Inspect CI timestamps/SHAs, preserve failed logs, resolve failures, and wait for completion.
-- [ ] Confirm clean worktree and mark PR #40 ready.
+
+Final CI, clean-worktree validation and readiness are recorded against the final
+head in PR #40. Failed-run logs are preserved under ignored `ci-logs/` and their
+specific findings are documented below and in the PR description.
 
 ## Requirement inventory and solution choices
 
@@ -205,3 +207,12 @@ deletion, including with `--yes`; npm's optional provenance verification runs
 first and supplies that evidence automatically. The regression covers all six
 trusted registries and refusal without deleting secrets. The remaining manual
 verification for other registries is explicit rather than assumed.
+
+Upstream Dependencies run `37602852182` on `5be5fab` failed because
+browser-commander 0.26.2 was published during this work (09:23:42 UTC), after the
+initial dependency refresh. `ci-logs/failed-37602852182.log`, lines 194–201,
+identifies only the JavaScript browser-commander requirement as stale. The npm
+manifest and lockfile now require 0.26.2; all five upstream checks pass again.
+Its [release notes](https://github.com/link-foundation/browser-commander/releases/tag/v0.26.2)
+describe release preflight and fixture changes. JavaScript checks and the real
+Chrome smoke test are repeated with the installed patch release.
