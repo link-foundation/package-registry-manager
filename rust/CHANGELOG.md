@@ -73,6 +73,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.22.6] - 2026-10-07
+
+### Added
+
+- Bootstrap npm packages from pushed branches or pull-request heads with `setup --ref`.
+- Inspect wrapper package publishing coverage and version gaps independently.
+- Print per-registry credential policy and add RubyGems, NuGet and JSR trusted-publisher plans plus token lifecycle adapters for gh-manager's proposed secret API.
+
+### Fixed
+
+- Require successful OIDC release verification before deleting unused registry token secrets, including with `--yes`.
+- Bound publisher matching and browser token identifiers; keep credential approval and status text free of configured secret metadata.
+- Ignore comments, inert workflow text, documentation snapshots and experiment manifests when detecting publishers.
+- Check npm name policy and dry-run tarballs before first-publish approval; stop policy refusals without retry.
+- Guard proposed npm/cargo publish jobs against existing versions and connect published-version outputs; skip existing PyPI versions.
+
+### Changed
+
+- Refresh the required link-foundation dependencies together in Rust and JavaScript.
+- Token setup fails before browser creation when gh-manager secret support is unavailable. Live provider form and pair/OAuth integration limits are documented.
+
 ## [0.22.5] - 2026-10-06
 
 ### Added

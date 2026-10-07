@@ -1,6 +1,6 @@
 [package]
 name = "package-registry-manager"
-version = "0.22.5"
+version = "0.22.6"
 edition = "2021"
 description = "Inspect repositories and guide secure package-registry setup"
 readme = "README.md"
