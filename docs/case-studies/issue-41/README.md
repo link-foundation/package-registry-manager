@@ -61,6 +61,15 @@ tags may require a new release after the reviewed manifest fix is merged.
 The changes were tested with deterministic registry/browser fixtures, without
 changing a live account's publishers or publishing package artifacts.
 
+## CI verification
+
+CI on commit `e8942ad` reproduced two test-only portability failures. The Windows
+JavaScript job compared LF script text with a CRLF Rust checkout (job log lines
+692–706). Its parity test now exercises both checkout line endings and normalizes
+them before comparison. Clippy 1.99 rejected an empty-vector `assert!` (lint job
+log lines 669–681); the test now uses `assert_eq!` to include values on failure.
+The downloaded logs are retained locally in `ci-logs/`.
+
 ## Registry contracts consulted
 
 - [npm trust commands](https://docs.npmjs.com/cli/v11/commands/npm-trust/)

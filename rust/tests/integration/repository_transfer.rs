@@ -18,7 +18,7 @@ async fn crates_probes_latest_provenance_and_configured_publishers_independently
     let package = Package::new(Registry::CratesIo, "tool".into(), None, "Cargo.toml".into());
     let state = client.probe_package(&package).await;
     assert_eq!(state.trusted, Some(false));
-    assert!(state.provenance_repositories.is_empty());
+    assert_eq!(state.provenance_repositories, [] as [String; 0]);
     assert_eq!(
         state.configured_publishers.unwrap()[0].repository,
         "konard/disk-space-saviour"

@@ -324,7 +324,14 @@ test("PyPI settings reader has exact field extraction, shared with Rust", async 
     new URL("../../rust/src/setup/repository_session.rs", import.meta.url),
     "utf8",
   );
-  assert.ok(rust.includes(PYPI_PUBLISHERS_SCRIPT));
+  for (const checkout of [
+    rust.replaceAll("\r\n", "\n"),
+    rust.replaceAll("\r\n", "\n").replaceAll("\n", "\r\n"),
+  ]) {
+    assert.ok(
+      checkout.replaceAll("\r\n", "\n").includes(PYPI_PUBLISHERS_SCRIPT),
+    );
+  }
   assert.doesNotThrow(() => new Function(`return ${PYPI_PUBLISHERS_SCRIPT}`));
 });
 
