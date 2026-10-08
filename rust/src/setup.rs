@@ -37,6 +37,7 @@ use crate::tokens::{
 mod batch;
 mod crates_session;
 mod credential_session;
+mod repository_session;
 pub use batch::{execute_plan, execute_plans, execute_plans_with};
 
 const PREFILLED_FORMS: [&str; 2] = ["configure-trusted-publisher", "create-pending-publisher"];
@@ -105,7 +106,9 @@ impl<'a> Session<'a> {
         if plan.package.exists_on_registry == Some(false) {
             conditions.insert("package-missing");
         }
-        if plan.package.trusted_publishing != Some(true) {
+        if plan.package.trusted_publishing != Some(true)
+            || plan.mode == Some(crate::model::PlanMode::Repair)
+        {
             conditions.insert("trust-missing");
         }
         Self {
@@ -149,6 +152,9 @@ impl<'a> Session<'a> {
                 _ => {
                     println!("==> {}", step.title);
                     self.run_step(step).await?;
+                    if self.values.contains_key("manifest_pr") {
+                        break;
+                    }
                 }
             }
         }
@@ -215,6 +221,18 @@ impl<'a> Session<'a> {
     }
 
     async fn run_step(&mut self, step: &SetupStep) -> Result<()> {
+        if [
+            "check-repository-publisher",
+            "verify-repository-publisher",
+            "remove-old-publisher",
+            "fix-manifest-repository",
+        ]
+        .contains(&step.id.as_str())
+            || (step.id == "rerun-release"
+                && self.plan.mode == Some(crate::model::PlanMode::Repair))
+        {
+            return self.repository_repair_step(step).await;
+        }
         match step.kind {
             StepKind::Check if step.id == "check-name-policy" => {
                 crate::npm_policy::check_name_policy(
@@ -270,7 +288,7 @@ impl<'a> Session<'a> {
             );
         };
         self.toggle("package-missing", !exists);
-        if state.trusted == Some(true) {
+        if state.trusted == Some(true) && self.plan.mode != Some(crate::model::PlanMode::Repair) {
             self.conditions.remove("trust-missing");
         }
         if let Some(version) = state.version {
@@ -309,7 +327,20 @@ impl<'a> Session<'a> {
         match step.id.as_str() {
             "check-sign-in" => self.toggle("signed-out", result.code != 0),
             "check-trust" | "verify-trusted-publisher" => {
-                let trusted = result.code == 0 && lists_trusted_publisher(output);
+                let trusted = result.code == 0
+                    && if self.plan.mode == Some(crate::model::PlanMode::Repair) {
+                        self.plan.oidc_publisher.as_ref().is_some_and(|expected| {
+                            crate::repository_identity::npm_publishers(output)
+                                .iter()
+                                .any(|publisher| {
+                                    crate::repository_identity::publisher_matches(
+                                        publisher, expected,
+                                    )
+                                })
+                        })
+                    } else {
+                        lists_trusted_publisher(output)
+                    };
                 self.toggle("trust-missing", !trusted);
                 if step.id == "verify-trusted-publisher" && !trusted {
                     bail!("npm does not list a trusted publisher for the package");

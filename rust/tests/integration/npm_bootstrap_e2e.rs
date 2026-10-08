@@ -87,7 +87,7 @@ fn step_commands(log: &[Value]) -> Vec<String> {
         .collect()
 }
 
-fn read_log(state: &Path) -> Vec<Value> {
+pub fn read_log(state: &Path) -> Vec<Value> {
     fs::read_to_string(state.join("log.jsonl"))
         .unwrap_or_default()
         .lines()
@@ -95,7 +95,7 @@ fn read_log(state: &Path) -> Vec<Value> {
         .collect()
 }
 
-fn setup_command(
+pub fn setup_command(
     repository: &Path,
     state: &Path,
     registry: &MockRegistry,
@@ -167,7 +167,7 @@ fn run_setup_with(
 }
 
 /// A copy of the fixture repository and fake tools, both in `temporary`.
-fn prepare(temporary: &TempDir) -> Option<(PathBuf, PathBuf)> {
+pub fn prepare(temporary: &TempDir) -> Option<(PathBuf, PathBuf)> {
     let Some(node) = find_node() else {
         eprintln!("skipped: node is not on PATH");
         return None;
@@ -189,6 +189,96 @@ fn published_registry() -> MockRegistry {
         path.starts_with("/npm/pipeline-app/")
             .then(|| r#"{"version":"0.1.0"}"#.to_owned())
     })
+}
+
+#[test]
+fn repository_transfer_verifies_new_publisher_before_revoking_old_trust() {
+    let temporary = TempDir::new().unwrap();
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let registry = MockRegistry::start(|path| {
+        path.starts_with("/npm/")
+            .then(|| r#"{"version":"0.1.0","_npmUser":{"trustedPublisher":{}}}"#.into())
+    });
+    let output = setup_command(
+        &repository,
+        &state,
+        &registry,
+        &["--no-browser"],
+        &[("FAKE_TRANSFER", "1")],
+    );
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let log = read_log(&state);
+    let commands: Vec<_> = log
+        .iter()
+        .map(|entry| {
+            entry["argv"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|arg| arg.as_str().unwrap())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect();
+    let attach = commands
+        .iter()
+        .position(|command| command.contains("trust github"))
+        .unwrap();
+    let revoke = commands
+        .iter()
+        .position(|command| command.contains("trust revoke"))
+        .unwrap();
+    assert!(commands[attach + 1..revoke]
+        .iter()
+        .any(|command| command.contains("trust list")));
+    assert!(commands[revoke].contains("--id old-id"));
+    assert!(commands[revoke + 1..]
+        .iter()
+        .any(|command| command.contains("trust list")));
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|command| command.contains("trust revoke"))
+            .count(),
+        1
+    );
+    assert!(!commands
+        .iter()
+        .any(|command| command.starts_with("npm publish")));
+    assert!(state.join("old-revoked").exists());
+}
+
+#[test]
+fn repository_transfer_failed_attach_preserves_old_publisher() {
+    let temporary = TempDir::new().unwrap();
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let registry = MockRegistry::start(|path| {
+        path.starts_with("/npm/")
+            .then(|| r#"{"version":"0.1.0","_npmUser":{"trustedPublisher":{}}}"#.into())
+    });
+    let output = setup_command(
+        &repository,
+        &state,
+        &registry,
+        &["--no-browser"],
+        &[("FAKE_TRANSFER", "1"), ("FAKE_TRUST_GITHUB", "fail")],
+    );
+    assert!(!output.status.success());
+    assert!(!state.join("old-revoked").exists());
+    assert!(!read_log(&state).iter().any(|entry| entry["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|arg| arg == "revoke")));
 }
 
 #[test]

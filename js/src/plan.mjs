@@ -13,6 +13,7 @@ import { pagesSteps } from "./pages.mjs";
 import { planPrerequisites } from "./prerequisites.mjs";
 import { TRUSTED_REGISTRIES } from "./publishers.mjs";
 import { applyPython } from "./python.mjs";
+import { repairSteps } from "./repository-repair.mjs";
 
 const FLOWS = new Map([
   ["npm", npmFlow],
@@ -193,6 +194,14 @@ function flowPlan(inspection, packageInfo, options) {
     steps = [];
   } else if (mode === "attach") {
     steps = steps.filter((item) => !BOOTSTRAP_CONDITIONS.has(item.when));
+  } else if (mode === "repair") {
+    steps = repairSteps(
+      packageInfo,
+      context,
+      packageInfo.exists_on_registry !== true
+        ? steps
+        : steps.filter((item) => !BOOTSTRAP_CONDITIONS.has(item.when)),
+    );
   }
   if (options.ref) {
     const ref = bootstrapRef(options.ref);
@@ -239,10 +248,17 @@ function flowPlan(inspection, packageInfo, options) {
 
 /**
  * Chooses `bootstrap` for a package missing from its registry, `attach` for
- * one without trusted publishing, and `complete` when nothing is left to do.
+ * one without trusted publishing, `repair` for stale or unverified repository
+ * identities, and `complete` when nothing is left to do.
  * Unknown registry state leaves the mode unset.
  */
 export function planMode(packageInfo) {
+  if (
+    packageInfo.repository_mismatches?.length ||
+    packageInfo.publisher_settings_verified === false
+  ) {
+    return "repair";
+  }
   if (packageInfo.exists_on_registry === false) {
     return "bootstrap";
   }

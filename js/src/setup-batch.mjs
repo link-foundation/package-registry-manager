@@ -108,6 +108,7 @@ export async function executePlans(plans, options, summary = true) {
           registry: plan.registry,
           package: plan.package.name,
           status: plan.steps.length === 0 ? "complete" : "configured",
+          ...session.outcome,
         });
         if (plan.trusted_publisher?.workflow) {
           console.log(`\n${oidcReleaseNote(plan.trusted_publisher.workflow)}`);

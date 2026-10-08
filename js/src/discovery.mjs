@@ -4,6 +4,7 @@ import path from "node:path";
 import { CONTAINER_FILES, containerPackages } from "./containers.mjs";
 import { packageWorkflows, auditWrappers } from "./package-coverage.mjs";
 import { REGISTRIES } from "./model.mjs";
+import { inspectManifestRepositories } from "./repository-identity.mjs";
 import {
   TRUSTED_REGISTRIES,
   detectPublisher,
@@ -214,7 +215,7 @@ export async function inspectRepository(repository, options = {}) {
       left.manifest.localeCompare(right.manifest),
     );
   }
-  return inspection;
+  return inspectManifestRepositories(inspection);
 }
 
 /**

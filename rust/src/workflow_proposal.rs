@@ -287,7 +287,12 @@ pub fn workflow_proposal(
     })
 }
 
-async fn run(repository: &Path, program: &str, args: &[&str], verbose: bool) -> Result<String> {
+pub(crate) async fn run(
+    repository: &Path,
+    program: &str,
+    args: &[&str],
+    verbose: bool,
+) -> Result<String> {
     if verbose {
         eprintln!("+ {program} {}", args.join(" "));
     }

@@ -158,7 +158,13 @@ pub async fn execute_plans_with(
         let deferred = session.cleanup(plans.len() > 1, false).await;
         browser = session.browser.take();
         if result.is_ok() {
-            outcomes.push(if plan.steps.is_empty() {
+            outcomes.push(if session.values.contains_key("manifest_pr") {
+                if session.values["manifest_pr"].is_empty() {
+                    "blocked"
+                } else {
+                    "manifest-pr"
+                }
+            } else if plan.steps.is_empty() {
                 "complete"
             } else {
                 "configured"

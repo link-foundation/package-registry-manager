@@ -33,6 +33,11 @@ import { packageDirectory } from "./plan.mjs";
 import { twoFactorMode } from "./prerequisites.mjs";
 import { getJson, probePackage } from "./registry-state.mjs";
 import { launchBrowser, signInDomains } from "./sign-in-import.mjs";
+import { runRepositoryRepair } from "./repository-repair.mjs";
+import {
+  publisherIdentities,
+  publisherMatches,
+} from "./repository-identity.mjs";
 import { reportTokenSecrets, verifyTokenRevoked } from "./tokens.mjs";
 
 export { defaultBrowserProfile } from "./profile.mjs";
@@ -64,7 +69,7 @@ export class SetupSession {
     if (plan.package.exists_on_registry === false) {
       this.conditions.add("package-missing");
     }
-    if (plan.package.trusted_publishing !== true) {
+    if (plan.package.trusted_publishing !== true || plan.mode === "repair") {
       this.conditions.add("trust-missing");
     }
     this.values = {};
@@ -80,6 +85,9 @@ export class SetupSession {
       } else if (!step.when || this.conditions.has(step.when)) {
         this.log(`==> ${step.title}`);
         await this.runStep(step);
+        if (this.outcome) {
+          break;
+        }
       } else if (this.options.verbose) {
         console.error(`skip ${step.id}: condition ${step.when} does not hold`);
       }
@@ -148,6 +156,17 @@ export class SetupSession {
   }
 
   async runStep(step) {
+    if (
+      [
+        "check-repository-publisher",
+        "verify-repository-publisher",
+        "remove-old-publisher",
+        "fix-manifest-repository",
+      ].includes(step.id) ||
+      (step.id === "rerun-release" && this.plan.mode === "repair")
+    ) {
+      return runRepositoryRepair(this, step);
+    }
     switch (step.kind) {
       case "check":
         if (step.id === "check-name-policy") {
@@ -206,7 +225,7 @@ export class SetupSession {
       );
     }
     toggle(this.conditions, "package-missing", !state.exists);
-    if (state.trusted === true) {
+    if (state.trusted === true && this.plan.mode !== "repair") {
       this.conditions.delete("trust-missing");
     }
     this.values.previous_version = state.version;
@@ -236,7 +255,13 @@ export class SetupSession {
         return;
       case "check-trust":
       case "verify-trusted-publisher": {
-        const trusted = result.code === 0 && listsTrustedPublisher(output);
+        const trusted =
+          result.code === 0 &&
+          (this.plan.mode === "repair"
+            ? publisherIdentities(output).some((publisher) =>
+                publisherMatches(publisher, this.plan.trusted_publisher),
+              )
+            : listsTrustedPublisher(output));
         toggle(this.conditions, "trust-missing", !trusted);
         if (step.id === "verify-trusted-publisher" && !trusted) {
           throw new Error(
@@ -717,6 +742,7 @@ export class SetupSession {
     const { command, cwd } = this.prepare(step);
     const result = await exec(command.program, command.args, {
       cwd,
+      env: process.env,
       capture: true,
       mirror: this.options.verbose,
       stdin: "ignore",

@@ -230,6 +230,19 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
                     .is_none_or(|when| !BOOTSTRAP_CONDITIONS.contains(&when))
             })
             .collect(),
+        Some(PlanMode::Repair) => crate::repository_repair::repair_steps(
+            package,
+            &context,
+            flow(package, &context)
+                .into_iter()
+                .filter(|step| {
+                    step.when.as_deref().is_none_or(|when| {
+                        package.exists_on_registry != Some(true)
+                            || !BOOTSTRAP_CONDITIONS.contains(&when)
+                    })
+                })
+                .collect(),
+        ),
         _ => flow(package, &context),
     };
     if let Some(reference) = &options.bootstrap_ref {
@@ -264,11 +277,18 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
     plan
 }
 
-/// Choose `bootstrap` for a package missing from its registry, `attach` for one
-/// without trusted publishing, and `complete` when nothing is left to do.
+/// Choose the setup mode from registry state and repository identity findings.
+///
+/// Use `bootstrap` for missing packages, `attach` without trusted publishing,
+/// `repair` for stale or unverified identities, and `complete` otherwise.
 /// Unknown registry state leaves the mode unset.
 #[must_use]
-pub const fn plan_mode(package: &Package) -> Option<PlanMode> {
+pub fn plan_mode(package: &Package) -> Option<PlanMode> {
+    if !package.repository_mismatches.is_empty()
+        || matches!(package.publisher_settings_verified, Some(false))
+    {
+        return Some(PlanMode::Repair);
+    }
     match (package.exists_on_registry, package.trusted_publishing) {
         (Some(false), _) => Some(PlanMode::Bootstrap),
         (Some(true), Some(true)) => Some(PlanMode::Complete),

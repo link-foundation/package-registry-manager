@@ -32,6 +32,7 @@ async fn probes_npm_existence_and_trusted_publishing() {
         exists: Some(exists),
         trusted: Some(trusted),
         version: version.map(str::to_owned),
+        ..PackageState::default()
     };
     assert_eq!(probe("missing").await, state(false, false, None));
     assert_eq!(
