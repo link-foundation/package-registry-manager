@@ -48,6 +48,24 @@ const failsAgain = (scenario) => {
   fs.writeFileSync(file, String(count + 1));
   return count < Number(process.env[scenario] || 0);
 };
+// Repository-transfer fixture: the old trust must survive a failed attach,
+// and revocation is refused unless the replacement has first been installed.
+if (process.env.FAKE_TRANSFER && ((tool === "npm" && args[0] === "trust") || (tool === "npx" && args.includes("trust")))) {
+  if (args.includes("github")) {
+    if (process.env.FAKE_TRUST_GITHUB === "fail") process.exit(1);
+    set("trusted", true);
+    console.log("Trust configuration created successfully");
+  }
+  if (args.includes("revoke")) {
+    if (!flag("trusted")) process.exit(1);
+    set("old-revoked", true);
+  }
+  for (const [id, repository, file] of [
+    ...(!flag("old-revoked") ? [["old-id", "old/pipeline-app", "release.yml"]] : []),
+    ...(flag("trusted") ? [["new-id", "acme/pipeline-app", "release.yml"], ["other-id", "acme/pipeline-app", "other.yml"]] : []),
+  ]) console.log(`type: github\nid: ${id}\nrepository: ${repository}\nfile: ${file}\n`);
+  process.exit(0);
+}
 if (tool === "xdg-settings") console.log("firefox.desktop");
 if (tool === "defaults")
   console.log(
@@ -188,16 +206,30 @@ if (tool === "npx" && args.includes("trust")) {
   else console.log("No trust configurations found for package (pipeline-app)");
 }
 if (tool === "git") {
+  if (process.env.FAKE_TRANSFER_METADATA) {
+    if (args[0] === "remote") console.log("https://github.com/acme/pipeline-app.git");
+    if (args[0] === "fetch") fs.writeFileSync(state + "/fetched-ref", args[2]);
+    if (args[0] === "show") {
+      const ref = fs.readFileSync(state + "/fetched-ref", "utf8");
+      const correct = process.env.FAKE_TRANSFER_METADATA === "correct" ||
+        (process.env.FAKE_TRANSFER_METADATA === "fixed-main" && ref === "main");
+      console.log(JSON.stringify({name:"pipeline-app",version:"0.1.0",repository:{url:`git+https://github.com/${correct ? "acme" : "old"}/pipeline-app.git`,directory:"js"}}));
+    }
+  }
   if (args[0] === "worktree" && args[1] === "add") {
-    fs.mkdirSync(args[3], { recursive: true });
+    const checkout = args.includes("-b") ? args[4] : args[3];
+    fs.mkdirSync(checkout, { recursive: true });
     for (const entry of ["package.json", "Cargo.toml", "bin"])
       if (fs.existsSync(entry))
-        fs.cpSync(entry, path.join(args[3], entry), { recursive: true });
+        fs.cpSync(entry, path.join(checkout, entry), { recursive: true });
   }
   if (args[0] === "worktree" && args[1] === "remove")
     fs.rmSync(args[3], { recursive: true, force: true });
 }
 if (tool === "gh") {
+  if (process.env.FAKE_TRANSFER && args.includes(".full_name")) console.log("acme/pipeline-app");
+  if (process.env.FAKE_TRANSFER_METADATA && args.includes(".default_branch")) console.log("main");
+  if (process.env.FAKE_TRANSFER_METADATA && command.startsWith("pr create")) console.log("https://github.com/acme/pipeline-app/pull/100");
   if (/^api (?:-X (?:POST|PUT) )?repos\/[^ ]+\/pages\b/.test(command)) {
     if (command.includes("-X ")) set("pages", true);
     const site = flag("pages") ? "workflow" : process.env.FAKE_PAGES;
@@ -245,6 +277,7 @@ if (tool === "gh") {
         {
           databaseId: id,
           conclusion: failed ? "failure" : "success",
+          ...(process.env.FAKE_TRANSFER_METADATA ? {headSha:"original-sha"} : {}),
           status: "completed",
           url: `https://github.com/acme/pipeline-app/actions/runs/${id}`,
         },

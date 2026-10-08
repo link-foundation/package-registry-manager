@@ -28,7 +28,7 @@
     "provenance": true
   },
   "scripts": {
-    "syntax": "node --check src/cli.mjs && node --check src/direct-execution.mjs && node --check src/index.mjs && node --check src/browser.mjs && node --check src/browser-options.mjs && node --check src/browser-catalogue.mjs && node --check src/automation.mjs && node --check src/webdriver-automation.mjs && node --check src/profile.mjs && node --check src/setup.mjs && node --check src/auth-urls.mjs && node --check src/containers.mjs && node --check src/flows.mjs && node --check src/prerequisites.mjs && node --check src/registry-state.mjs && node --check src/workflows.mjs && node --check src/publishers.mjs && node --check src/skips.mjs && node --check src/tokens.mjs && node --check src/approvals.mjs && node --check src/default-browser.mjs && node --check src/pages.mjs && node --check src/crates-api.mjs && node --check src/sign-in-import.mjs && node --check scripts/publish-to-npm.mjs && node --check scripts/setup-npm.mjs && node --check scripts/sanitize-npm-userconfig.mjs && node --check src/python.mjs && node --check src/setup-batch.mjs && node --check src/workflow-proposal.mjs",
+    "syntax": "node --check src/cli.mjs && node --check src/direct-execution.mjs && node --check src/index.mjs && node --check src/browser.mjs && node --check src/browser-options.mjs && node --check src/browser-catalogue.mjs && node --check src/automation.mjs && node --check src/webdriver-automation.mjs && node --check src/profile.mjs && node --check src/setup.mjs && node --check src/auth-urls.mjs && node --check src/containers.mjs && node --check src/flows.mjs && node --check src/prerequisites.mjs && node --check src/registry-state.mjs && node --check src/workflows.mjs && node --check src/publishers.mjs && node --check src/skips.mjs && node --check src/tokens.mjs && node --check src/approvals.mjs && node --check src/default-browser.mjs && node --check src/pages.mjs && node --check src/crates-api.mjs && node --check src/sign-in-import.mjs && node --check scripts/publish-to-npm.mjs && node --check scripts/setup-npm.mjs && node --check scripts/sanitize-npm-userconfig.mjs && node --check src/python.mjs && node --check src/setup-batch.mjs && node --check src/workflow-proposal.mjs && node --check src/repository-identity.mjs && node --check src/repository-repair.mjs && node --check src/manifest-proposal.mjs",
     "lint": "eslint src test scripts --max-warnings 0",
     "lint:fix": "eslint src test scripts --fix --max-warnings 0",
     "format": "prettier --write .",
@@ -40,7 +40,7 @@
     "audit": "node scripts/npm-audit.mjs"
   },
   "dependencies": {
-    "browser-commander": "^0.26.2",
+    "browser-commander": "^0.26.3",
     "command-stream": "^2.0.0",
     "playwright": "^1.63.0",
     "selenium-webdriver": "^4.50.0"

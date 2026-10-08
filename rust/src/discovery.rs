@@ -185,7 +185,7 @@ pub fn inspect_repository_with(root: &Path, options: InspectOptions) -> Result<I
     } else {
         skipped.clear();
     }
-    Ok(Inspection {
+    let mut inspection = Inspection {
         schema_version: 1,
         repository: RepositoryInfo {
             root: root.to_string_lossy().into_owned(),
@@ -198,7 +198,9 @@ pub fn inspect_repository_with(root: &Path, options: InspectOptions) -> Result<I
         },
         packages,
         skipped,
-    })
+    };
+    crate::repository_identity::inspect_manifest_repositories(&mut inspection);
+    Ok(inspection)
 }
 
 /// Keep a manifest outside test and example directories, or one inside them

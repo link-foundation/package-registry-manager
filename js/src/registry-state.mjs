@@ -1,3 +1,13 @@
+import {
+  compareRepositories,
+  identityCommand,
+  inspectManifestRepositories,
+  provenanceRepositories,
+  publisherIdentities,
+  publisherMatches,
+  resolveRepository,
+} from "./repository-identity.mjs";
+
 /** Identifies the tool to registry APIs, as crates.io asks of clients. */
 export const USER_AGENT =
   "package-registry-manager (+https://github.com/link-foundation/package-registry-manager)";
@@ -63,6 +73,8 @@ export function npmName(name) {
  */
 export async function probeRegistryState(inspection, options = {}) {
   const probed = structuredClone(inspection);
+  await resolveRepository(probed, options);
+  await inspectManifestRepositories(probed);
   await Promise.all(
     probed.packages.map(async (packageInfo) => {
       if (!packageInfo.publishable) {
@@ -74,6 +86,46 @@ export async function probeRegistryState(inspection, options = {}) {
       }
       if (state.trusted !== undefined) {
         packageInfo.trusted_publishing = state.trusted;
+      }
+      const evidence = { ...packageInfo, ...state };
+      if (state.configured_publishers !== undefined) {
+        packageInfo.configured_publishers = state.configured_publishers;
+      }
+      if (state.provenance_repositories?.length) {
+        packageInfo.provenance_repositories = state.provenance_repositories;
+      }
+      if (packageInfo.registry === "npm" && state.exists) {
+        const output = await identityCommand(
+          "npm",
+          ["trust", "list", packageInfo.name, "--browser=false"],
+          { ...options, repository: inspection.repository.root },
+        );
+        if (output !== undefined) {
+          evidence.configured_publishers = publisherIdentities(output);
+          packageInfo.configured_publishers = evidence.configured_publishers;
+        }
+      }
+      compareRepositories(packageInfo, probed.repository, evidence);
+      if (
+        state.trusted &&
+        ["npm", "crates-io", "pypi"].includes(packageInfo.registry)
+      ) {
+        const expected = {
+          organization: probed.repository.github_owner,
+          repository: probed.repository.github_repository,
+          workflow: packageInfo.workflow,
+          environment: packageInfo.environment,
+        };
+        packageInfo.publisher_settings_verified = Boolean(
+          evidence.configured_publishers?.some((publisher) =>
+            publisherMatches(publisher, expected),
+          ),
+        );
+        if (!packageInfo.publisher_settings_verified) {
+          (packageInfo.warnings ??= []).push(
+            "configured trusted publisher could not be verified; setup must check the repository, workflow and environment in registry settings",
+          );
+        }
       }
     }),
   );
@@ -100,21 +152,47 @@ export async function probePackage(packageInfo, options = {}) {
       : { exists: false, trusted: false };
   }
   switch (packageInfo.registry) {
-    case "npm":
+    case "npm": {
+      const attestations = document.dist?.attestations?.url;
+      const provenance = attestations
+        ? await getJson(attestations, options)
+        : undefined;
+      const sources = provenanceRepositories(provenance);
       return {
         exists: true,
         trusted: Boolean(document._npmUser?.trustedPublisher),
         version: document.version,
+        ...(sources.length ? { provenance_repositories: sources } : {}),
       };
-    case "crates-io":
+    }
+    case "crates-io": {
+      const latest =
+        (document.versions ?? []).find(
+          (item) => item.num === document.crate?.max_version,
+        ) ?? document.versions?.[0];
+      const settings = await getJson(
+        `${registryEndpoint("crates-io", env)}/trusted_publishing/github_configs?crate=${encodeURIComponent(packageInfo.name)}`,
+        options,
+      );
       return {
         exists: true,
-        trusted: (document.versions ?? []).some((item) =>
-          Boolean(item.trustpub_data),
+        trusted: Boolean(latest?.trustpub_data),
+        provenance_repositories: publisherIdentities(latest?.trustpub_data).map(
+          (publisher) => publisher.repository,
         ),
+        ...(Array.isArray(settings?.github_configs) && !settings.meta?.next_page
+          ? { configured_publishers: publisherIdentities(settings) }
+          : {}),
       };
-    case "pypi":
-      return { exists: true, trusted: await pypiProvenance(document, options) };
+    }
+    case "pypi": {
+      const provenance = await pypiProvenance(document, options);
+      return {
+        exists: true,
+        trusted: Boolean(provenance),
+        provenance_repositories: provenanceRepositories(provenance),
+      };
+    }
     default:
       return { exists: true };
   }
@@ -128,7 +206,7 @@ async function pypiProvenance(document, options) {
   }
   const base = registryEndpoint("pypi", options.env ?? process.env);
   const url = `${base}/integrity/${encodeURIComponent(document.info.name)}/${encodeURIComponent(version)}/${encodeURIComponent(file)}/provenance`;
-  return Boolean(await getJson(url, options));
+  return getJson(url, options);
 }
 
 /**

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "repository": {
+    "root": "<ROOT>",
+    "github_owner": "link-foundation",
+    "github_repository": "disk-space-saviour",
+    "release_workflow": "release.yml"
+  },
+  "packages": [
+    {
+      "registry": "npm",
+      "name": "disk-space-saviour",
+      "version": "1.0.0",
+      "manifest": "package.json",
+      "publishable": true,
+      "workflow": "release.yml",
+      "exists_on_registry": true,
+      "trusted_publishing": true,
+      "repository_mismatches": [
+        { "source": "manifest", "repository": "konard/disk-space-saviour" },
+        { "source": "provenance", "repository": "konard/disk-space-saviour" },
+        { "source": "trusted publisher", "repository": "konard/disk-space-saviour" }
+      ]
+    }
+  ]
+}

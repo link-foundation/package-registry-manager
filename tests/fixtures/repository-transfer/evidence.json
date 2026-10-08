@@ -1,0 +1,13 @@
+{
+  "manifest": {
+    "name": "disk-space-saviour",
+    "repository": { "type": "git", "url": "git+https://github.com/konard/disk-space-saviour.git", "directory": "js" }
+  },
+  "npm_statement": { "predicate": { "invocation": { "configSource": { "uri": "git+https://github.com/konard/disk-space-saviour.git@refs/heads/main" } } } },
+  "pypi_provenance": { "attestation_bundles": [{ "publisher": { "kind": "GitHub", "repository": "konard/disk-space-saviour", "workflow": "release.yml" } }] },
+  "publishers": [
+    { "id": "old-id", "type": "github", "repository": "konard/disk-space-saviour", "file": "release.yml" },
+    { "id": "new-id", "type": "github", "repository": "link-foundation/disk-space-saviour", "file": "release.yml" },
+    { "id": "other-workflow", "type": "github", "repository": "link-foundation/disk-space-saviour", "file": "other.yml" }
+  ]
+}

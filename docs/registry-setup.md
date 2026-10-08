@@ -3,6 +3,27 @@
 Both CLIs use the same options and registry policy. `setup` prints a reviewable
 plan; `--execute` runs it.
 
+## Repair publishing after a GitHub repository transfer
+
+For npm, crates.io and PyPI, inspection compares the canonical GitHub repository
+with manifest URLs, the latest release's provenance and available publisher
+settings. An older successful trusted publication does not prove that today's
+publisher configuration names the correct repository. Warnings identify each
+stale source, and setup plans a repair when settings are stale or unverified.
+
+Run `setup --registry npm --package PACKAGE --execute` from the transferred
+repository. Setup reads authenticated registry settings, attaches the current
+repository's publisher when needed, and verifies its repository, workflow and
+environment before offering to remove obsolete publishers. If attachment or
+verification fails, the old configuration remains in place.
+
+For stale manifest metadata, setup offers a separate branch and draft pull
+request, retaining fields such as npm's `repository.directory`. Merge that PR
+and run setup again. Release retries wait for corrected remote metadata: a failed
+run whose original SHA has correct metadata can be rerun; otherwise setup starts
+a fresh workflow from the corrected default branch. Tag-only workflows may need
+a new release tag. See the [transfer regression case study](case-studies/issue-41/README.md).
+
 ## Publish a new npm name before merging
 
 Push a branch containing the new manifest and its publishing workflow, then run:

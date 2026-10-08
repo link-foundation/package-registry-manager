@@ -1,15 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  chmod,
-  cp,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
@@ -20,7 +10,11 @@ import { authUrlScanner, nodeOptionsWithShim } from "../src/auth-urls.mjs";
 import { inspectRepository } from "../src/discovery.mjs";
 import { buildPlans } from "../src/plan.mjs";
 import { probePackage, registryEndpoint } from "../src/registry-state.mjs";
-import { executePlan, executePlans } from "../src/setup.mjs";
+import {
+  installFakeTools,
+  readLog,
+  runMockSetup,
+} from "./helpers/fake-tools.mjs";
 import { TWO_FACTOR_HINT } from "../src/approvals.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -277,78 +271,8 @@ test("never reads, writes, or requests an npm token", async () => {
   }
 });
 
-const FAKE_TOOL = path.resolve(
-  here,
-  "../../tests/fixtures/fake-tools/fake-tool.cjs",
-);
-
-async function installFakeTools(directory) {
-  const bin = path.join(directory, "bin");
-  await mkdir(bin, { recursive: true });
-  for (const tool of [
-    "npm",
-    "npx",
-    "git",
-    "gh",
-    "open",
-    "xdg-open",
-    "defaults",
-    "xdg-settings",
-  ]) {
-    const file = path.join(bin, tool);
-    await writeFile(
-      file,
-      `#!${process.execPath}\n${await readFile(FAKE_TOOL, "utf8")}`,
-    );
-    await chmod(file, 0o755);
-  }
-  return bin;
-}
-
-async function runWithFakeTools(plan, registry, overrides = {}) {
-  const lines = [];
-  const originalLog = console.log;
-  const originalPath = process.env.PATH;
-  const state = process.env.FAKE_STATE;
-  // Clear the previous run before starting children. A detached opener may
-  // append after the final snapshot, so preserve that log for the polling tests.
-  await rm(path.join(state, "log.jsonl"), { force: true });
-  process.env.PATH = `${path.join(state, "bin")}${path.delimiter}${originalPath}`;
-  console.log = (...values) => lines.push(values.join(" "));
-  try {
-    const execute = Array.isArray(plan) ? executePlans : executePlan;
-    await execute(plan, {
-      repository,
-      execute: true,
-      yes: true,
-      noBrowser: true,
-      verbose: false,
-      pollIntervalMs: 1,
-      // Acknowledge simulated OIDC verification; browser steps wait for Enter.
-      prompt: async (message) => (message.endsWith("[y/N] ") ? "y" : ""),
-      fetch: async (url) => {
-        const found = registry(url);
-        return {
-          status: found ? 200 : 404,
-          ok: Boolean(found),
-          json: async () => found,
-        };
-      },
-      ...overrides,
-    });
-  } catch (error) {
-    error.lines = lines;
-    throw error;
-  } finally {
-    console.log = originalLog;
-    process.env.PATH = originalPath;
-  }
-  const log = (await readFile(path.join(state, "log.jsonl"), "utf8"))
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  return { lines, log };
-}
+const runWithFakeTools = (plan, registry, overrides) =>
+  runMockSetup(plan, registry, repository, overrides);
 
 test(
   "runs the whole npm bootstrap with web sign-in and resumes safely",
@@ -465,16 +389,6 @@ test(
   },
 );
 
-async function readLog(state) {
-  const file = path.join(state, "log.jsonl");
-  const text = await readFile(file, "utf8").catch(() => "");
-  return text
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-}
-
 test(
   "opens npm web-authentication URLs in the default browser",
   { skip: process.platform === "win32" && "fake tools are POSIX scripts" },
@@ -527,6 +441,79 @@ const signInSteps = (plan) => {
   return plan;
 };
 const missing = { exists_on_registry: false, trusted_publishing: false };
+
+test(
+  "repository transfer verifies the new publisher before removing old trust",
+  POSIX_ONLY,
+  async () => {
+    await freshState();
+    const plan = await npmPlan({
+      exists_on_registry: true,
+      trusted_publishing: true,
+      repository_mismatches: [
+        { source: "trusted publisher", repository: "old/pipeline-app" },
+      ],
+    });
+    const { log } = await withEnv({ FAKE_TRANSFER: "1" }, () =>
+      runWithFakeTools(plan, () => ({
+        version: "0.1.0",
+        _npmUser: { trustedPublisher: {} },
+      })),
+    );
+    const commands = log.map((entry) => entry.argv.join(" "));
+    const attach = commands.findIndex((command) =>
+      command.includes("trust github"),
+    );
+    const revoke = commands.findIndex((command) =>
+      command.includes("trust revoke"),
+    );
+    assert.ok(
+      commands
+        .slice(attach + 1, revoke)
+        .some((command) => command.includes("trust list")),
+    );
+    assert.ok(commands[revoke].includes("--id old-id"));
+    assert.ok(
+      commands
+        .slice(revoke + 1)
+        .some((command) => command.includes("trust list")),
+    );
+    assert.equal(
+      commands.filter((command) => command.includes("trust revoke")).length,
+      1,
+    );
+    assert.ok(commands.every((command) => !command.startsWith("npm publish")));
+  },
+);
+
+test(
+  "repository transfer failed attach keeps the old publisher",
+  POSIX_ONLY,
+  async () => {
+    await freshState();
+    const plan = await npmPlan({
+      exists_on_registry: true,
+      trusted_publishing: true,
+      repository_mismatches: [
+        { source: "trusted publisher", repository: "old/pipeline-app" },
+      ],
+    });
+    await assert.rejects(
+      withEnv({ FAKE_TRANSFER: "1", FAKE_TRUST_GITHUB: "fail" }, () =>
+        runWithFakeTools(plan, () => ({
+          version: "0.1.0",
+          _npmUser: { trustedPublisher: {} },
+        })),
+      ),
+      /old publishers were kept/,
+    );
+    assert.ok(
+      (await readLog(process.env.FAKE_STATE)).every(
+        (entry) => !entry.argv.includes("revoke"),
+      ),
+    );
+  },
+);
 
 test(
   "setup --all signs in once and signs out after the final package (#33)",

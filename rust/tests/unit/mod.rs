@@ -12,6 +12,7 @@ mod prerequisites;
 mod publishers;
 mod python;
 mod registry_manager;
+mod repository_transfer;
 mod skips;
 mod token_flows;
 mod tokens;

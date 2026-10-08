@@ -160,6 +160,21 @@ pub struct Package {
     /// Whether the latest release came through trusted publishing; unset when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trusted_publishing: Option<bool>,
+    /// Stale manifest repository URLs retained for a reviewed repair proposal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manifest_urls: Vec<String>,
+    /// Source repositories in the latest release's provenance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance_repositories: Vec<String>,
+    /// Configured registry publishers; absent when settings could not be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured_publishers: Option<Vec<PublisherIdentity>>,
+    /// Whether authenticated settings list this repository's selected publisher.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher_settings_verified: Option<bool>,
+    /// Repository disagreements, distinguished by their evidence source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repository_mismatches: Vec<RepositoryMismatch>,
 }
 
 impl Package {
@@ -187,6 +202,11 @@ impl Package {
             token_secrets: Vec::new(),
             exists_on_registry: None,
             trusted_publishing: None,
+            manifest_urls: Vec::new(),
+            provenance_repositories: Vec::new(),
+            configured_publishers: None,
+            publisher_settings_verified: None,
+            repository_mismatches: Vec::new(),
         }
     }
 
@@ -328,6 +348,8 @@ impl SetupStep {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PlanMode {
+    /// Repository metadata or publishers need repair after a transfer.
+    Repair,
     /// The package is missing: publish it once, then attach trusted publishing.
     Bootstrap,
     /// The package exists without trusted publishing: attach it.
@@ -339,11 +361,35 @@ pub enum PlanMode {
 impl fmt::Display for PlanMode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::Repair => "repair",
             Self::Bootstrap => "bootstrap",
             Self::Attach => "attach",
             Self::Complete => "complete",
         })
     }
+}
+
+/// Repository identity from a specific manifest, provenance, or publisher.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepositoryMismatch {
+    /// Human-readable evidence source.
+    pub source: String,
+    /// Previous GitHub owner/repository.
+    pub repository: String,
+}
+
+/// Public settings of a registry's GitHub trusted publisher.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublisherIdentity {
+    /// Registry identifier, used only after verifying the replacement.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// GitHub owner/repository.
+    pub repository: String,
+    /// Publishing workflow filename.
+    pub workflow: Option<String>,
+    /// Required GitHub environment, if any.
+    pub environment: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
