@@ -1575,9 +1575,9 @@ checksum = "7e57c38c1e860fd37c604281cdfb1dd2216977fd76a50f85ba2f388ef3219616"
 
 [[package]]
 name = "lino-arguments"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff5f59e97b353db1c5ab4b0d5150744ea3b2fbd716c7bfc052a1f738cc11bfe1"
+checksum = "6b22fa82d46dc8eeddc020105886a81416eda8cb7dd7f66eedad0e869054fd39"
 dependencies = [
  "clap",
  "ctor",

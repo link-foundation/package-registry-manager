@@ -32,7 +32,7 @@ name = "package-registry-manager"
 path = "src/main.rs"
 
 [dependencies]
-lino-arguments = "0.4.0"
+lino-arguments = "0.5.0"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 anyhow = "1.0.104"
 base64 = "0.22.1"
