@@ -21,6 +21,7 @@ import {
   executePlans,
 } from "./setup.mjs";
 import { importSources } from "./sign-in-import.mjs";
+import { accountCommand } from "./organization-setup.mjs";
 
 export { isDirectExecution };
 
@@ -36,6 +37,8 @@ Global options:
   -h, --help                      Print this help
   -V, --version                   Print the version
   --repository <path>             Repository to inspect (default: .)
+  --org <org> | --user <login>      Scan repositories through gh-manager
+  --secret-name <template>         Secret name; supports {REGISTRY}, {REPO}, {ORG}
   --format <text|json>            Output format (default: text)
   --offline                       Do not look up packages on registries
   --verbose                       Print command details and output, and
@@ -109,6 +112,9 @@ export async function main(args = process.argv.slice(2)) {
     options: {
       ref: { type: "string" },
       repository: { type: "string", default: "." },
+      org: { type: "string" },
+      user: { type: "string" },
+      "secret-name": { type: "string" },
       format: { type: "string", default: "text" },
       verbose: { type: "boolean", default: false },
       offline: { type: "boolean", default: false },
@@ -168,6 +174,68 @@ export async function main(args = process.argv.slice(2)) {
   });
 
   const repository = path.resolve(values.repository);
+  const command = positionals[0];
+  if (values.org || values.user) {
+    if (values.org && values.user) {
+      throw new Error("--org and --user are mutually exclusive");
+    }
+    if (values.repository !== "." || values.ref) {
+      throw new Error("account scans cannot use --repository or --ref");
+    }
+    if (!["inspect", "plan", "setup"].includes(command)) {
+      throw new Error(`unknown command '${command}'`);
+    }
+    if (command === "setup" && (!values.all || values.package)) {
+      throw new Error("account setup requires --all without --package");
+    }
+    if (values["dry-run"] && values.execute) {
+      throw new Error("--dry-run and --execute are mutually exclusive");
+    }
+    if (values.yes && !values.execute) {
+      throw new Error("--yes requires --execute");
+    }
+    if (values["no-browser"] && !values.execute) {
+      throw new Error("--no-browser requires --execute");
+    }
+    if (values["open-with"] !== undefined && values["no-browser"]) {
+      throw new Error("--open-with and --no-browser are mutually exclusive");
+    }
+    if (!browserOptions.attach) {
+      browserOptions.import ??= { browser: "auto", profile: null };
+    }
+    return accountCommand(
+      command,
+      {
+        org: values.org,
+        user: values.user,
+        format: values.format,
+        offline: values.offline,
+        verbose: values.verbose,
+        registries: (values.registry ?? []).map(parseRegistry),
+        execute: values.execute,
+        yes: values.yes,
+        noBrowser: values["no-browser"],
+        secretName: values["secret-name"],
+        package: values.package,
+        browser: values.browser,
+        browserOptions,
+        browserProfile: path.resolve(
+          values["browser-profile"] ??
+            defaultBrowserProfile({ channel: browserOptions.channel }),
+        ),
+        openWith: nonEmpty(values["open-with"], "--open-with"),
+        keepSession: values["keep-session"],
+        planOptions: {
+          workflow: values.workflow,
+          publisherEnvironment: values.environment,
+          addPublishJob: values["add-publish-job"],
+          manual: values.manual,
+          verifyRelease: values["verify-release"],
+        },
+      },
+      outputPlans,
+    );
+  }
   const discovered = values.ref
     ? await inspectReference(repository, values.ref, {
         includeSkipped: values.verbose,
@@ -176,7 +244,6 @@ export async function main(args = process.argv.slice(2)) {
   const inspection = values.offline
     ? discovered
     : await probeRegistryState(discovered, { verbose: values.verbose });
-  const command = positionals[0];
   if (command === "inspect") {
     outputInspection(inspection, values.format);
     return;
@@ -260,6 +327,10 @@ export async function main(args = process.argv.slice(2)) {
       noBrowser: values["no-browser"],
       openWith: nonEmpty(values["open-with"], "--open-with"),
       keepSession: values["keep-session"],
+      secretName: values["secret-name"],
+      quietBrowser: selected.some((plan) =>
+        plan.steps.some((step) => step.id === "manage-registry-token"),
+      ),
       browser: values.browser,
       browserOptions,
       browserProfile: path.resolve(

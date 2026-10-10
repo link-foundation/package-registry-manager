@@ -19,4 +19,18 @@ version after confirmation; later versions publish through CI. Missing CI
 publishing jobs are offered in a draft pull request, and PyPI builds select an
 interpreter satisfying `requires-python`. See the [repository README](../README.md)
 for the registry walkthroughs and safety details.
+Account scans and setup are available in both ports:
+
+```sh
+package-registry-manager inspect --org link-foundation
+package-registry-manager plan --user LOGIN --format json
+package-registry-manager setup --org link-foundation --all --execute --browser-import auto
+```
+
+Scans read matched manifests/workflows through gh-manager. Account setup shares
+one browser, groups npm approvals, and uses CI evidence to preserve healthy tokens
+or verify replacements before revocation. `--secret-name '{REGISTRY}_TOKEN_{REPO}'`
+selects custom credential names. Rust requires Node.js and npm for its pinned
+GitHub CLI dependency.
+
 See the [bootstrap, wrapper and credential guide](../docs/registry-setup.md) for branch/PR setup, dual npm names, registry policies and integration limits.

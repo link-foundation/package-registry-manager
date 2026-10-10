@@ -31,6 +31,15 @@ const fn endpoint_default(registry: Registry) -> Option<(&'static str, &'static 
             "PACKAGE_REGISTRY_MANAGER_DOCKER_HUB_API",
             "https://hub.docker.com/v2",
         )),
+        Registry::NuGet => Some((
+            "PACKAGE_REGISTRY_MANAGER_NUGET_API",
+            "https://api.nuget.org/v3-flatcontainer",
+        )),
+        Registry::RubyGems => Some((
+            "PACKAGE_REGISTRY_MANAGER_RUBYGEMS_API",
+            "https://rubygems.org/api/v1",
+        )),
+        Registry::Jsr => Some(("PACKAGE_REGISTRY_MANAGER_JSR_API", "https://jsr.io")),
         _ => None,
     }
 }
@@ -87,6 +96,21 @@ impl Endpoints {
             Registry::Npm => format!("{base}/{}/latest", npm_name(name)),
             Registry::CratesIo => format!("{base}/crates/{}", encode_uri_component(name)),
             Registry::PyPi => format!("{base}/pypi/{}/json", encode_uri_component(name)),
+            Registry::NuGet => format!(
+                "{base}/{}/index.json",
+                encode_uri_component(&name.to_lowercase())
+            ),
+            Registry::RubyGems => format!("{base}/gems/{}.json", encode_uri_component(name)),
+            Registry::Jsr => format!(
+                "{base}/{}/meta.json",
+                name.split('/')
+                    .map(|part| part.strip_prefix('@').map_or_else(
+                        || encode_uri_component(part),
+                        |scope| format!("@{}", encode_uri_component(scope))
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("/")
+            ),
             _ => {
                 let mut parts = name.split('/');
                 let namespace = parts.next().unwrap_or_default();
@@ -408,8 +432,23 @@ impl RegistryClient {
     /// Look up every publishable package concurrently. Unknown state is left
     /// unset so plans keep every conditional step.
     pub async fn probe_registry_state(&self, inspection: &Inspection) -> Inspection {
+        self.probe_registry_state_with(inspection, true).await
+    }
+
+    /// Probe an API-discovered repository whose canonical identity is already known.
+    pub async fn probe_known_repository(&self, inspection: &Inspection) -> Inspection {
+        self.probe_registry_state_with(inspection, false).await
+    }
+
+    async fn probe_registry_state_with(
+        &self,
+        inspection: &Inspection,
+        resolve: bool,
+    ) -> Inspection {
         let mut probed = inspection.clone();
-        resolve_repository(&mut probed, self.verbose).await;
+        if resolve {
+            resolve_repository(&mut probed, self.verbose).await;
+        }
         inspect_manifest_repositories(&mut probed);
         let mut tasks = tokio::task::JoinSet::new();
         for (index, package) in probed.packages.iter().enumerate() {
