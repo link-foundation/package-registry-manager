@@ -681,6 +681,7 @@ export class SetupSession {
    * `--browser-import default|auto` itself, once it knows a sign-in is missing.
    */
   async automatedPage(browser = this.options.browserOptions, quiet = false) {
+    quiet ||= this.options.quietBrowser;
     if (!this.automation) {
       const domains = this.options.domains ?? signInDomains(this.plan.registry);
       this.automation = await connectAutomation({

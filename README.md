@@ -8,6 +8,20 @@ cover the maintained language ecosystems in the hive-mind CI/CD guidance.
 [![Security](https://github.com/link-foundation/package-registry-manager/actions/workflows/security.yml/badge.svg)](https://github.com/link-foundation/package-registry-manager/actions/workflows/security.yml)
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](http://unlicense.org/)
 
+Account scans and setup are available in both ports:
+
+```sh
+package-registry-manager inspect --org link-foundation
+package-registry-manager plan --user LOGIN --format json
+package-registry-manager setup --org link-foundation --all --execute --browser-import auto
+```
+
+Scans read matched manifests/workflows through gh-manager. Account setup shares
+one browser, groups npm approvals, and uses CI evidence to preserve healthy tokens
+or verify replacements before revocation. `--secret-name '{REGISTRY}_TOKEN_{REPO}'`
+selects custom credential names. Rust requires Node.js and npm for its pinned
+GitHub CLI dependency.
+
 See the [bootstrap, wrapper and credential guide](docs/registry-setup.md) for branch/PR setup, dual npm names, registry policies and integration limits.
 
 ## Features
@@ -460,10 +474,11 @@ Registry aliases such as `cargo`, `python`, `go`, `dotnet`, `maven`, and
 `packagist`, `docker-hub`, and `ghcr`.
 
 Registry lookups use `https://registry.npmjs.org`, `https://crates.io/api/v1`,
-`https://pypi.org`, and `https://hub.docker.com/v2`. Point them at a mirror or
+`https://pypi.org`, `https://hub.docker.com/v2`, NuGet, RubyGems and JSR metadata APIs. Point them at a mirror or
 a test server with `PACKAGE_REGISTRY_MANAGER_NPM_REGISTRY`,
 `PACKAGE_REGISTRY_MANAGER_CRATES_IO_API`, `PACKAGE_REGISTRY_MANAGER_PYPI_API`,
-and `PACKAGE_REGISTRY_MANAGER_DOCKER_HUB_API`.
+`PACKAGE_REGISTRY_MANAGER_DOCKER_HUB_API`, `PACKAGE_REGISTRY_MANAGER_NUGET_API`,
+`PACKAGE_REGISTRY_MANAGER_RUBYGEMS_API`, and `PACKAGE_REGISTRY_MANAGER_JSR_API`.
 
 The repository coordinates come from `.git/config`. The trusted-publisher
 workflow is the one whose job actually publishes the package (see

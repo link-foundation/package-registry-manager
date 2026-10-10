@@ -117,16 +117,40 @@ Cleanup requires an explicit successful-release confirmation even with `--yes`.
 For npm, `--verify-release` checks registry provenance before cleanup and supplies
 that confirmation automatically. Other registries require maintainer verification.
 
-## Configure a token verification workflow
+## Scan and set up an organization or user
 
-Token setup requires `.package-registry-manager.json`:
+```sh
+package-registry-manager inspect --org link-foundation
+package-registry-manager inspect --user LOGIN --format json
+package-registry-manager plan --org link-foundation --registry npm
+package-registry-manager setup --org link-foundation --all --execute \
+  --browser automated --browser-import auto
+```
+
+Scans use gh-manager repository/file APIs to fetch manifests, publishing workflows
+and configuration, without cloning every repository. The table reports unpublished
+packages, published packages without trusted publishing, publishers naming another
+repository, and recent default-branch release failures matching registry errors.
+JSON includes the run URL and matching log evidence. Unknown registry answers stay
+unknown; they never authorize publication or token rotation.
+
+Setup selects findings, fetches only the affected repositories into disposable
+worktrees, and shares one browser and domain-scoped sign-in import. npm packages
+run together before other registries, with sign-out deferred until the batch ends.
+Workflow proposals use each repository's own checkout. A repository failure is
+reported in the summary and other selected repositories can continue. Scans
+exclude archived repositories and forks according to gh-manager's defaults.
+
+## Configure CI-driven publishing credentials
+
+Token setup uses gh-manager's library in JavaScript and its pinned CLI in Rust.
+Sign in with `gh auth login` first. Configuration is optional:
 
 ```json
 {
   "tokens": {
     "docker-hub": {
       "secret": "DOCKERHUB_TOKEN",
-      "verification_workflow": "verify-docker-login.yml",
       "expiry_days": 30,
       "level": "org"
     }
@@ -134,50 +158,66 @@ Token setup requires `.package-registry-manager.json`:
 }
 ```
 
-The default secret level is `org` with visibility `selected`, limited to the
-current GitHub repository. Set `level` to `repo` for repository secrets. Expiry
-must be an integer from 1 to 90 days. Existing credentials rotate when missing,
-invalid, within seven days of expiry, or missing verifiable expiry metadata.
+The default scope is organization-level, with selected repository grants and a
+repository-secret fallback when GitHub refuses organization storage. The summary
+shows the actual scope and fallback reason. Existing repository secrets override
+organization secrets, so a broken repository override is replaced too.
 
-The reviewed workflow must define `workflow_dispatch.inputs.prm_nonce`, include
-`${{ inputs.prm_nonce }}` in its `run-name`, and actually validate the credential
-without publishing. See [the Docker login example](../examples/registry-credentials/verify-docker-login.yml).
-Deploy that workflow to the default branch before running setup. A unique nonce
-correlates the dispatched run; only that run's completed success permits old-token
-revocation. An unrelated successful run cannot authorize it.
+Use `--secret-name '{REGISTRY}_TOKEN'` for a shared name, or
+`--secret-name '{REGISTRY}_TOKEN_{REPO}'` for a repository-specific name.
+`{REGISTRY}`, `{REPO}`, `{ORG}` and `{OWNER}` expand to uppercase letters, digits
+and underscores. The CLI override takes precedence over configuration and detected
+workflow secret names. Update workflows to reference the chosen name before setup.
 
-Tokens travel from the dedicated browser to gh-manager through stdin. Mutation
-output and browser protocol tracing are suppressed. Setup does not accept attached
-browser sessions or full-profile imports for this flow. Review scopes and expiry
-in the provider page before creating the token; never paste the value into the CLI.
-Replacement verification precedes old-token revocation. If storage or verification
-fails, both tokens remain active until the replacement is repaired; GitHub cannot
-return the old secret value for automatic rollback.
+The lifecycle is driven by CI evidence, with this tool's registry error patterns:
 
-## Current integration limits
+- **ok:** keep the existing credential, regardless of recorded expiry.
+- **auth-failing:** create a token in the browser, ensure storage, test CI, then
+  revoke the replaced token only after the relevant CI tests succeed.
+- **unknown, secret present:** test first; leave the credential active if CI
+  remains unknown or fails for an unrelated reason.
+- **unknown, secret absent:** create, store and test. An authentication failure
+  permits one new candidate and one more test; further failures stop the cycle.
 
-[gh-manager#6](https://github.com/link-foundation/gh-manager/issues/6) is still open.
-The published implementation does not provide the required secret commands.
-This PR adds a tested adapter contract, not an implementation of those commands
-in another repository. It fails before browser credential creation when that
-contract is unavailable. The proposed transport is:
+Deploy a dispatchable workflow that uses the secret to the default branch.
+gh-manager discovers the workflows and correlates newly dispatched runs before
+classifying the steps that use the secret. It does not treat an unrelated passing
+job as verification. The [Docker login example](../examples/registry-credentials/verify-docker-login.yml)
+can be used as a non-publishing check. Its legacy nonce input is supported through
+optional `verification_workflow` configuration.
 
-```text
-gh-manager secret get-metadata NAME --org OWNER --json
-gh-manager secret ensure NAME --org OWNER --visibility selected --repos OWNER/REPO \
-  --expires-at RFC3339 --token-id REGISTRY_ID --registry REGISTRY
-# Credential value is stdin, never an argument.
-```
+Browser tokens remain in memory: JavaScript passes them through an acquisition
+callback; Rust sends them through stdin. Protocol tracing is suppressed for token
+setup. Token IDs, never values, are retained in the per-user state directory to
+support later revocation; set `token_id` in registry configuration for an older
+credential created outside this tool. GitHub cannot return a previous token value
+or its registry ID. Untracked old registry tokens require manual revocation.
 
-`get-metadata` must return `{present, valid, expires_at, token_id}`; absent credentials
-must return `present: false`. `ensure` must replace credentials whose validator was
-rejected as well as expired credentials. The `token-id` and `registry` metadata
-arguments are the adapter's proposed extension and must be implemented upstream.
+Use a dedicated profile and domain-scoped `--browser-import auto|default|BROWSER`;
+Safari support comes from browser-commander. Review the provider's scope and expiry
+before creating a token. `expiry_days`, when supplied, must be an integer from 1 to
+90; it controls new tokens rather than deciding when existing tokens rotate.
+Failed storage or uncertain verification leaves existing credentials active.
+
+## Dependency and registry lookup limits
+
+The scoped npm release is still unavailable. Both ports pin gh-manager to source
+commit `29808e088ac8fd8374361920bbebab07a4d63ac6`, which implements repository/run
+discovery and generic secret health/ensure/test APIs from gh-manager#13. JavaScript
+installs it as `@link-foundation/gh-manager`; Rust resolves the same immutable source
+archive through `npx`, so Node.js 22.12+ and npm are required for account scans and
+token setup. An ambient `gh-manager` executable is no longer required.
+
+Public existence probes cover npm, crates.io, PyPI, Docker Hub, NuGet, RubyGems
+and JSR. NuGet, RubyGems and JSR public metadata does not establish configured
+trusted-publisher identity; those fields remain unknown until registry settings
+are verified. Other registries currently retain unknown public state and can
+still be selected by registry-matched CI failures or a local setup command.
 
 Provider pages are not uniform APIs. Browser form helpers require human review and
 creation/revocation in the dedicated browser; the generic one-time-value and
 identified-list selectors have deterministic tests, not live account validation.
-Unrecognized values, identifiers, expiry or token lists stop the flow. Fully
+Unrecognized values, identifiers, supplied expiry or token lists stop the flow. Fully
 unattended provider creation and API-backed revocation remain unverified.
 
 Docker personal Read & Write tokens are not limited to one repository. Prefer
@@ -185,7 +225,7 @@ organization access tokens with image-push permission on one repository where th
 account supports them. Central returns a token username/password pair; it must be
 stored as a pair and wired into Maven settings, not treated as an ordinary single
 PAT. Chrome uses an OAuth client plus refresh token, which does not supply a normal
-PAT expiry/identifier. The generic expiring-token path deliberately refuses these
+PAT expiry/identifier. The generic token path refuses these
 incompatible responses rather than claiming a successful lifecycle. Provider-specific
 pair/OAuth adapters are required for those cases.
 

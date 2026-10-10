@@ -23,6 +23,15 @@ const ENDPOINTS = {
     "PACKAGE_REGISTRY_MANAGER_DOCKER_HUB_API",
     "https://hub.docker.com/v2",
   ],
+  nuget: [
+    "PACKAGE_REGISTRY_MANAGER_NUGET_API",
+    "https://api.nuget.org/v3-flatcontainer",
+  ],
+  rubygems: [
+    "PACKAGE_REGISTRY_MANAGER_RUBYGEMS_API",
+    "https://rubygems.org/api/v1",
+  ],
+  jsr: ["PACKAGE_REGISTRY_MANAGER_JSR_API", "https://jsr.io"],
 };
 
 /** Returns the registry API base URL, honoring test overrides. */
@@ -54,6 +63,19 @@ export function registryStateUrl(packageInfo, env = process.env) {
       return `${base}/crates/${encodeURIComponent(name)}`;
     case "pypi":
       return `${base}/pypi/${encodeURIComponent(name)}/json`;
+    case "nuget":
+      return `${base}/${encodeURIComponent(name.toLowerCase())}/index.json`;
+    case "rubygems":
+      return `${base}/gems/${encodeURIComponent(name)}.json`;
+    case "jsr":
+      return `${base}/${name
+        .split("/")
+        .map((part) =>
+          part.startsWith("@")
+            ? `@${encodeURIComponent(part.slice(1))}`
+            : encodeURIComponent(part),
+        )
+        .join("/")}/meta.json`;
     default: {
       const [namespace, repository] = name.split("/");
       return `${base}/namespaces/${encodeURIComponent(namespace)}/repositories/${encodeURIComponent(repository)}`;

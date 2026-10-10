@@ -21,6 +21,7 @@ use package_registry_manager::sign_in_import::import_sources;
 use package_registry_manager::{
     inspect_repository_with, InspectOptions, Inspection, Package, PlanMode, Registry, SetupPlan,
 };
+mod organization_cli;
 
 fn browser_channel_help() -> String {
     format!(
@@ -45,6 +46,18 @@ fn browser_import_help() -> String {
 struct Args {
     #[arg(long, global = true, default_value = ".")]
     repository: PathBuf,
+
+    /// Scan all repositories of this organization through gh-manager.
+    #[arg(long, global = true, conflicts_with_all = ["user", "repository", "bootstrap_ref"])]
+    org: Option<String>,
+
+    /// Scan all repositories of this user through gh-manager.
+    #[arg(long, global = true, conflicts_with_all = ["org", "repository", "bootstrap_ref"])]
+    user: Option<String>,
+
+    /// Registry secret name; supports {REGISTRY}, {REPO}, {ORG}, and {OWNER}.
+    #[arg(long, global = true)]
+    secret_name: Option<String>,
 
     /// Bootstrap a pushed branch or pull-request head before merge.
     #[arg(long = "ref", global = true)]
@@ -244,6 +257,9 @@ enum OutputFormat {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if args.org.is_some() || args.user.is_some() {
+        return organization_cli::run(&args).await;
+    }
     let endpoints = Endpoints::from_env();
     let inspect_options = InspectOptions {
         include_skipped: args.verbose,
@@ -407,6 +423,12 @@ async fn main() -> Result<()> {
                     open_with: open_with.as_deref(),
                     keep_session,
                     verbose: args.verbose,
+                    secret_name: args.secret_name.as_deref(),
+                    account_scan: false,
+                    secret_repositories: None,
+                    quiet_browser: selected_plans
+                        .iter()
+                        .any(|plan| plan.credential_policy.mode == "token"),
                     endpoints: options.endpoints.clone(),
                     poll_interval: Duration::from_secs(5),
                     wait_timeout: Duration::from_secs(20 * 60),

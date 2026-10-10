@@ -84,7 +84,7 @@ export function credentialSteps(registry, secret) {
       id: "manage-registry-token",
       title: `Ensure and rotate ${secret}`,
       kind: "api",
-      description: `${credentialPolicy(registry).description}. Check expiry and validity, create the narrowest publishing credential in the browser, store through gh-manager stdin, verify in a dry-run workflow, then revoke and verify the replaced token. Requires gh-manager secret support and a configured verification workflow.`,
+      description: `${credentialPolicy(registry).description}. Check gh-manager CI health; keep healthy secrets, create missing or auth-failing credentials in the browser, ensure organization access with repository fallback, test through gh-manager, then revoke the replaced token. Retry once only on an authentication failure.`,
       confirm: true,
     },
   ];

@@ -184,7 +184,7 @@ impl Session<'_> {
             Automation::connect(
                 browser,
                 self.options.browser_profile,
-                self.options.verbose,
+                self.options.verbose && !self.options.quiet_browser,
                 &self.domains,
             )
             .await?,
@@ -193,7 +193,13 @@ impl Session<'_> {
     }
 
     pub(super) async fn launch_browser(&self) -> Result<BrowserOptions> {
-        let browser = self.options.browser_options;
+        self.launch_browser_with(self.options.browser_options).await
+    }
+
+    pub(super) async fn launch_browser_with(
+        &self,
+        browser: &BrowserOptions,
+    ) -> Result<BrowserOptions> {
         let Some(choice) = browser
             .import
             .as_ref()

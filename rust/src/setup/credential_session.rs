@@ -1,89 +1,179 @@
-//! gh-manager stdin transport and verified token rotation in the dedicated browser.
+//! Registry browser acquisition with gh-manager CI evidence and org-first secrets.
 use super::{is_yes, prompt, Session};
-use crate::automation::Automation;
-use crate::browser_options::ImportScope;
-use crate::credential_browser::{
-    revoked_script, token_form_script, token_provider, TokenProvider, READ_TOKEN,
+use crate::{
+    browser_options::{ImportScope, ImportSource},
+    ci_credential_cycle::{cycle_credential, secret_name, CiCredentialAdapter},
+    credential_browser::{
+        revoked_script, token_form_script, token_provider, TokenProvider, READ_TOKEN,
+    },
+    credential_cycle::Credential,
+    github::{failure_patterns, GhManager, GithubGateway},
 };
-use crate::credential_cycle::{
-    needs_rotation, rotate_credential, Credential, CredentialAdapter, CredentialMetadata,
-};
-use crate::model::{SetupStep, StepKind};
 use anyhow::{anyhow, bail, Result};
 use chrono::{Duration as Days, Utc};
 use serde_json::{json, Value};
-use std::process::Stdio;
-use std::time::{Duration, Instant};
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
-
-async fn secret_command(
-    args: &[String],
-    input: Option<&str>,
-    cwd: &std::path::Path,
-) -> Result<String> {
-    let mut child = Command::new("gh-manager")
-        .args(args)
-        .current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(if input.is_some() {
-            Stdio::null()
-        } else {
-            Stdio::piped()
-        })
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| {
-            anyhow!("gh-manager with secret get-metadata/ensure support is required (gh-manager#6)")
-        })?;
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Some(value) = input {
-            let _ = stdin.write_all(value.as_bytes()).await;
-        }
-        drop(stdin);
-    }
-    let result = child.wait_with_output().await?;
-    if !result.status.success() {
-        bail!("gh-manager secret operation failed; verify installation, permissions and secret support (gh-manager#6)");
-    }
-    Ok(String::from_utf8(result.stdout)?)
-}
+use std::path::PathBuf;
 
 struct TokenHost<'s, 'a> {
     session: &'s mut Session<'a>,
     settings: Value,
     provider: TokenProvider,
-    scope: Vec<String>,
-    visibility: Vec<String>,
     secret: String,
+    slug: String,
+    owner: String,
+    state: Value,
+    state_file: PathBuf,
+    approved: bool,
+    repository_secret_present: bool,
+    test_targets: Vec<String>,
+}
+
+impl TokenHost<'_, '_> {
+    fn key(&self) -> String {
+        format!("{}:{}", self.slug, self.secret)
+    }
+    fn health_args(&self, operation: &str) -> Vec<String> {
+        let mut args = vec![
+            "secret".into(),
+            operation.into(),
+            self.secret.clone(),
+            "--repo".into(),
+            self.slug.clone(),
+        ];
+        for pattern in failure_patterns(Some(self.session.plan.registry)) {
+            args.extend(["--failure-pattern".into(), pattern]);
+        }
+        if operation == "test" && self.settings["verification_workflow"].is_string() {
+            args.extend([
+                "--input".into(),
+                format!("prm_nonce=prm-{}", Utc::now().timestamp_millis()),
+            ]);
+        }
+        args
+    }
+    fn write_state(&self) -> Result<()> {
+        std::fs::create_dir_all(self.state_file.parent().expect("state directory"))?;
+        std::fs::write(&self.state_file, serde_json::to_vec(&self.state)?)?;
+        Ok(())
+    }
 }
 
 #[allow(clippy::future_not_send)]
-impl CredentialAdapter for TokenHost<'_, '_> {
+impl CiCredentialAdapter for TokenHost<'_, '_> {
+    async fn health(&mut self) -> Result<Value> {
+        GhManager
+            .call(
+                &self.health_args("health"),
+                None,
+                self.session.options.repository,
+            )
+            .await
+    }
+    async fn metadata(&mut self) -> Result<Value> {
+        let mut metadata = GhManager
+            .call(
+                &[
+                    "secret".into(),
+                    "get-metadata".into(),
+                    self.secret.clone(),
+                    "--repo".into(),
+                    self.slug.clone(),
+                ],
+                None,
+                self.session.options.repository,
+            )
+            .await?;
+        self.repository_secret_present = !metadata.is_null();
+        if metadata.is_null() && self.settings["level"] != "repo" {
+            // GitHub health already authenticated; inaccessible organization metadata
+            // is resolved by gh-manager's org-first ensure/fallback, before storage.
+            metadata = GhManager
+                .call(
+                    &[
+                        "secret".into(),
+                        "get-metadata".into(),
+                        self.secret.clone(),
+                        "--org".into(),
+                        self.owner.clone(),
+                    ],
+                    None,
+                    self.session.options.repository,
+                )
+                .await
+                .unwrap_or(Value::Null);
+        }
+        if !metadata.is_null() {
+            let ids = &self.state[self.key()];
+            metadata["token_id"] = self.settings.get("token_id").cloned().unwrap_or_else(|| {
+                ids.as_array()
+                    .and_then(|items| items.last())
+                    .cloned()
+                    .unwrap_or(Value::Null)
+            });
+            metadata["token_ids"] = ids.clone();
+        }
+        Ok(metadata)
+    }
     async fn create(&mut self) -> Result<Credential> {
+        if self.session.options.no_browser
+            || self.session.options.browser_options.attach.is_some()
+            || self.session.options.browser_options.import_scope != ImportScope::Domains
+        {
+            bail!("token setup requires a dedicated profile with domain-scoped sign-in import");
+        }
+        if !self.approved && !self.session.options.yes && !is_yes(&prompt("Create and store a scoped credential, verify it, then revoke the replaced token? [y/N] ")?) { bail!("credential creation declined"); }
+        self.approved = true;
+        let days = if self.settings["expiry_days"].is_null() {
+            30
+        } else {
+            self.settings["expiry_days"]
+                .as_i64()
+                .ok_or_else(|| anyhow!("token expiry_days must be between 1 and 90"))?
+        };
+        if !(1..=90).contains(&days) {
+            bail!("token expiry_days must be between 1 and 90");
+        }
+        if self.session.browser.is_none() {
+            let mut browser = self.session.options.browser_options.clone();
+            if browser.import.is_none() {
+                browser.import = Some(ImportSource {
+                    browser: "auto".into(),
+                    profile: None,
+                });
+            }
+            let original = self.session.launch_browser_with(&browser).await?;
+            self.session.browser = Some(
+                crate::automation::Automation::connect(
+                    &original,
+                    self.session.options.browser_profile,
+                    false,
+                    &self.session.domains,
+                )
+                .await?,
+            );
+        }
         self.session
             .automated()
             .await?
             .goto(self.provider.url)
             .await?;
-        prompt(&format!(
-            "Sign in, then press Enter to fill the narrow publishing scope ({})...",
-            self.provider.scope
-        ))?;
-        let expiry = (Utc::now() + Days::days(self.settings["expiry_days"].as_i64().unwrap_or(30)))
-            .to_rfc3339();
         let name = format!(
-            "prm-{}",
+            "prm-{}-{}",
             self.session
                 .plan
                 .repository
                 .github_repository
                 .as_deref()
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            self.secret
         );
-        let script = token_form_script(&self.provider, &name, &expiry);
+        let script = token_form_script(
+            &self.provider,
+            &name,
+            &(Utc::now() + Days::days(days)).to_rfc3339(),
+        );
         self.session.automated().await?.evaluate(&script).await?;
-        prompt("Review the scope and expiry, create the token in this browser, then press Enter (never paste its value)...")?;
+        prompt(&format!("Review the publishing scope ({}) and expiry, create the token in this browser, then press Enter (never paste its value)...",self.provider.scope))?;
         let value = self.session.automated().await?.evaluate(READ_TOKEN).await?;
         Ok(Credential {
             value: value["value"].as_str().unwrap_or_default().into(),
@@ -91,34 +181,144 @@ impl CredentialAdapter for TokenHost<'_, '_> {
             expires_at: value["expires_at"].as_str().unwrap_or_default().into(),
         })
     }
-    async fn store(&mut self, credential: &Credential) -> Result<()> {
-        let mut args = vec!["secret".into(), "ensure".into(), self.secret.clone()];
-        args.extend(self.scope.clone());
-        args.extend(self.visibility.clone());
-        args.extend([
-            "--expires-at".into(),
-            credential.expires_at.clone(),
-            "--token-id".into(),
-            credential.id.clone(),
-            "--registry".into(),
-            self.session.plan.registry.to_string(),
-        ]);
-        secret_command(
-            &args,
-            Some(&credential.value),
-            self.session.options.repository,
-        )
-        .await?;
-        Ok(())
-    }
-    async fn verify(&mut self) -> Result<()> {
-        self.session
-            .verify_credential_workflow(
-                self.settings["verification_workflow"]
-                    .as_str()
-                    .unwrap_or_default(),
+    async fn ensure(&mut self, credential: &Credential) -> Result<Value> {
+        let mut args = vec![
+            "secret".into(),
+            "ensure".into(),
+            self.secret.clone(),
+            "--broken".into(),
+            "--rotate-before".into(),
+            "0".into(),
+        ];
+        if self.settings["level"] == "repo" {
+            args.extend(["--repo".into(), self.slug.clone()]);
+        } else {
+            args.extend([
+                "--org".into(),
+                self.owner.clone(),
+                "--visibility".into(),
+                "selected".into(),
+                "--repos".into(),
+                self.slug.clone(),
+            ]);
+        }
+        if !credential.expires_at.is_empty() {
+            args.extend(["--expires-at".into(), credential.expires_at.clone()]);
+        }
+        for pattern in failure_patterns(Some(self.session.plan.registry)) {
+            args.extend(["--failure-pattern".into(), pattern]);
+        }
+        let targets = self
+            .session
+            .options
+            .secret_repositories
+            .and_then(|groups| {
+                groups.get(&format!("{}:{}", self.session.plan.registry, self.secret))
+            })
+            .cloned()
+            .unwrap_or_else(|| vec![self.slug.clone()]);
+        if self.settings["level"] != "repo" {
+            let index = args
+                .iter()
+                .position(|arg| arg == "--repos")
+                .expect("organization targets")
+                + 1;
+            args[index] = targets.join(",");
+        }
+        let mut result = GhManager
+            .call(
+                &args,
+                Some(&credential.value),
+                self.session.options.repository,
             )
-            .await
+            .await?;
+        if result["path"] == "organization" {
+            for repo in &targets {
+                let present = if repo == &self.slug {
+                    self.repository_secret_present
+                } else {
+                    !GhManager
+                        .call(
+                            &[
+                                "secret".into(),
+                                "get-metadata".into(),
+                                self.secret.clone(),
+                                "--repo".into(),
+                                repo.clone(),
+                            ],
+                            None,
+                            self.session.options.repository,
+                        )
+                        .await?
+                        .is_null()
+                };
+                if !present {
+                    continue;
+                }
+                let mut repo_args = vec![
+                    "secret".into(),
+                    "ensure".into(),
+                    self.secret.clone(),
+                    "--repo".into(),
+                    repo.clone(),
+                    "--broken".into(),
+                    "--rotate-before".into(),
+                    "0".into(),
+                ];
+                if !credential.expires_at.is_empty() {
+                    repo_args.extend(["--expires-at".into(), credential.expires_at.clone()]);
+                }
+                let replacement = GhManager
+                    .call(
+                        &repo_args,
+                        Some(&credential.value),
+                        self.session.options.repository,
+                    )
+                    .await?;
+                if replacement["valueChanged"] == false {
+                    bail!("gh-manager did not replace the repository credential override");
+                }
+                if repo == &self.slug {
+                    result = replacement;
+                    result["path"] = json!("repository");
+                    result["fallbackReason"] = json!("An existing repository secret overrides the organization secret; replaced the repository credential too.");
+                }
+            }
+        }
+        self.test_targets = if self.settings["level"] == "repo" {
+            vec![self.slug.clone()]
+        } else {
+            targets
+        };
+        if result["valueChanged"] == false {
+            bail!("gh-manager did not store the replacement credential");
+        }
+        let key = self.key();
+        if !self.state[&key].is_array() {
+            self.state[&key] = json!([]);
+        }
+        self.state[&key]
+            .as_array_mut()
+            .expect("state list")
+            .push(json!(credential.id));
+        self.write_state()?;
+        Ok(result)
+    }
+    async fn test(&mut self) -> Result<Value> {
+        let mut status = "ok";
+        for repo in &self.test_targets {
+            let mut args = self.health_args("test");
+            args[4].clone_from(repo);
+            let result = GhManager
+                .call(&args, None, self.session.options.repository)
+                .await?;
+            if result["status"] == "auth-failing" {
+                status = "auth-failing";
+            } else if result["status"] != "ok" && status != "auth-failing" {
+                status = "unknown";
+            }
+        }
+        Ok(json!({"status":status}))
     }
     async fn revoke(&mut self, id: &str) -> Result<()> {
         self.session
@@ -147,7 +347,7 @@ impl Session<'_> {
     pub(super) async fn setup_credential(&mut self) -> Result<()> {
         let provider = token_provider(self.plan.registry)
             .ok_or_else(|| anyhow!("no token provider for {}", self.plan.registry))?;
-        let config = match std::fs::read_to_string(
+        let contents = match std::fs::read_to_string(
             self.options
                 .repository
                 .join(".package-registry-manager.json"),
@@ -156,241 +356,78 @@ impl Session<'_> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => "{}".into(),
             Err(error) => return Err(error.into()),
         };
-        let config: Value = serde_json::from_str(&config)?;
+        let config: Value = serde_json::from_str(&contents)?;
         let settings = config["tokens"][self.plan.registry.to_string()].clone();
-        let workflow = settings["verification_workflow"]
+        if settings["level"]
             .as_str()
-            .unwrap_or_default();
-        if !regex::Regex::new(r"^[\w.-]+\.ya?ml$")
-            .expect("static pattern")
-            .is_match(workflow)
+            .is_some_and(|level| !["repo", "org"].contains(&level))
         {
-            bail!("configure tokens.<registry>.verification_workflow for a reviewed dry-run login workflow before creating credentials");
-        }
-        let contents = std::fs::read_to_string(
-            self.options
-                .repository
-                .join(".github/workflows")
-                .join(workflow),
-        )?;
-        if !contents.contains("workflow_dispatch")
-            || !contents.contains("inputs.prm_nonce")
-            || !contents.contains("run-name:")
-        {
-            bail!("verification workflow requires workflow_dispatch input prm_nonce and run-name containing inputs.prm_nonce");
-        }
-        if self.options.no_browser
-            || self.options.browser_options.attach.is_some()
-            || self.options.browser_options.import_scope != ImportScope::Domains
-        {
-            bail!("token setup requires a dedicated profile with domain-scoped sign-in import");
-        }
-        let days = if settings["expiry_days"].is_null() {
-            30
-        } else {
-            settings["expiry_days"]
-                .as_i64()
-                .ok_or_else(|| anyhow!("token expiry_days must be between 1 and 90"))?
-        };
-        if !(1..=90).contains(&days) {
-            bail!("token expiry_days must be between 1 and 90");
+            bail!("token secret level must be repo or org");
         }
         let owner = self
             .plan
             .repository
             .github_owner
-            .as_deref()
+            .clone()
             .ok_or_else(|| anyhow!("token setup requires GitHub repository coordinates"))?;
         let repo = self
             .plan
             .repository
             .github_repository
-            .as_deref()
+            .as_ref()
             .ok_or_else(|| anyhow!("token setup requires GitHub repository coordinates"))?;
         let slug = format!("{owner}/{repo}");
-        let secret = settings["secret"]
-            .as_str()
+        let template = self
+            .options
+            .secret_name
+            .or_else(|| settings["secret"].as_str())
             .or_else(|| self.plan.package.token_secrets.first().map(String::as_str))
-            .unwrap_or(provider.secret)
-            .to_owned();
-        if !regex::Regex::new(r"^[A-Z][A-Z0-9_]*$")
-            .expect("static pattern")
-            .is_match(&secret)
-        {
-            bail!("invalid registry secret name");
-        }
-        let (scope, visibility) = match settings["level"].as_str() {
-            Some("repo") => (vec!["--repo".into(), slug.clone()], Vec::new()),
-            None | Some("org") => (
-                vec!["--org".into(), owner.to_owned()],
-                vec![
-                    "--visibility".into(),
-                    "selected".into(),
-                    "--repos".into(),
-                    slug.clone(),
-                ],
-            ),
-            _ => bail!("token secret level must be repo or org"),
+            .unwrap_or(provider.secret);
+        let secret = secret_name(template, self.plan.registry, &slug)?;
+        let state_file = self
+            .options
+            .browser_profile
+            .parent()
+            .ok_or_else(|| anyhow!("browser profile has no state directory"))?
+            .join("credential-ids.json");
+        let state = match std::fs::read_to_string(&state_file) {
+            Ok(value) => serde_json::from_str(&value)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+            Err(error) => return Err(error.into()),
         };
-        let mut args = vec!["secret".into(), "get-metadata".into(), secret.clone()];
-        args.extend(scope.clone());
-        args.push("--json".into());
-        let previous: CredentialMetadata =
-            serde_json::from_str(&secret_command(&args, None, self.options.repository).await?)?;
-        if !needs_rotation(&previous, Utc::now())
-            && self.verify_credential_workflow(workflow).await.is_ok()
-        {
-            return Ok(());
-        }
-        if !self.options.yes
-            && !is_yes(&prompt("Create and store a scoped credential, verify it, then revoke the replaced token? [y/N] ")?)
-        {
-            bail!("credential creation declined");
-        }
-        // Raw browser protocol tracing is disabled while values are read.
-        if let Some(browser) = self.browser.take() {
-            browser.close().await;
-        }
-        let browser_options = self.launch_browser().await?;
-        self.browser = Some(
-            Automation::connect(
-                &browser_options,
-                self.options.browser_profile,
-                false,
-                &self.domains,
-            )
-            .await?,
-        );
         let mut host = TokenHost {
+            test_targets: vec![slug.clone()],
             session: self,
             settings,
             provider,
-            scope,
-            visibility,
             secret: secret.clone(),
+            slug,
+            owner,
+            state,
+            state_file,
+            approved: false,
+            repository_secret_present: false,
         };
-        rotate_credential(&previous, &mut host).await?;
-        println!("  Credential verified; replaced token revocation verified.");
+        let result = cycle_credential(&mut host).await?;
+        if result["changed"] == true {
+            let key = host.key();
+            host.state[key] = json!([result["token_id"]]);
+            host.write_state()?;
+        }
+        if let Some(scope) = result["path"].as_str() {
+            host.session
+                .values
+                .insert("secret_scope".into(), scope.into());
+        }
+        if let Some(reason) = result["fallbackReason"].as_str() {
+            host.session
+                .values
+                .insert("fallback_reason".into(), reason.into());
+        }
+        println!(
+            "  Credential CI status: {}",
+            result["status"].as_str().unwrap_or("unknown")
+        );
         Ok(())
-    }
-
-    async fn credential_capture(&self, args: &[&str]) -> Result<String> {
-        let step = SetupStep::new(
-            "verify-registry-login",
-            "Verify registry login",
-            StepKind::Check,
-            "Dispatch and correlate a dry-run login workflow.",
-        )
-        .command("gh", args)
-        .cwd(".");
-        let result = self.capture(&step).await?;
-        if result.code != 0 {
-            bail!("credential verification command failed; old token remains active");
-        }
-        Ok(result.stdout)
-    }
-
-    async fn verify_credential_workflow(&self, workflow: &str) -> Result<()> {
-        let slug = format!(
-            "{}/{}",
-            self.plan
-                .repository
-                .github_owner
-                .as_deref()
-                .unwrap_or_default(),
-            self.plan
-                .repository
-                .github_repository
-                .as_deref()
-                .unwrap_or_default()
-        );
-        let repo: Value = serde_json::from_str(
-            &self
-                .credential_capture(&["repo", "view", &slug, "--json", "defaultBranchRef"])
-                .await?,
-        )?;
-        let branch = repo["defaultBranchRef"]["name"]
-            .as_str()
-            .ok_or_else(|| anyhow!("cannot determine verification workflow branch"))?;
-        let nonce = format!(
-            "prm-{}-{}",
-            std::process::id(),
-            Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        );
-        self.credential_capture(&[
-            "workflow",
-            "run",
-            workflow,
-            "--repo",
-            &slug,
-            "--ref",
-            branch,
-            "-f",
-            &format!("prm_nonce={nonce}"),
-        ])
-        .await?;
-        let deadline = Instant::now() + self.options.wait_timeout;
-        let mut id = None;
-        while Instant::now() < deadline {
-            if id.is_none() {
-                let runs: Value = serde_json::from_str(
-                    &self
-                        .credential_capture(&[
-                            "run",
-                            "list",
-                            "--repo",
-                            &slug,
-                            "--workflow",
-                            workflow,
-                            "--event",
-                            "workflow_dispatch",
-                            "--limit",
-                            "50",
-                            "--json",
-                            "databaseId,displayTitle",
-                        ])
-                        .await?,
-                )?;
-                let matching: Vec<_> = runs
-                    .as_array()
-                    .ok_or_else(|| anyhow!("invalid workflow run list"))?
-                    .iter()
-                    .filter(|run| {
-                        run["displayTitle"]
-                            .as_str()
-                            .is_some_and(|title| title.contains(&nonce))
-                    })
-                    .collect();
-                if matching.len() > 1 {
-                    bail!("ambiguous credential verification runs; old token remains active");
-                }
-                id = matching.first().and_then(|run| run["databaseId"].as_u64());
-            }
-            if let Some(id) = id {
-                let run: Value = serde_json::from_str(
-                    &self
-                        .credential_capture(&[
-                            "run",
-                            "view",
-                            &id.to_string(),
-                            "--repo",
-                            &slug,
-                            "--json",
-                            "status,conclusion",
-                        ])
-                        .await?,
-                )?;
-                if run["status"] == "completed" {
-                    if run["conclusion"] != "success" {
-                        bail!(
-                            "registry rejected credential verification; old token remains active"
-                        );
-                    }
-                    return Ok(());
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-        bail!("credential verification timed out; old token remains active")
     }
 }
