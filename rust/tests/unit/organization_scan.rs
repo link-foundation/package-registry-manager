@@ -46,7 +46,10 @@ fn unknown_state_is_not_unpublished_and_path_traversal_is_rejected() {
         &json!([{ "path":"package.json", "content":"{\"name\":\"demo\"}" }]),
     )
     .unwrap();
-    assert!(findings(&inspect_repository(directory.path()).unwrap()).is_empty());
+    assert_eq!(
+        findings(&inspect_repository(directory.path()).unwrap()),
+        Vec::<serde_json::Value>::new()
+    );
     assert!(snapshot(
         directory.path(),
         "user/project",

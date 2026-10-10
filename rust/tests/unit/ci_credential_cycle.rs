@@ -62,7 +62,7 @@ impl CiCredentialAdapter for Host {
 async fn healthy_ci_is_noop_and_fallback_survives_verification() {
     let mut host = Host::new("ok", vec![]);
     assert_eq!(cycle_credential(&mut host).await.unwrap()["changed"], false);
-    assert!(host.calls.is_empty());
+    assert_eq!(host.calls, Vec::<String>::new());
     host.status = "auth-failing";
     host.tests = vec!["ok"];
     let result = cycle_credential(&mut host).await.unwrap();
