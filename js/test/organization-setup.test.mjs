@@ -55,6 +55,7 @@ test("account setup selects findings, groups npm, and executes once with per-rep
           ["npm", "crates-io"],
         );
         assert.equal(options.accountScan, true);
+        assert.equal(options.browser, "automated");
         roots = plans.map((plan) => plan.repository.root);
         assert.equal(new Set(roots).size, 2);
         for (const root of roots) {

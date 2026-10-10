@@ -184,6 +184,7 @@ export async function accountCommand(command, options, outputPlans) {
         ...options,
         github,
         accountScan: true,
+        browser: options.openWith ? options.browser : "automated",
         quietBrowser: true,
         secretRepositories,
         repository: items[0]?.inspection.repository.root,

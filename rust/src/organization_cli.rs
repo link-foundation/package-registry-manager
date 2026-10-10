@@ -9,7 +9,7 @@ use package_registry_manager::{
     plan::{build_plans_with, PlanOptions},
     prerequisites::probe_environment,
     registry_state::{Endpoints, RegistryClient},
-    setup::{execute_plans_with, ExecuteOptions},
+    setup::{execute_plans_with, BrowserMode, ExecuteOptions},
     Registry,
 };
 use std::{
@@ -304,7 +304,11 @@ pub async fn run(args: &Args) -> Result<()> {
             &plans,
             &ExecuteOptions {
                 repository: scan.workspace.path(),
-                browser: *browser,
+                browser: if open_with.is_some() {
+                    *browser
+                } else {
+                    BrowserMode::Automated
+                },
                 browser_profile: &profile,
                 browser_options: &browser_options,
                 execute: *execute,

@@ -135,7 +135,8 @@ JSON includes the run URL and matching log evidence. Unknown registry answers st
 unknown; they never authorize publication or token rotation.
 
 Setup selects findings, fetches only the affected repositories into disposable
-worktrees, and shares one browser and domain-scoped sign-in import. npm packages
+worktrees, and shares one automated browser and domain-scoped sign-in import.
+An explicit `--open-with` uses the selected external application instead. npm packages
 run together before other registries, with sign-out deferred until the batch ends.
 Workflow proposals use each repository's own checkout. A repository failure is
 reported in the summary and other selected repositories can continue. Scans
