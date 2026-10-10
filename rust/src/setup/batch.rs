@@ -67,7 +67,7 @@ pub async fn execute_plans_with(
     let mut blocked = None;
     for plan in plans {
         if let Err(error) = validate_plan(plan, options.execute) {
-            if !options.account_scan {
+            if !options.repository_batch {
                 return Err(error);
             }
             eprintln!(
@@ -139,7 +139,7 @@ pub async fn execute_plans_with(
         })
         .collect();
     if !missing.is_empty() {
-        if options.account_scan {
+        if options.repository_batch {
             let roots: std::collections::BTreeSet<_> =
                 missing.iter().map(|plan| &plan.repository.root).collect();
             for root in roots {
@@ -299,7 +299,7 @@ pub async fn execute_plans_with(
             }
         }
         sessions.push((session, deferred));
-        if failure.is_some() && !options.account_scan {
+        if failure.is_some() && !options.repository_batch {
             break;
         }
     }
@@ -326,7 +326,7 @@ pub async fn execute_plans_with(
         for (index, plan) in plans.iter().enumerate() {
             println!(
                 "- {}{}: {}: {}",
-                if options.account_scan {
+                if options.repository_batch {
                     format!(
                         "{}/{}: ",
                         plan.repository.github_owner.as_deref().unwrap_or_default(),

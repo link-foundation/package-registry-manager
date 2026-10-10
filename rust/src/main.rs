@@ -424,7 +424,7 @@ async fn main() -> Result<()> {
                     keep_session,
                     verbose: args.verbose,
                     secret_name: args.secret_name.as_deref(),
-                    account_scan: false,
+                    repository_batch: false,
                     secret_repositories: None,
                     quiet_browser: selected_plans
                         .iter()

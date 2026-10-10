@@ -143,8 +143,9 @@ pub struct ScannedRepository {
 pub struct ScanReport {
     /// JSON contract version.
     pub schema_version: u32,
-    /// Organization or user login.
-    pub account: String,
+    /// Public GitHub organization or user login.
+    #[serde(rename = "account")]
+    pub github_owner: String,
     /// Discovered repositories, including scan errors.
     pub repositories: Vec<ScannedRepository>,
     /// Findings with registry identity or CI evidence.
@@ -152,7 +153,7 @@ pub struct ScanReport {
 }
 
 /// Retains temporary manifests until planning/setup ends; drops them on every exit.
-pub struct AccountScan {
+pub struct RepositoryScan {
     /// Structured scan result.
     pub report: ScanReport,
     /// Owns the snapshot directories for the duration of setup.
@@ -161,21 +162,21 @@ pub struct AccountScan {
 
 /// Scan through the supplied GitHub gateway, then query registries independently.
 #[allow(clippy::future_not_send)] // Injectable GitHub gateways need not implement Send.
-pub async fn scan_account(
+pub async fn scan_repositories(
     github: &impl GithubGateway,
     org: Option<&str>,
     user: Option<&str>,
     offline: bool,
     client: &RegistryClient,
     verbose: bool,
-) -> Result<AccountScan> {
+) -> Result<RepositoryScan> {
     if org.is_some() == user.is_some() {
         bail!("choose exactly one --org or --user");
     }
-    let account = org.or(user).expect("one account");
+    let owner = org.or(user).expect("one GitHub owner");
     if !regex::Regex::new(r"^[\w.-]+$")
         .expect("static pattern")
-        .is_match(account)
+        .is_match(owner)
     {
         bail!("invalid account name");
     }
@@ -183,7 +184,7 @@ pub async fn scan_account(
     let scope = if org.is_some() { "--org" } else { "--user" };
     let repos = github
         .call(
-            &["repo".into(), "list".into(), scope.into(), account.into()],
+            &["repo".into(), "list".into(), scope.into(), owner.into()],
             None,
             workspace.path(),
         )
@@ -193,7 +194,7 @@ pub async fn scan_account(
         .ok_or_else(|| anyhow!("gh-manager returned an invalid repository list"))?;
     let mut report = ScanReport {
         schema_version: 1,
-        account: account.into(),
+        github_owner: owner.into(),
         repositories: Vec::new(),
         findings: Vec::new(),
     };
@@ -296,7 +297,7 @@ pub async fn scan_account(
             }
         }
     }
-    Ok(AccountScan { report, workspace })
+    Ok(RepositoryScan { report, workspace })
 }
 
 impl ScanReport {

@@ -4,7 +4,7 @@ use super::{
 };
 use anyhow::{bail, Context, Result};
 use package_registry_manager::github::GhManager;
-use package_registry_manager::organization_scan::{scan_account, ScannedRepository};
+use package_registry_manager::organization_scan::{scan_repositories, ScannedRepository};
 use package_registry_manager::{
     plan::{build_plans_with, PlanOptions},
     prerequisites::probe_environment,
@@ -99,7 +99,7 @@ async fn prepare(repo: &ScannedRepository) -> Result<()> {
 pub async fn run(args: &Args) -> Result<()> {
     let endpoints = Endpoints::from_env();
     let client = RegistryClient::new(endpoints.clone(), args.verbose);
-    let mut scan = scan_account(
+    let mut scan = scan_repositories(
         &GhManager,
         args.org.as_deref(),
         args.user.as_deref(),
@@ -319,7 +319,7 @@ pub async fn run(args: &Args) -> Result<()> {
                 verbose: args.verbose,
                 secret_name: args.secret_name.as_deref(),
                 quiet_browser: true,
-                account_scan: true,
+                repository_batch: true,
                 secret_repositories: Some(&secret_repositories(
                     &plans,
                     args.secret_name.as_deref(),

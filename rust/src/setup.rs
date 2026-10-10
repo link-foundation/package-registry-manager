@@ -80,7 +80,7 @@ pub struct ExecuteOptions<'a> {
     /// Disable browser protocol tracing while credentials may be in memory.
     pub quiet_browser: bool,
     /// Continue account setup after an individual repository fails.
-    pub account_scan: bool,
+    pub repository_batch: bool,
     /// Selected repositories sharing each registry/secret name during account setup.
     pub secret_repositories: Option<&'a BTreeMap<String, Vec<String>>>,
     /// Registry API base URLs for lookups and polling.

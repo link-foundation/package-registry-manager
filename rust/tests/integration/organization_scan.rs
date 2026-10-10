@@ -1,7 +1,7 @@
 use anyhow::Result;
 use package_registry_manager::{
     github::GithubGateway,
-    organization_scan::scan_account,
+    organization_scan::scan_repositories,
     registry_state::{Endpoints, RegistryClient},
 };
 use serde_json::{json, Value};
@@ -98,7 +98,7 @@ impl GithubGateway for FakeGithub {
 }
 
 #[tokio::test]
-async fn account_scan_reads_matched_files_and_reports_all_four_findings() {
+async fn repository_batch_reads_matched_files_and_reports_all_four_findings() {
     let registry = super::mock_registry::MockRegistry::start(|path| {
         if path == "/crates/missing" {
             return None;
@@ -124,10 +124,14 @@ async fn account_scan_reads_matched_files_and_reports_all_four_findings() {
         Endpoints::default().with("PACKAGE_REGISTRY_MANAGER_CRATES_IO_API", &registry.base),
         false,
     );
-    let scan = scan_account(&FakeGithub, Some("team"), None, false, &client, false)
+    let scan = scan_repositories(&FakeGithub, Some("team"), None, false, &client, false)
         .await
         .unwrap();
     assert_eq!(scan.report.repositories.len(), 4);
+    assert_eq!(
+        serde_json::to_value(&scan.report).unwrap()["account"],
+        "team"
+    );
     for repo in &scan.report.repositories {
         let inspection = repo.inspection.as_ref().unwrap();
         assert_eq!(inspection.packages.len(), 1);
