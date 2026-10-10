@@ -37,8 +37,27 @@ export async function executePlans(plans, options, summary = true) {
   if (plans.length === 0) {
     throw new Error("no publishable package manifests were found");
   }
+  const ready = [];
+  let blocked;
   for (const plan of plans) {
-    validatePlan(plan, options.execute);
+    try {
+      validatePlan(plan, options.execute);
+      ready.push(plan);
+    } catch (error) {
+      if (!options.accountScan) {
+        throw error;
+      }
+      blocked ??= error;
+      console.error(
+        `${plan.repository.github_owner}/${plan.repository.github_repository}: ${plan.registry}: ${plan.package.name}: blocked: ${error.message}`,
+      );
+    }
+  }
+  if (blocked) {
+    if (ready.length) {
+      await executePlans(ready, options, summary);
+    }
+    throw blocked;
   }
   for (const plan of plans) {
     if (plan.mode === "complete") {
@@ -68,6 +87,32 @@ export async function executePlans(plans, options, summary = true) {
     plan.steps.some((step) => step.id === "add-publishing-workflow"),
   );
   if (missing.length) {
+    if (options.accountScan) {
+      const outcomes = [];
+      for (const root of new Set(missing.map((plan) => plan.repository.root))) {
+        const group = missing.filter((plan) => plan.repository.root === root);
+        const result = await (options.offerWorkflow ?? offerWorkflow)(group, {
+          ...options,
+          repository: root,
+          inspection: undefined,
+          prompt: options.prompt ?? prompt,
+        });
+        outcomes.push(
+          ...group.map((plan) => ({
+            registry: plan.registry,
+            package: plan.package.name,
+            repository: `${plan.repository.github_owner}/${plan.repository.github_repository}`,
+            ...result,
+          })),
+        );
+      }
+      const ready = plans.filter((plan) => !missing.includes(plan));
+      if (ready.length) {
+        outcomes.push(...(await executePlans(ready, options, false)));
+      }
+      printSummary(outcomes, summary);
+      return outcomes;
+    }
     const result = await offerWorkflow(missing, {
       ...options,
       prompt: options.prompt ?? prompt,
@@ -99,6 +144,9 @@ export async function executePlans(plans, options, summary = true) {
     for (const plan of plans) {
       const session = new SetupSession(plan, {
         ...options,
+        repository: options.accountScan
+          ? plan.repository.root
+          : options.repository,
         automation,
         domains,
       });
@@ -107,6 +155,7 @@ export async function executePlans(plans, options, summary = true) {
         outcomes.push({
           registry: plan.registry,
           package: plan.package.name,
+          repository: `${plan.repository.github_owner}/${plan.repository.github_repository}`,
           status: plan.steps.length === 0 ? "complete" : "configured",
           ...session.outcome,
         });
@@ -119,7 +168,7 @@ export async function executePlans(plans, options, summary = true) {
           package: plan.package.name,
           status: "failed",
         });
-        failure = error;
+        failure ??= error;
       } finally {
         const steps = await session.cleanup({
           deferAuth: plans.length > 1,
@@ -130,7 +179,7 @@ export async function executePlans(plans, options, summary = true) {
           deferred.set(`${plan.registry}:${step.id}`, { session, step });
         }
       }
-      if (failure) {
+      if (failure && !options.accountScan) {
         break;
       }
     }
@@ -168,7 +217,7 @@ function printSummary(outcomes, enabled) {
     console.log("\nSetup summary:");
     for (const item of outcomes) {
       console.log(
-        `- ${item.registry}: ${item.package}: ${item.status}${item.url ? ` (${item.url})` : ""}`,
+        `- ${item.repository ? `${item.repository}: ` : ""}${item.registry}: ${item.package}: ${item.status}${item.secret_scope ? `; ${item.secret_scope} secret` : ""}${item.fallback_reason ? `; ${item.fallback_reason}` : ""}${item.url ? ` (${item.url})` : ""}`,
       );
     }
   }

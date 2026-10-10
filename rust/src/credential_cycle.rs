@@ -117,5 +117,5 @@ pub async fn rotate_credential(
 /// Build the registry policy or the conservative browser helper.
 #[must_use]
 pub fn credential_steps(registry: Registry, secret: &str) -> Vec<SetupStep> {
-    vec![SetupStep::new("manage-registry-token",&format!("Ensure and rotate {secret}"),StepKind::Api,format!("{}. Check expiry and validity, create the narrowest publishing credential in the browser, store through gh-manager stdin, verify in a dry-run workflow, then revoke and verify the replaced token. Requires gh-manager secret support and a configured verification workflow.",credential_policy(registry).description)).confirmed()]
+    vec![SetupStep::new("manage-registry-token",&format!("Ensure and rotate {secret}"),StepKind::Api,format!("{}. Check gh-manager CI health; keep healthy secrets, create missing or auth-failing credentials in the browser, ensure organization access with repository fallback, test through gh-manager, then revoke the replaced token. Retry once only on an authentication failure.",credential_policy(registry).description)).confirmed()]
 }

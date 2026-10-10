@@ -56,6 +56,7 @@ pub enum BrowserMode {
 }
 
 /// Options for [`execute_plan`].
+#[derive(Clone)]
 #[allow(clippy::struct_excessive_bools)] // These booleans mirror independent CLI switches.
 pub struct ExecuteOptions<'a> {
     pub repository: &'a Path,
@@ -74,6 +75,14 @@ pub struct ExecuteOptions<'a> {
     /// Keep the npm session after setup instead of signing out (`--keep-session`).
     pub keep_session: bool,
     pub verbose: bool,
+    /// Caller-selected registry secret naming template.
+    pub secret_name: Option<&'a str>,
+    /// Disable browser protocol tracing while credentials may be in memory.
+    pub quiet_browser: bool,
+    /// Continue account setup after an individual repository fails.
+    pub repository_batch: bool,
+    /// Selected repositories sharing each registry/secret name during account setup.
+    pub secret_repositories: Option<&'a BTreeMap<String, Vec<String>>>,
     /// Registry API base URLs for lookups and polling.
     pub endpoints: Endpoints,
     /// Delay between registry polls.

@@ -20,3 +20,6 @@ mod workflow_proposal;
 
 #[path = "ci-cd/mod.rs"]
 mod ci_cd;
+
+mod ci_credential_cycle;
+mod organization_scan;
