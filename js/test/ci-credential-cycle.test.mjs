@@ -73,6 +73,15 @@ test("existing unknown secret is tested before acquisition; unrelated failures d
   assert.deepEqual(failing.calls, ["create", "ensure", "test"]);
 });
 
+test("tracked IDs do not make a missing secret exist (#43)", async () => {
+  const host = adapter("unknown", ["ok"], {
+    present: false,
+    token_ids: ["orphan"],
+  });
+  await cycleCredential(host);
+  assert.deepEqual(host.calls, ["create", "ensure", "test", "revoke:orphan"]);
+});
+
 test("repeated auth failure stops after two candidates and preserves old credentials (#43)", async () => {
   const host = adapter("auth-failing", ["auth-failing", "auth-failing"]);
   await assert.rejects(cycleCredential(host), /auth-failing.*two/);

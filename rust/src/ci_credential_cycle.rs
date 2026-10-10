@@ -56,6 +56,52 @@ pub trait CiCredentialAdapter {
     async fn revoked(&mut self, id: &str) -> Result<bool>;
 }
 
+/// IDs can be revoked only when every tracked consumer is being replaced.
+#[must_use]
+pub fn tracked_token_ids(state: &Value, repos: &[String], secret: &str) -> Vec<Value> {
+    let keys: std::collections::BTreeSet<_> = repos
+        .iter()
+        .map(|repo| format!("{repo}:{secret}"))
+        .collect();
+    let mut ids = Vec::new();
+    for key in &keys {
+        for id in state[key].as_array().into_iter().flatten() {
+            let retained = state.as_object().is_some_and(|entries| {
+                entries.iter().any(|(entry, values)| {
+                    !keys.contains(entry)
+                        && values.as_array().is_some_and(|items| items.contains(id))
+                })
+            });
+            if !retained && !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+    }
+    ids
+}
+
+/// Remember candidates for every consumer before verification, including failures.
+pub fn record_token_id(state: &mut Value, repos: &[String], secret: &str, id: &str) {
+    for repo in repos {
+        let key = format!("{repo}:{secret}");
+        if !state[&key].is_array() {
+            state[&key] = json!([]);
+        }
+        let ids = state[&key].as_array_mut().expect("state list");
+        let id = json!(id);
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+}
+
+/// Associate a verified replacement with all its targets after revocation completes.
+pub fn complete_rotation(state: &mut Value, repos: &[String], secret: &str, id: &str) {
+    for repo in repos {
+        state[format!("{repo}:{secret}")] = json!([id]);
+    }
+}
+
 /// Keep healthy secrets, test uncertain existing secrets, and retry auth rejection once.
 pub async fn cycle_credential(adapter: &mut impl CiCredentialAdapter) -> Result<Value> {
     let health = adapter.health().await?;
@@ -63,7 +109,7 @@ pub async fn cycle_credential(adapter: &mut impl CiCredentialAdapter) -> Result<
         return Ok(json!({"status":"ok","changed":false}));
     }
     let previous = adapter.metadata().await?;
-    if health["status"] == "unknown" && !previous.is_null() {
+    if health["status"] == "unknown" && !previous.is_null() && previous["present"] != false {
         let tested = adapter.test().await?;
         if tested["status"] == "ok" {
             return Ok(json!({"status":"ok","changed":false}));

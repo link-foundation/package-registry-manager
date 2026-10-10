@@ -190,8 +190,12 @@ optional `verification_workflow` configuration.
 Browser tokens remain in memory: JavaScript passes them through an acquisition
 callback; Rust sends them through stdin. Protocol tracing is suppressed for token
 setup. Token IDs, never values, are retained in the per-user state directory to
-support later revocation; set `token_id` in registry configuration for an older
-credential created outside this tool. GitHub cannot return a previous token value
+support later revocation from any repository using a shared credential. Every
+target retains candidate IDs when verification is uncertain. A partial rotation
+keeps a superseded token active if another tracked repository still uses it;
+revocation requires replacing and verifying all tracked consumers. Set `token_id`
+in registry configuration for an older credential created outside this tool.
+GitHub cannot return a previous token value
 or its registry ID. Untracked old registry tokens require manual revocation.
 
 Use a dedicated profile and domain-scoped `--browser-import auto|default|BROWSER`;

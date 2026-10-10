@@ -2,7 +2,10 @@
 use super::{is_yes, prompt, Session};
 use crate::{
     browser_options::{ImportScope, ImportSource},
-    ci_credential_cycle::{cycle_credential, secret_name, CiCredentialAdapter},
+    ci_credential_cycle::{
+        complete_rotation, cycle_credential, record_token_id, secret_name, tracked_token_ids,
+        CiCredentialAdapter,
+    },
     credential_browser::{
         revoked_script, token_form_script, token_provider, TokenProvider, READ_TOKEN,
     },
@@ -31,6 +34,19 @@ struct TokenHost<'s, 'a> {
 impl TokenHost<'_, '_> {
     fn key(&self) -> String {
         format!("{}:{}", self.slug, self.secret)
+    }
+    fn targets(&self) -> Vec<String> {
+        if self.settings["level"] == "repo" {
+            return vec![self.slug.clone()];
+        }
+        self.session
+            .options
+            .secret_repositories
+            .and_then(|groups| {
+                groups.get(&format!("{}:{}", self.session.plan.registry, self.secret))
+            })
+            .cloned()
+            .unwrap_or_else(|| vec![self.slug.clone()])
     }
     fn health_args(&self, operation: &str) -> Vec<String> {
         let mut args = vec![
@@ -102,15 +118,31 @@ impl CiCredentialAdapter for TokenHost<'_, '_> {
                 .await
                 .unwrap_or(Value::Null);
         }
-        if !metadata.is_null() {
-            let ids = &self.state[self.key()];
-            metadata["token_id"] = self.settings.get("token_id").cloned().unwrap_or_else(|| {
-                ids.as_array()
+        let targets = self.targets();
+        let ids = tracked_token_ids(&self.state, &targets, &self.secret);
+        if !metadata.is_null() || !ids.is_empty() {
+            let present = !metadata.is_null();
+            if !present {
+                metadata = json!({});
+            }
+            let id = self.settings.get("token_id").cloned().unwrap_or_else(|| {
+                self.state[self.key()]
+                    .as_array()
                     .and_then(|items| items.last())
                     .cloned()
-                    .unwrap_or(Value::Null)
+                    .unwrap_or_else(|| metadata["token_id"].clone())
             });
-            metadata["token_ids"] = ids.clone();
+            let retained = self.state.as_object().is_some_and(|entries| {
+                entries.iter().any(|(key, values)| {
+                    !targets
+                        .iter()
+                        .any(|repo| key == &format!("{repo}:{}", self.secret))
+                        && values.as_array().is_some_and(|items| items.contains(&id))
+                })
+            });
+            metadata["present"] = json!(present);
+            metadata["token_id"] = if retained { Value::Null } else { id };
+            metadata["token_ids"] = json!(ids);
         }
         Ok(metadata)
     }
@@ -208,15 +240,7 @@ impl CiCredentialAdapter for TokenHost<'_, '_> {
         for pattern in failure_patterns(Some(self.session.plan.registry)) {
             args.extend(["--failure-pattern".into(), pattern]);
         }
-        let targets = self
-            .session
-            .options
-            .secret_repositories
-            .and_then(|groups| {
-                groups.get(&format!("{}:{}", self.session.plan.registry, self.secret))
-            })
-            .cloned()
-            .unwrap_or_else(|| vec![self.slug.clone()]);
+        let targets = self.targets();
         if self.settings["level"] != "repo" {
             let index = args
                 .iter()
@@ -293,14 +317,12 @@ impl CiCredentialAdapter for TokenHost<'_, '_> {
         if result["valueChanged"] == false {
             bail!("gh-manager did not store the replacement credential");
         }
-        let key = self.key();
-        if !self.state[&key].is_array() {
-            self.state[&key] = json!([]);
-        }
-        self.state[&key]
-            .as_array_mut()
-            .expect("state list")
-            .push(json!(credential.id));
+        record_token_id(
+            &mut self.state,
+            &self.test_targets,
+            &self.secret,
+            &credential.id,
+        );
         self.write_state()?;
         Ok(result)
     }
@@ -410,8 +432,12 @@ impl Session<'_> {
         };
         let result = cycle_credential(&mut host).await?;
         if result["changed"] == true {
-            let key = host.key();
-            host.state[key] = json!([result["token_id"]]);
+            complete_rotation(
+                &mut host.state,
+                &host.test_targets,
+                &host.secret,
+                result["token_id"].as_str().expect("verified token ID"),
+            );
             host.write_state()?;
         }
         if let Some(scope) = result["path"].as_str() {

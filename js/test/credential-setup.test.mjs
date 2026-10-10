@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { setupCredential } from "../src/credential-setup.mjs";
@@ -158,6 +158,145 @@ test("shared organization credentials replace repository overrides before testin
       "revoke",
     ]);
     assert.equal(run.outcome.secret_scope, "repository");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a shared credential can be rotated from a different repository without losing its ID (#43)", async () => {
+  const root = await fixture();
+  const calls = [];
+  const targets = ["acme/tool", "acme/peer"];
+  const github = {
+    health: {
+      health: async () => ({ status: "auth-failing" }),
+      test: async (name, options) => {
+        calls.push(`test:${options.scope.repo}`);
+        return { status: "ok" };
+      },
+    },
+    secrets: (scope) => ({
+      getMetadata: async () =>
+        scope.repo ? null : { name: "DOCKERHUB_TOKEN" },
+      ensure: async () => ({ path: "organization", valueChanged: true }),
+    }),
+  };
+  try {
+    for (const [index, repository] of ["tool", "peer"].entries()) {
+      const run = session(root, github);
+      run.plan.repository.github_repository = repository;
+      run.options.browserProfile = path.join(root, "browser");
+      run.options.secretRepositories = {
+        "docker-hub:DOCKERHUB_TOKEN": targets,
+      };
+      run.automatedPage = async () => ({
+        goto: async () => {},
+        evaluate: async (script) =>
+          script === READ_TOKEN
+            ? { id: `token-${index}`, value: "private-value" }
+            : true,
+      });
+      run.prompt = async (message) => {
+        if (message.startsWith("Revoke registry token token-0")) {
+          calls.push("revoke:token-0");
+        }
+        return "";
+      };
+      await setupCredential(run);
+      const state = JSON.parse(
+        await readFile(path.join(root, "credential-ids.json"), "utf8"),
+      );
+      for (const target of targets) {
+        assert.deepEqual(state[`${target}:DOCKERHUB_TOKEN`], [
+          `token-${index}`,
+        ]);
+      }
+    }
+    assert.deepEqual(calls, [
+      "test:acme/tool",
+      "test:acme/peer",
+      "test:acme/tool",
+      "test:acme/peer",
+      "revoke:token-0",
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("partial rotations preserve credentials used by other repositories (#43)", async () => {
+  for (const level of [undefined, "repo"]) {
+    const root = await fixture(level);
+    try {
+      await writeFile(
+        path.join(root, "credential-ids.json"),
+        JSON.stringify({
+          "acme/tool:DOCKERHUB_TOKEN": ["shared-old"],
+          "acme/peer:DOCKERHUB_TOKEN": ["shared-old"],
+        }),
+      );
+      const run = session(root, {
+        health: {
+          health: async () => ({ status: "auth-failing" }),
+          test: async (name, options) => {
+            assert.equal(options.scope.repo, "acme/tool");
+            return { status: "ok" };
+          },
+        },
+        secrets: () => ({
+          getMetadata: async () => ({ token_id: "shared-old" }),
+          ensure: async () => ({ path: "repository", valueChanged: true }),
+        }),
+      });
+      run.options.browserProfile = path.join(root, "browser");
+      if (level === "repo") {
+        run.options.secretRepositories = {
+          "docker-hub:DOCKERHUB_TOKEN": ["acme/tool", "acme/peer"],
+        };
+      }
+      run.prompt = async (message) => {
+        assert.ok(!message.startsWith("Revoke registry token shared-old"));
+        return "";
+      };
+      await setupCredential(run);
+      const state = JSON.parse(
+        await readFile(path.join(root, "credential-ids.json"), "utf8"),
+      );
+      assert.deepEqual(state, {
+        "acme/tool:DOCKERHUB_TOKEN": ["new"],
+        "acme/peer:DOCKERHUB_TOKEN": ["shared-old"],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("uncertain CI keeps a shared candidate recorded for every consumer (#43)", async () => {
+  const root = await fixture();
+  try {
+    const run = session(root, {
+      health: {
+        health: async () => ({ status: "auth-failing" }),
+        test: async () => ({ status: "unknown" }),
+      },
+      secrets: () => ({
+        getMetadata: async () => null,
+        ensure: async () => ({ path: "organization", valueChanged: true }),
+      }),
+    });
+    run.options.browserProfile = path.join(root, "browser");
+    run.options.secretRepositories = {
+      "docker-hub:DOCKERHUB_TOKEN": ["acme/tool", "acme/peer"],
+    };
+    await assert.rejects(setupCredential(run), /verification is unknown/);
+    const state = JSON.parse(
+      await readFile(path.join(root, "credential-ids.json"), "utf8"),
+    );
+    assert.deepEqual(state, {
+      "acme/tool:DOCKERHUB_TOKEN": ["new"],
+      "acme/peer:DOCKERHUB_TOKEN": ["new"],
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

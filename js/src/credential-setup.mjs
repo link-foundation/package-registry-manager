@@ -1,7 +1,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { githubServices } from "./github.mjs";
-import { cycleCredential, secretName } from "./ci-credential-cycle.mjs";
+import {
+  cycleCredential,
+  secretName,
+  trackedTokenIds,
+  recordTokenId,
+  completeRotation,
+} from "./ci-credential-cycle.mjs";
 import { AUTH_FAILURE_PATTERNS } from "./publishing-policy.mjs";
 import {
   TOKEN_PROVIDERS,
@@ -57,6 +63,10 @@ export async function setupCredential(session) {
     options.browserProfile &&
     path.join(path.dirname(options.browserProfile), "credential-ids.json");
   const key = `${slug}:${secret}`;
+  const targets =
+    settings.level === "repo"
+      ? [slug]
+      : (options.secretRepositories?.[`${plan.registry}:${secret}`] ?? [slug]);
   let state = {};
   let page;
   let approved = false;
@@ -85,14 +95,22 @@ export async function setupCredential(session) {
           }),
         );
       }
-      return (
-        metadata && {
-          ...metadata,
-          token_id:
-            settings.token_id ?? state[key]?.at(-1) ?? metadata.token_id,
-          token_ids: state[key] ?? [],
-        }
+      const ids = trackedTokenIds(state, targets, secret);
+      const currentId =
+        settings.token_id ?? state[key]?.at(-1) ?? metadata?.token_id;
+      const retained = Object.entries(state).some(
+        ([entry, values]) =>
+          !targets.some((repo) => entry === `${repo}:${secret}`) &&
+          values.includes(currentId),
       );
+      return metadata || ids.length
+        ? {
+            ...metadata,
+            present: Boolean(metadata),
+            token_id: retained ? undefined : currentId,
+            token_ids: ids,
+          }
+        : null;
     },
     create: async () => {
       if (
@@ -145,12 +163,7 @@ export async function setupCredential(session) {
       return page.evaluate(READ_TOKEN);
     },
     ensure: async (credential, health) => {
-      const repos =
-        settings.level === "repo"
-          ? [slug]
-          : (options.secretRepositories?.[`${plan.registry}:${secret}`] ?? [
-              slug,
-            ]);
+      const repos = targets;
       let stored = await github
         .secrets(settings.level === "repo" ? scope : { org: owner })
         .ensure(secret, {
@@ -201,19 +214,14 @@ export async function setupCredential(session) {
         throw new Error("gh-manager did not store the replacement credential");
       }
       if (stateFile) {
-        state[key] = [...new Set([...(state[key] ?? []), credential.id])];
+        recordTokenId(state, targets, secret, credential.id);
         await mkdir(path.dirname(stateFile), { recursive: true });
         await writeFile(stateFile, JSON.stringify(state), { mode: 0o600 });
       }
       return stored;
     },
     test: async (stored) => {
-      const repos =
-        stored && settings.level !== "repo"
-          ? (options.secretRepositories?.[`${plan.registry}:${secret}`] ?? [
-              slug,
-            ])
-          : [slug];
+      const repos = stored ? targets : [slug];
       const results = await Promise.all(
         repos.map((repo) =>
           github.health.test(secret, { ...healthOptions, scope: { repo } }),
@@ -236,7 +244,7 @@ export async function setupCredential(session) {
     revoked: (id) => page.evaluate(revokedScript(id)),
   });
   if (stateFile && result.changed) {
-    state[key] = [result.token_id];
+    completeRotation(state, targets, secret, result.token_id);
     await writeFile(stateFile, JSON.stringify(state), { mode: 0o600 });
   }
   session.outcome = {

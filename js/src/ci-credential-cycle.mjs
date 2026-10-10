@@ -19,6 +19,34 @@ export function secretName(template, registry, slug) {
   return name;
 }
 
+/** IDs are revocable only after every tracked consumer is being replaced. */
+export function trackedTokenIds(state, repos, secret) {
+  const keys = new Set(repos.map((repo) => `${repo}:${secret}`));
+  const retained = new Set(
+    Object.entries(state)
+      .filter(([key]) => !keys.has(key))
+      .flatMap(([, ids]) => ids),
+  );
+  return [
+    ...new Set(repos.flatMap((repo) => state[`${repo}:${secret}`] ?? [])),
+  ].filter((id) => !retained.has(id));
+}
+
+/** Remember candidates for every consumer, including uncertain verification. */
+export function recordTokenId(state, repos, secret, id) {
+  for (const repo of repos) {
+    const key = `${repo}:${secret}`;
+    state[key] = [...new Set([...(state[key] ?? []), id])];
+  }
+}
+
+/** Successful verification leaves the replacement associated with every target. */
+export function completeRotation(state, repos, secret, id) {
+  for (const repo of repos) {
+    state[`${repo}:${secret}`] = [id];
+  }
+}
+
 /** CI drives rotation. Uncertain tests preserve every existing credential. */
 export async function cycleCredential(adapter) {
   const health = await adapter.health();
@@ -26,7 +54,7 @@ export async function cycleCredential(adapter) {
     return { status: "ok", changed: false };
   }
   const previous = await adapter.metadata();
-  if (health.status === "unknown" && previous) {
+  if (health.status === "unknown" && previous && previous.present !== false) {
     const tested = await adapter.test();
     if (tested.status === "ok") {
       return { status: "ok", changed: false };

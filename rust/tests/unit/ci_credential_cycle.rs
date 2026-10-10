@@ -1,6 +1,9 @@
 use anyhow::Result;
 use package_registry_manager::{
-    ci_credential_cycle::{cycle_credential, secret_name, CiCredentialAdapter},
+    ci_credential_cycle::{
+        complete_rotation, cycle_credential, record_token_id, secret_name, tracked_token_ids,
+        CiCredentialAdapter,
+    },
     credential_cycle::Credential,
     Registry,
 };
@@ -107,4 +110,56 @@ fn naming_templates_support_registry_and_repository() {
         "DOCKER_HUB_TOKEN_MY_APP"
     );
     assert!(secret_name("{UNKNOWN}", Registry::Npm, "team/app").is_err());
+}
+
+#[tokio::test]
+async fn shared_credential_ids_survive_rotation_from_another_repository() {
+    let targets = vec!["acme/tool".into(), "acme/peer".into()];
+    let mut state = json!({});
+    record_token_id(&mut state, &targets, "TOKEN", "first");
+    assert_eq!(state["acme/tool:TOKEN"], json!(["first"]));
+    assert_eq!(state["acme/peer:TOKEN"], json!(["first"]));
+    // The next account setup starts at the peer, with the shared group reversed.
+    let targets = vec!["acme/peer".into(), "acme/tool".into()];
+    let mut host = Host::new("auth-failing", vec!["ok"]);
+    host.previous = json!({"token_ids": tracked_token_ids(&state, &targets, "TOKEN")});
+    let result = cycle_credential(&mut host).await.unwrap();
+    assert_eq!(host.calls, ["create", "ensure", "test", "revoke:first"]);
+    complete_rotation(
+        &mut state,
+        &targets,
+        "TOKEN",
+        result["token_id"].as_str().unwrap(),
+    );
+    assert_eq!(state["acme/tool:TOKEN"], json!(["new-1"]));
+    assert_eq!(state["acme/peer:TOKEN"], json!(["new-1"]));
+}
+
+#[test]
+fn partial_rotation_retains_shared_ids_and_uncertain_candidates() {
+    let targets = vec!["acme/tool".into(), "acme/peer".into()];
+    let mut state = json!({});
+    record_token_id(&mut state, &targets, "TOKEN", "old");
+    let current = vec!["acme/tool".into()];
+    assert_eq!(
+        tracked_token_ids(&state, &current, "TOKEN"),
+        Vec::<Value>::new()
+    );
+    record_token_id(&mut state, &current, "TOKEN", "candidate");
+    assert_eq!(state["acme/tool:TOKEN"], json!(["old", "candidate"]));
+    assert_eq!(state["acme/peer:TOKEN"], json!(["old"]));
+    complete_rotation(&mut state, &current, "TOKEN", "candidate");
+    assert_eq!(state["acme/peer:TOKEN"], json!(["old"]));
+    assert_eq!(
+        tracked_token_ids(&state, &targets, "TOKEN"),
+        vec![json!("old"), json!("candidate")]
+    );
+}
+
+#[tokio::test]
+async fn tracked_ids_do_not_make_a_missing_secret_exist() {
+    let mut host = Host::new("unknown", vec!["ok"]);
+    host.previous = json!({"present": false, "token_ids": ["orphan"]});
+    cycle_credential(&mut host).await.unwrap();
+    assert_eq!(host.calls, ["create", "ensure", "test", "revoke:orphan"]);
 }
