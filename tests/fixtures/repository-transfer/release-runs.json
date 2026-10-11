@@ -1,0 +1,7 @@
+[
+  {"databaseId": 99, "conclusion": "failure", "status": "completed", "event": "pull_request", "headBranch": "issue-31-wip", "headSha": "pr-sha", "createdAt": "2026-10-10T12:00:00Z", "url": "https://github.com/acme/pipeline-app/actions/runs/99"},
+  {"databaseId": 98, "conclusion": "failure", "status": "completed", "event": "push", "headBranch": "main", "headSha": "lint-sha", "createdAt": "2026-10-10T11:00:00Z", "url": "https://github.com/acme/pipeline-app/actions/runs/98"},
+  {"databaseId": 97, "conclusion": "failure", "status": "completed", "event": "push", "headBranch": "feature", "headSha": "feature-sha", "createdAt": "2026-10-10T10:00:00Z", "url": "https://github.com/acme/pipeline-app/actions/runs/97"},
+  {"databaseId": 42, "conclusion": "failure", "status": "completed", "event": "workflow_dispatch", "headBranch": "main", "headSha": "original-sha", "createdAt": "2026-10-10T09:00:00Z", "url": "https://github.com/acme/pipeline-app/actions/runs/42"},
+  {"databaseId": 41, "conclusion": "failure", "status": "completed", "event": "push", "headBranch": "main", "headSha": "older-sha", "createdAt": "2026-10-10T08:00:00Z", "url": "https://github.com/acme/pipeline-app/actions/runs/41"}
+]

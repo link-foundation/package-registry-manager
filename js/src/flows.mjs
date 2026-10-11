@@ -1,3 +1,4 @@
+import { RELEASE_RUN_FIELDS } from "./release-runs.mjs";
 import { credentialSteps } from "./credential-cycle.mjs";
 import { DEFAULT_TRUST_NPM, NPM_TFA_URL } from "./prerequisites.mjs";
 import {
@@ -186,9 +187,9 @@ function releaseRunSteps(context) {
   return [
     step(
       "inspect-release-run",
-      "Read the latest release run",
+      "Read the failed default-branch release run",
       "check",
-      "Look up the newest run of the release workflow; a run that npm rejected can be re-run once trust is attached.",
+      "Check push and workflow_dispatch runs on the default branch and prefer the newest failed publish or preflight job.",
       {
         command: command("gh", [
           "run",
@@ -196,10 +197,14 @@ function releaseRunSteps(context) {
           ...repo,
           "--workflow",
           context.workflow,
+          "--branch",
+          "{default_branch}",
+          "--event",
+          "push",
           "--limit",
-          "1",
+          "100",
           "--json",
-          "databaseId,conclusion,status,url",
+          RELEASE_RUN_FIELDS,
         ]),
         when: "trust-missing",
         cwd: ".",
@@ -209,7 +214,7 @@ function releaseRunSteps(context) {
       "read-release-failure",
       "Read why the release run failed",
       "check",
-      "Search the failed jobs' log for npm's E404 or invalid-publisher rejection.",
+      "Read the selected run's failed jobs for trusted-publishing or OIDC exchange rejection.",
       {
         command: command("gh", [
           "run",

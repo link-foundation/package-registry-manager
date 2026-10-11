@@ -1,3 +1,4 @@
+import { selectReleaseRun } from "./release-runs.mjs";
 import { pageFetchScript } from "./crates-api.mjs";
 import {
   publisherIdentities,
@@ -306,31 +307,11 @@ export async function runRepositoryRepair(session, step) {
     throw new Error("verify repository repairs before retrying release jobs");
   }
   const expected = repositorySlug(session.plan.repository);
-  const result = await session.capture({
-    command: {
-      program: "gh",
-      args: [
-        "run",
-        "list",
-        "--repo",
-        expected,
-        "--workflow",
-        session.plan.trusted_publisher.workflow,
-        "--limit",
-        "1",
-        "--json",
-        "databaseId,conclusion,headSha",
-      ],
-    },
-    cwd: ".",
-  });
-  if (result.code !== 0) {
-    throw new Error("could not inspect release jobs after repository repair");
-  }
-  const [run] = JSON.parse(result.stdout || "[]");
-  if (run?.conclusion !== "failure") {
+  const { run, publishFailure, branch } = await selectReleaseRun(session);
+  if (!publishFailure) {
     return;
   }
+  console.log(`  Selected failed release run: ${run.url}`);
   const { verifyRemoteManifest } = await import("./manifest-proposal.mjs");
   const corrected =
     Boolean(run.headSha) &&
@@ -363,10 +344,17 @@ export async function runRepositoryRepair(session, step) {
           session.plan.trusted_publisher.workflow,
           "--repo",
           expected,
+          "--ref",
+          branch,
         ],
       };
+  if (corrected) {
+    session.values ??= {};
+    session.values.failed_run_id = String(run.databaseId);
+  }
   await session.command({
     ...step,
+    id: corrected ? "rerun-release" : "retry-repaired-release",
     kind: "command",
     command,
     cwd: ".",

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 test(
-  "installed command-stream guards the one exempted glob advisory",
+  "installed command-stream safely handles bounded glob expansions",
   { timeout: 10000 },
   () => {
     const result = spawnSync(

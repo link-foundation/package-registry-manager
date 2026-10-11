@@ -5,6 +5,7 @@ use crate::crates_api::CRATES_IO_URL;
 use crate::model::{Package, Registry, SetupStep, StepKind};
 use crate::prerequisites::{DEFAULT_TRUST_NPM, NPM_TFA_URL};
 use crate::registry_state::{encode_uri_component, npm_name, Endpoints};
+use crate::release_runs::RELEASE_RUN_FIELDS;
 use crate::tokens::{token_secret_steps, CRATES_TOKENS_URL};
 
 /// Step conditions that only hold while a package is not yet published.
@@ -196,10 +197,14 @@ fn release_run_steps(context: &FlowContext<'_>, workflow: &str) -> [SetupStep; 2
     list.extend([
         "--workflow",
         workflow,
+        "--branch",
+        "{default_branch}",
+        "--event",
+        "push",
         "--limit",
-        "1",
+        "100",
         "--json",
-        "databaseId,conclusion,status,url",
+        RELEASE_RUN_FIELDS,
     ]);
     let mut view = vec!["run", "view", "{failed_run_id}"];
     view.extend(&repo);
@@ -207,9 +212,9 @@ fn release_run_steps(context: &FlowContext<'_>, workflow: &str) -> [SetupStep; 2
     [
         step(
             "inspect-release-run",
-            "Read the latest release run",
+            "Read the failed default-branch release run",
             StepKind::Check,
-            "Look up the newest run of the release workflow; a run that npm rejected can be re-run once trust is attached.",
+            "Check push and workflow_dispatch runs on the default branch and prefer the newest failed publish or preflight job.",
         )
         .command("gh", &list)
         .when("trust-missing")
@@ -218,7 +223,7 @@ fn release_run_steps(context: &FlowContext<'_>, workflow: &str) -> [SetupStep; 2
             "read-release-failure",
             "Read why the release run failed",
             StepKind::Check,
-            "Search the failed jobs' log for npm's E404 or invalid-publisher rejection.",
+            "Read the selected run's failed jobs for trusted-publishing or OIDC exchange rejection.",
         )
         .command("gh", &view)
         .when("release-failed")

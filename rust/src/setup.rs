@@ -37,6 +37,7 @@ use crate::tokens::{
 mod batch;
 mod crates_session;
 mod credential_session;
+mod release_session;
 mod repository_session;
 pub use batch::{execute_plan, execute_plans, execute_plans_with};
 
@@ -98,6 +99,7 @@ struct Session<'a> {
     conditions: BTreeSet<&'static str>,
     values: BTreeMap<String, String>,
     token_secrets: Vec<String>,
+    release_selection: Option<release_session::ReleaseSelection>,
     browser: Option<Automation>,
     domains: Vec<&'static str>,
     temporary: Option<tempfile::TempDir>,
@@ -127,6 +129,7 @@ impl<'a> Session<'a> {
             conditions,
             values: BTreeMap::new(),
             token_secrets: Vec::new(),
+            release_selection: None,
             browser: None,
             domains: crate::sign_in_import::sign_in_domains(plan.registry).to_vec(),
             temporary: None,
@@ -327,6 +330,9 @@ impl<'a> Session<'a> {
     }
 
     async fn check(&mut self, step: &SetupStep) -> Result<()> {
+        if step.id == "inspect-release-run" {
+            return self.inspect_release_run().await;
+        }
         let result = if INTERACTIVE_CHECKS.contains(&step.id.as_str()) {
             self.run_process(step, false).await?
         } else {
@@ -356,13 +362,12 @@ impl<'a> Session<'a> {
                 }
             }
             "check-2fa" | "verify-2fa" => self.check_two_factor(step, &result)?,
-            "inspect-release-run" => self.inspect_release_run(&result)?,
             "read-release-failure" => {
                 if result.code != 0 {
                     eprintln!("warning: could not read the failed release log");
                 } else if Regex::new(PUBLISH_REJECTED)?.is_match(output) {
                     println!(
-                        "  It failed at publish: npm rejected the workflow (E404/invalid-publisher) because no trusted publisher is attached yet. After attaching trust, its failed jobs can be re-run."
+                        "  It failed at publish: the registry rejected the workflow's trusted publishing identity (OIDC/E404/invalid-publisher). After attaching trust, its failed jobs can be re-run."
                     );
                     self.conditions.insert("release-failed-publish");
                 } else {
@@ -437,31 +442,6 @@ impl<'a> Session<'a> {
             "  Two-factor authentication is off; npm trust requires it, so turn it on before anything is published."
         );
         self.conditions.insert("tfa-disabled");
-        Ok(())
-    }
-
-    fn inspect_release_run(&mut self, result: &CommandOutput) -> Result<()> {
-        if result.code != 0 {
-            eprintln!("warning: could not list the release workflow runs");
-            return Ok(());
-        }
-        let Some(run) = json_list(&result.stdout)?.into_iter().next() else {
-            println!("  The release workflow has not run yet.");
-            return Ok(());
-        };
-        let outcome = run["conclusion"]
-            .as_str()
-            .filter(|text| !text.is_empty())
-            .map_or_else(|| json_text(&run["status"]), str::to_owned);
-        println!(
-            "  The latest release run {outcome}: {}",
-            json_text(&run["url"])
-        );
-        if run["conclusion"] == "failure" {
-            self.values
-                .insert("failed_run_id".to_owned(), json_text(&run["databaseId"]));
-            self.conditions.insert("release-failed");
-        }
         Ok(())
     }
 
@@ -562,6 +542,18 @@ impl<'a> Session<'a> {
             self.values
                 .insert("pack_destination".to_owned(), destination);
             self.temporary = Some(temporary);
+        }
+        if step.id == "rerun-release" {
+            if let Some(run) = self
+                .release_selection
+                .as_ref()
+                .and_then(|selection| selection.run.as_ref())
+            {
+                println!(
+                    "  Re-running failed release jobs: {}",
+                    json_text(&run["url"])
+                );
+            }
         }
         // Pack output is captured so npm's warnings can be reviewed.
         let result = if step.id == "pack" {
