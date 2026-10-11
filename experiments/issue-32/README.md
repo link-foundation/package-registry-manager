@@ -51,3 +51,9 @@ wrapper. `dependency-security.test.mjs` verifies the installed guard with a
 finite input in a child limited to 64 MB of heap and 256 KB of stack; all
 other high/critical advisories and audit transport failures remain fatal.
 An attempted ShellJS downgrade broke startup and was discarded.
+
+The issue 44 dependency refresh uses command-stream 2.0.2, which replaces
+ShellJS/fast-glob with an iterative glob implementation. The `--guard` probe
+now exercises its public `command-stream/zx` API: normal matching, deeply
+nested patterns and ignores, malformed patterns, and the 10,000-pattern
+expansion budget. The child keeps the same heap, stack and execution limits.
