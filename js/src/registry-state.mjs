@@ -102,52 +102,72 @@ export async function probeRegistryState(inspection, options = {}) {
       if (!packageInfo.publishable) {
         return;
       }
-      const state = await probePackage(packageInfo, options);
-      if (state.exists !== undefined) {
-        packageInfo.exists_on_registry = state.exists;
-      }
-      if (state.trusted !== undefined) {
-        packageInfo.trusted_publishing = state.trusted;
-      }
-      const evidence = { ...packageInfo, ...state };
-      if (state.configured_publishers !== undefined) {
-        packageInfo.configured_publishers = state.configured_publishers;
-      }
-      if (state.provenance_repositories?.length) {
-        packageInfo.provenance_repositories = state.provenance_repositories;
-      }
-      if (packageInfo.registry === "npm" && state.exists) {
-        const output = await identityCommand(
-          "npm",
-          ["trust", "list", packageInfo.name, "--browser=false"],
-          { ...options, repository: inspection.repository.root },
-        );
-        if (output !== undefined) {
-          evidence.configured_publishers = publisherIdentities(output);
-          packageInfo.configured_publishers = evidence.configured_publishers;
+      try {
+        const state = await probePackage(packageInfo, {
+          ...options,
+          onError: (error) =>
+            options.onError?.({
+              ...error,
+              manifest: packageInfo.manifest,
+              package: packageInfo.name,
+            }),
+        });
+        if (state.exists !== undefined) {
+          packageInfo.exists_on_registry = state.exists;
         }
-      }
-      compareRepositories(packageInfo, probed.repository, evidence);
-      if (
-        state.trusted &&
-        ["npm", "crates-io", "pypi"].includes(packageInfo.registry)
-      ) {
-        const expected = {
-          organization: probed.repository.github_owner,
-          repository: probed.repository.github_repository,
-          workflow: packageInfo.workflow,
-          environment: packageInfo.environment,
-        };
-        packageInfo.publisher_settings_verified = Boolean(
-          evidence.configured_publishers?.some((publisher) =>
-            publisherMatches(publisher, expected),
-          ),
-        );
-        if (!packageInfo.publisher_settings_verified) {
-          (packageInfo.warnings ??= []).push(
-            "configured trusted publisher could not be verified; setup must check the repository, workflow and environment in registry settings",
+        if (state.trusted !== undefined) {
+          packageInfo.trusted_publishing = state.trusted;
+        }
+        const evidence = { ...packageInfo, ...state };
+        if (state.configured_publishers !== undefined) {
+          packageInfo.configured_publishers = state.configured_publishers;
+        }
+        if (state.provenance_repositories?.length) {
+          packageInfo.provenance_repositories = state.provenance_repositories;
+        }
+        if (packageInfo.registry === "npm" && state.exists) {
+          const output = await identityCommand(
+            "npm",
+            ["trust", "list", packageInfo.name, "--browser=false"],
+            { ...options, repository: inspection.repository.root },
           );
+          if (output !== undefined) {
+            evidence.configured_publishers = publisherIdentities(output);
+            packageInfo.configured_publishers = evidence.configured_publishers;
+          }
         }
+        compareRepositories(packageInfo, probed.repository, evidence);
+        if (
+          state.trusted &&
+          ["npm", "crates-io", "pypi"].includes(packageInfo.registry)
+        ) {
+          const expected = {
+            organization: probed.repository.github_owner,
+            repository: probed.repository.github_repository,
+            workflow: packageInfo.workflow,
+            environment: packageInfo.environment,
+          };
+          packageInfo.publisher_settings_verified = Boolean(
+            evidence.configured_publishers?.some((publisher) =>
+              publisherMatches(publisher, expected),
+            ),
+          );
+          if (!packageInfo.publisher_settings_verified) {
+            (packageInfo.warnings ??= []).push(
+              "configured trusted publisher could not be verified; setup must check the repository, workflow and environment in registry settings",
+            );
+          }
+        }
+      } catch (error) {
+        if (!options.onError) {
+          throw error;
+        }
+        options.onError({
+          stage: "registry",
+          manifest: packageInfo.manifest,
+          package: packageInfo.name,
+          message: error.message,
+        });
       }
     }),
   );
@@ -248,8 +268,19 @@ export async function getJson(url, options = {}) {
     if (response.status === 404) {
       return null;
     }
-    return response.ok ? await response.json() : undefined;
+    if (!response.ok) {
+      options.onError?.({
+        stage: "registry",
+        message: `registry lookup returned HTTP ${response.status}`,
+      });
+      return undefined;
+    }
+    return await response.json();
   } catch (error) {
+    options.onError?.({
+      stage: "registry",
+      message: `registry lookup failed (${error.name})`,
+    });
     if (options.verbose) {
       console.error(`GET ${url} failed: ${error.message}`);
     }

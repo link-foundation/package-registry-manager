@@ -124,7 +124,7 @@ pub fn findings(inspection: &Inspection) -> Vec<Value> {
 }
 
 /// One discovered repository or a recoverable scan error.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScannedRepository {
     /// Canonical GitHub owner/name.
     pub repository: String,
@@ -133,13 +133,16 @@ pub struct ScannedRepository {
     /// Parsed packages and registry evidence.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inspection: Option<Inspection>,
+    /// Recoverable package, repository, and release-check failures.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<Value>,
     /// Failure to read or parse this repository.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
 /// Organization/user scan with package and release evidence.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanReport {
     /// JSON contract version.
     pub schema_version: u32,
@@ -169,6 +172,23 @@ pub async fn scan_repositories(
     offline: bool,
     client: &RegistryClient,
     verbose: bool,
+) -> Result<RepositoryScan> {
+    scan_repositories_with_progress(github, org, user, offline, client, verbose, |_, _, _, _| {
+        Ok(())
+    })
+    .await
+}
+
+/// Scan and report each completed repository before starting the next one.
+#[allow(clippy::future_not_send, clippy::too_many_arguments)]
+pub async fn scan_repositories_with_progress(
+    github: &impl GithubGateway,
+    org: Option<&str>,
+    user: Option<&str>,
+    offline: bool,
+    client: &RegistryClient,
+    verbose: bool,
+    mut progress: impl FnMut(&ScannedRepository, &[Value], usize, usize) -> Result<()>,
 ) -> Result<RepositoryScan> {
     if org.is_some() == user.is_some() {
         bail!("choose exactly one --org or --user");
@@ -200,14 +220,14 @@ pub async fn scan_repositories(
     };
     let slug_pattern = regex::Regex::new(r"^[\w.-]+/[\w.-]+$").expect("static pattern");
     for (index, repo) in repos.iter().enumerate() {
-        let slug = repo["full_name"]
-            .as_str()
-            .ok_or_else(|| anyhow!("repository name missing"))?;
-        if !slug_pattern.is_match(slug) {
-            bail!("invalid repository name");
-        }
+        let slug = repo["full_name"].as_str().unwrap_or("<invalid repository>");
         let branch = repo["default_branch"].as_str();
+        let mut errors = Vec::new();
+        let finding_start = report.findings.len();
         let result: Result<Inspection> = async {
+            if !slug_pattern.is_match(slug) {
+                bail!("invalid repository name");
+            }
             let mut args = vec![
                 "repo".into(),
                 "files".into(),
@@ -226,11 +246,14 @@ pub async fn scan_repositories(
                 slug,
                 &github.call(&args, None, workspace.path()).await?,
             )?;
-            let discovered = crate::inspect_repository_with(
+            let discovered = crate::discovery::inspect_repository_recovering(
                 &root,
                 InspectOptions {
                     include_skipped: verbose,
                 },
+                Some(&mut |manifest, message| {
+                    errors.push(json!({"stage":"manifest","manifest":manifest,"message":message}));
+                }),
             )?;
             Ok(if offline {
                 discovered
@@ -239,65 +262,109 @@ pub async fn scan_repositories(
             })
         }
         .await;
-        let (inspection, error) = match result {
+        let inspection = match result {
             Ok(inspection) => {
                 report.findings.extend(findings(&inspection));
-                (Some(inspection), None)
+                if !offline {
+                    for package in &inspection.packages {
+                        if package.publishable
+                            && package.exists_on_registry.is_none()
+                            && client.endpoints().state_url(package).is_some()
+                        {
+                            errors.push(json!({"stage":"registry","manifest":package.manifest,"package":package.name,"message":"registry lookup failed; package state unknown"}));
+                        }
+                    }
+                    release_health(
+                        github,
+                        slug,
+                        branch,
+                        &inspection,
+                        workspace.path(),
+                        &mut report.findings,
+                        &mut errors,
+                    )
+                    .await;
+                }
+                Some(inspection)
             }
-            Err(error) => (None, Some(error.to_string())),
+            Err(error) => {
+                errors.push(json!({"stage":"repository","message":error.to_string()}));
+                None
+            }
         };
-        report.repositories.push(ScannedRepository {
+        let error = (!errors.is_empty()).then(|| {
+            errors
+                .iter()
+                .map(|error| {
+                    let message = error["message"].as_str().unwrap_or("scan failed");
+                    error["manifest"].as_str().map_or_else(
+                        || message.to_owned(),
+                        |manifest| format!("{manifest}: {message}"),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        });
+        let item = ScannedRepository {
             repository: slug.into(),
             default_branch: branch.map(str::to_owned),
             inspection,
             error,
-        });
-    }
-    if !offline {
-        if let Some(org) = org {
-            let mut args = vec!["runs".into(), "failures".into(), "--org".into(), org.into()];
-            for pattern in failure_patterns(None) {
-                args.extend(["--grep".into(), pattern]);
-            }
-            let failures = github.call(&args, None, workspace.path()).await?;
-            for failure in failures
-                .as_array()
-                .ok_or_else(|| anyhow!("invalid failures list"))?
-            {
-                report.findings.push(json!({"repository":failure["repository"],"type":"release-failing","evidence":failure}));
-            }
-        } else {
-            for repo in repos {
-                let slug = repo["full_name"].as_str().expect("validated repository");
-                let mut args = vec!["runs".into(), "list".into(), slug.into()];
-                if let Some(branch) = repo["default_branch"].as_str() {
-                    args.extend(["--branch".into(), branch.into()]);
-                }
-                let runs = github.call(&args, None, workspace.path()).await?;
-                if let Some(run) = runs
-                    .as_array()
-                    .and_then(|runs| runs.first())
-                    .filter(|run| run["conclusion"] == "failure")
-                {
-                    let mut args = vec![
-                        "runs".into(),
-                        "logs".into(),
-                        run["id"].to_string(),
-                        "--repo".into(),
-                        slug.into(),
-                    ];
-                    for pattern in failure_patterns(None) {
-                        args.extend(["--grep".into(), pattern]);
-                    }
-                    let matches = github.call(&args, None, workspace.path()).await?;
-                    if matches.as_array().is_some_and(|items| !items.is_empty()) {
-                        report.findings.push(json!({"repository":slug,"type":"release-failing","evidence":{"runUrl":run["html_url"],"matches":matches}}));
-                    }
-                }
-            }
-        }
+            errors,
+        };
+        progress(
+            &item,
+            &report.findings[finding_start..],
+            index + 1,
+            repos.len(),
+        )?;
+        report.repositories.push(item);
     }
     Ok(RepositoryScan { report, workspace })
+}
+
+#[allow(clippy::too_many_arguments, clippy::future_not_send)]
+async fn release_health(
+    github: &impl GithubGateway,
+    slug: &str,
+    branch: Option<&str>,
+    inspection: &Inspection,
+    root: &Path,
+    findings: &mut Vec<Value>,
+    errors: &mut Vec<Value>,
+) {
+    let workflows: std::collections::BTreeSet<_> = inspection
+        .repository
+        .release_workflow
+        .iter()
+        .chain(
+            inspection
+                .packages
+                .iter()
+                .flat_map(|package| package.workflow.iter().chain(&package.workflow_candidates)),
+        )
+        .collect();
+    for workflow in workflows {
+        let result: Result<()> = async {
+            let branch = branch.ok_or_else(|| anyhow!("repository has no default branch for release inspection"))?;
+            let runs = github.release_runs(slug, workflow, branch, root).await?;
+            let mut eligible: Vec<_> = runs.as_array().ok_or_else(|| anyhow!("invalid release runs list"))?.iter()
+                .filter(|run| run["head_branch"] == branch && matches!(run["event"].as_str(), Some("push" | "workflow_dispatch")))
+                .collect();
+            eligible.sort_by(|left, right| right["created_at"].as_str().cmp(&left["created_at"].as_str()).then_with(|| right["id"].as_u64().cmp(&left["id"].as_u64())));
+            let Some(run) = eligible.first().filter(|run| run["conclusion"] == "failure") else { return Ok(()); };
+            let mut evidence = json!({"repository":slug,"workflow":workflow,"runId":run["id"],"runUrl":run["html_url"],"conclusion":run["conclusion"]});
+            findings.push(json!({"repository":slug,"type":"release-failing","evidence":evidence}));
+            let mut args = vec!["runs".into(), "logs".into(), run["id"].to_string(), "--repo".into(), slug.into()];
+            for pattern in failure_patterns(None) { args.extend(["--grep".into(), pattern]); }
+            evidence["matches"] = github.call(&args, None, root).await?;
+            findings.last_mut().expect("release finding")["evidence"] = evidence;
+            Ok(())
+        }.await;
+        if let Err(error) = result {
+            errors.push(json!({"stage":"release","workflow":workflow,"message":error.to_string()}));
+        }
+    }
 }
 
 impl ScanReport {

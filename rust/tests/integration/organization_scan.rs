@@ -1,13 +1,145 @@
 use anyhow::Result;
 use package_registry_manager::{
     github::GithubGateway,
-    organization_scan::scan_repositories,
+    organization_scan::{scan_repositories, scan_repositories_with_progress},
     registry_state::{Endpoints, RegistryClient},
 };
 use serde_json::{json, Value};
 use std::path::Path;
 
 struct FakeGithub;
+
+struct ExpiredGithub;
+
+#[allow(clippy::unused_async_trait_impl)]
+impl GithubGateway for ExpiredGithub {
+    async fn call(&self, args: &[String], _: Option<&str>, _: &Path) -> Result<Value> {
+        match (args[0].as_str(), args[1].as_str()) {
+            ("repo", "list") => Ok(json!(["expired", "healthy", "broken", "last"].map(
+                |name| json!({"full_name":format!("team/{name}"),"default_branch":"main"})
+            ))),
+            ("repo", "files") => {
+                if args[2] == "team/broken" {
+                    anyhow::bail!("files forbidden");
+                }
+                Ok(json!([
+                    {"path":"Cargo.toml","content":"[package]\nname='demo'\nversion='1.0.0'"},
+                    {"path":"sub/package.json","content":"invalid ["},
+                    {"path":".github/workflows/release.yml","content":"jobs:\n  publish:\n    permissions:\n      id-token: write\n    steps:\n      - run: cargo publish"}
+                ]))
+            }
+            ("runs", "list") => {
+                assert!(args
+                    .windows(2)
+                    .any(|pair| pair == ["--workflow", "release.yml"]));
+                Ok(json!([
+                    {"id":99,"head_branch":"feature","event":"pull_request","conclusion":"failure"},
+                    {"id":3,"head_branch":"main","event":"push","created_at":"2026-10-11","conclusion":if args[2] == "team/expired" {"failure"} else {"success"},"html_url":format!("https://github.com/{}/actions/runs/3",args[2])},
+                    {"id":1,"head_branch":"main","event":"push","created_at":"2026-10-10","conclusion":"failure"}
+                ]))
+            }
+            ("runs", "logs") => {
+                assert_eq!(args[2], "3");
+                assert!(args.contains(&"team/expired".into()));
+                anyhow::bail!("GitHub log download 410");
+            }
+            _ => panic!("unexpected GitHub call: {args:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn expired_logs_and_invalid_packages_preserve_other_results() {
+    let registry = super::mock_registry::MockRegistry::start(|_| None);
+    let client = RegistryClient::new(
+        Endpoints::default().with("PACKAGE_REGISTRY_MANAGER_CRATES_IO_API", &registry.base),
+        false,
+    );
+    for (org, user) in [(Some("team"), None), (None, Some("team"))] {
+        let mut completed = Vec::new();
+        let scan = scan_repositories_with_progress(
+            &ExpiredGithub,
+            org,
+            user,
+            false,
+            &client,
+            false,
+            |item, _, index, total| {
+                assert_eq!(index, completed.len() + 1);
+                assert_eq!(total, 4);
+                completed.push(item.repository.clone());
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            completed,
+            ["team/expired", "team/healthy", "team/broken", "team/last"]
+        );
+        assert_eq!(scan.report.repositories.len(), 4);
+        assert_eq!(
+            scan.report.repositories[0]
+                .inspection
+                .as_ref()
+                .unwrap()
+                .packages
+                .len(),
+            1
+        );
+        let error = scan.report.repositories[0].error.as_ref().unwrap();
+        assert!(error.contains("410"), "{error}");
+        assert!(error.contains("sub/package.json"), "{error}");
+        assert!(scan.report.repositories[2]
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("files forbidden"));
+        assert_eq!(
+            scan.report
+                .findings
+                .iter()
+                .filter(|finding| finding["type"] == "unpublished")
+                .count(),
+            3
+        );
+        assert!(scan.report.render().contains("410"));
+    }
+}
+
+#[tokio::test]
+async fn failed_registry_lookup_retains_successful_peer_findings() {
+    let registry = super::mock_registry::MockRegistry::start(|path| {
+        if path == "/crates/token" {
+            Some("invalid JSON".into())
+        } else {
+            None
+        }
+    });
+    let client = RegistryClient::new(
+        Endpoints::default().with("PACKAGE_REGISTRY_MANAGER_CRATES_IO_API", &registry.base),
+        false,
+    );
+    let scan = scan_repositories(&FakeGithub, Some("team"), None, false, &client, false)
+        .await
+        .unwrap();
+    let repo = &scan.report.repositories[1];
+    assert_eq!(repo.inspection.as_ref().unwrap().packages.len(), 1);
+    assert_eq!(
+        repo.inspection.as_ref().unwrap().packages[0].exists_on_registry,
+        None
+    );
+    assert_eq!(repo.errors[0]["stage"], "registry");
+    assert_eq!(repo.errors[0]["package"], "token");
+    assert_eq!(
+        scan.report
+            .findings
+            .iter()
+            .filter(|finding| finding["type"] == "unpublished")
+            .count(),
+        3
+    );
+}
 
 #[tokio::test]
 async fn account_registry_probes_keep_publisher_configuration_unknown() {
@@ -82,15 +214,16 @@ impl GithubGateway for FakeGithub {
                 assert!(args.windows(2).any(|pair| pair == ["--branch", "main"]));
                 let name = args[2].split('/').nth(1).unwrap();
                 Ok(json!([
+                    {"path":".github/workflows/release.yml","content":"jobs:\n  publish:\n    permissions:\n      id-token: write\n    steps:\n      - run: cargo publish"},
                     {"path":"Cargo.toml","content":format!("[package]\nname='{name}'\nversion='1.0.0'\nrepository='https://github.com/old/project'\n")},
                     {"path":"tests/Cargo.toml","content":"[package]\nname='ignored'\nversion='1.0.0'\n"}
                 ]))
             }
-            ("runs", "failures") => {
-                assert!(args.contains(&"No Trusted Publishing config found".into()));
-                Ok(
-                    json!([{"repository":"team/failing","runUrl":"https://github.com/team/failing/actions/runs/1","matches":[{"lineNumber":3,"line":"No Trusted Publishing config found"}]}]),
-                )
+            ("runs", "list") => Ok(
+                json!([{ "id":1,"head_branch":"main","event":"push","conclusion":if args[2] == "team/failing" {"failure"} else {"success"},"html_url":"https://github.com/team/failing/actions/runs/1" }]),
+            ),
+            ("runs", "logs") => {
+                Ok(json!([{ "lineNumber":3,"line":"No Trusted Publishing config found" }]))
             }
             _ => panic!("unexpected GitHub call: {args:?}"),
         }

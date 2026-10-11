@@ -3,6 +3,7 @@ import { exec } from "command-stream";
 import { automatedDescription } from "./browser-options.mjs";
 import { probePython } from "./python.mjs";
 import { getJson, registryEndpoint } from "./registry-state.mjs";
+import { NODE_ENGINES, supportsNode } from "./node-version.mjs";
 
 /** The Node.js versions npm 11 runs on. */
 export const NPM_11_ENGINES = "^20.17.0 || >=22.9.0";
@@ -214,21 +215,22 @@ export function planPrerequisites(plan, environment, browser = {}) {
   if (!environment || plan.steps.length === 0) {
     return [];
   }
-  const items = [];
+  const items = [
+    prerequisite(
+      "node",
+      "Node.js",
+      environment.node ?? "not found",
+      NODE_ENGINES,
+      supportsNode(environment.node),
+    ),
+  ];
   const unchecked = environment.offline
     ? "not checked (--offline)"
     : "not checked";
   if (plan.registry === "npm") {
     const node = environment.node;
-    const nodeOk = node ? supportsNpm11(node) : false;
+    const nodeOk = node ? supportsNode(node) : false;
     items.push(
-      prerequisite(
-        "node",
-        "Node.js",
-        node ?? "not found",
-        NPM_11_ENGINES,
-        nodeOk,
-      ),
       prerequisite(
         "npm",
         "npm",

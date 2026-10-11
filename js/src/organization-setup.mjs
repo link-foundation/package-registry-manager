@@ -27,8 +27,29 @@ async function prepareRepository(item) {
 
 /** Plan from API snapshots; fetch worktrees only for repositories being changed. */
 export async function accountCommand(command, options, outputPlans) {
-  return withAccountScan(options, async (scan, github) => {
+  if (command === "inspect" && options.format !== "json") {
+    process.stdout.write("Repository\tRegistry\tPackage\tFinding\n");
+  }
+  const scanOptions = {
+    ...options,
+    onRepository: async (item, findings, index, total) => {
+      console.error(
+        `[${index}/${total}] ${item.repository}${item.error ? `: ${item.error}` : ""}`,
+      );
+      if (command === "inspect" && options.format !== "json") {
+        process.stdout.write(
+          renderScan({ repositories: [item], findings })
+            .split("\n")
+            .slice(1)
+            .join("\n"),
+        );
+      }
+      await options.onRepository?.(item, findings, index, total);
+    },
+  };
+  return withAccountScan(scanOptions, async (scan, github) => {
     if (command === "inspect") {
+      const errors = scan.repositories.filter((item) => item.error);
       for (const item of scan.repositories) {
         if (item.inspection) {
           item.inspection.repository.root = `https://github.com/${item.repository}`;
@@ -37,15 +58,15 @@ export async function accountCommand(command, options, outputPlans) {
       process.stdout.write(
         options.format === "json"
           ? `${JSON.stringify(scan, null, 2)}\n`
-          : renderScan(scan),
+          : `Scanned ${scan.repositories.length} repositories; ${errors.length} with errors.\n${errors.map((item) => `${item.repository}: ${item.error}\n`).join("")}`,
       );
+      if (errors.length) {
+        process.exitCode = 1;
+      }
       return scan;
     }
-    const items = scan.repositories.filter((item) => item.inspection);
+    let items = scan.repositories.filter((item) => item.inspection);
     const errors = scan.repositories.filter((item) => item.error);
-    if (errors.length) {
-      console.error(renderScan({ repositories: errors, findings: [] }));
-    }
     for (const item of items) {
       const workflow = options.planOptions?.workflow;
       if (workflow !== undefined) {
@@ -67,11 +88,18 @@ export async function accountCommand(command, options, outputPlans) {
             () => false,
           ))
         ) {
-          throw new Error(
-            `--workflow: ${item.repository} has no .github/workflows/${workflow}`,
-          );
+          const message = `--workflow: ${item.repository} has no .github/workflows/${workflow}`;
+          (item.errors ??= []).push({ stage: "plan", workflow, message });
+          item.error = [item.error, message].filter(Boolean).join("; ");
+          if (!errors.includes(item)) {
+            errors.push(item);
+          }
+          items = items.filter((candidate) => candidate !== item);
         }
       }
+    }
+    if (errors.length) {
+      console.error(renderScan({ repositories: errors, findings: [] }));
     }
     const packages = items.flatMap((item) => item.inspection.packages);
     const environment = await (options.probeEnvironment ?? probeEnvironment)({
@@ -108,15 +136,25 @@ export async function accountCommand(command, options, outputPlans) {
     for (const plan of display) {
       plan.repository.root = `https://github.com/${plan.repository.github_owner}/${plan.repository.github_repository}`;
     }
-    outputPlans(display, options.format);
+    if (options.format === "json") {
+      const report = structuredClone(scan);
+      for (const item of report.repositories) {
+        if (item.inspection) {
+          item.inspection.repository.root = `https://github.com/${item.repository}`;
+        }
+      }
+      process.stdout.write(
+        `${JSON.stringify({ ...report, plans: display }, null, 2)}\n`,
+      );
+    } else {
+      outputPlans(display, options.format);
+    }
     if (options.package && !plans.length) {
       throw new Error(`package '${options.package}' was not found`);
     }
     if (command === "plan" || plans.length === 0) {
       if (errors.length) {
-        throw new Error(
-          "some repositories could not be scanned; see scan errors",
-        );
+        process.exitCode = 1;
       }
       if (!plans.length && options.format !== "json") {
         console.log("No package findings require setup.");
