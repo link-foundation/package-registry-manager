@@ -116,3 +116,93 @@ fn release_retry_requires_correct_metadata_at_the_selected_remote_sha() {
         }
     }
 }
+
+#[test]
+fn release_retry_skips_newer_pr_and_lint_runs() {
+    for repair in [false, true] {
+        let temporary = TempDir::new().unwrap();
+        let Some((repository, state)) = prepare(&temporary) else {
+            return;
+        };
+        fs::write(
+            state.join("release-runs.json"),
+            include_str!("../../../tests/fixtures/repository-transfer/release-runs.json"),
+        )
+        .unwrap();
+        let logfile = state.join("log.jsonl");
+        let registry = MockRegistry::start(move |path| {
+            path.starts_with("/npm/").then(|| {
+                if fs::read_to_string(&logfile).unwrap_or_default().contains(r#""run","rerun""#) {
+                    r#"{"version":"0.1.1","_npmUser":{"trustedPublisher":{}},"dist":{"attestations":{}}}"#.into()
+                } else { r#"{"version":"0.1.0"}"#.into() }
+            })
+        });
+        let mut env = vec![("FAKE_RELEASE_RUN", "mixed")];
+        if repair {
+            env.extend([
+                ("FAKE_TRANSFER", "1"),
+                ("FAKE_TRANSFER_METADATA", "correct"),
+            ]);
+        }
+        let output = setup_command(
+            &repository,
+            &state,
+            &registry,
+            &["--no-browser", "--verify-release"],
+            &env,
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let log = commands(&read_log(&state));
+        assert_eq!(
+            log.iter()
+                .filter(|args| args.starts_with(&["gh".into(), "run".into(), "list".into()]))
+                .count(),
+            2
+        );
+        assert_eq!(
+            log.iter()
+                .filter(|args| args.contains(&"--log-failed".into()))
+                .map(|args| args[3].as_str())
+                .collect::<Vec<_>>(),
+            ["42"]
+        );
+        let retries: Vec<_> = log
+            .iter()
+            .filter(|args| args.starts_with(&["gh".into(), "run".into(), "rerun".into()]))
+            .map(|args| args[3].as_str())
+            .collect();
+        assert_eq!(retries, ["42"], "{stdout}");
+        assert!(log.iter().any(|args| args.starts_with(&[
+            "gh".into(),
+            "run".into(),
+            "watch".into(),
+            "42".into()
+        ])));
+        assert!(!log.iter().any(|args| args.starts_with(&[
+            "gh".into(),
+            "workflow".into(),
+            "run".into()
+        ])));
+        assert!(stdout.contains("https://github.com/acme/pipeline-app/actions/runs/42"));
+        assert!(stdout.contains("OIDC"));
+        assert!(!stdout.contains("trusted publishing alone will not fix it"));
+        for args in log
+            .iter()
+            .filter(|args| args.starts_with(&["gh".into(), "run".into(), "list".into()]))
+        {
+            assert_eq!(
+                args[args.iter().position(|arg| arg == "--branch").unwrap() + 1],
+                "main"
+            );
+            assert!(matches!(
+                args[args.iter().position(|arg| arg == "--event").unwrap() + 1].as_str(),
+                "push" | "workflow_dispatch"
+            ));
+        }
+    }
+}

@@ -33,6 +33,7 @@ import { packageDirectory } from "./plan.mjs";
 import { twoFactorMode } from "./prerequisites.mjs";
 import { getJson, probePackage } from "./registry-state.mjs";
 import { launchBrowser, signInDomains } from "./sign-in-import.mjs";
+import { PUBLISH_REJECTED, selectReleaseRun } from "./release-runs.mjs";
 import { runRepositoryRepair } from "./repository-repair.mjs";
 import {
   publisherIdentities,
@@ -54,8 +55,6 @@ const QUIET_CHECKS = new Set(["check-sign-in", "check-pages"]);
 const LISTED_PUBLISHER = /^\s*(?:id|type|file):\s*\S|"(?:id|type|file)"\s*:/m;
 /** What `npm trust github` prints once the registry stored the publisher. */
 const TRUST_CREATED = /Trust configuration created successfully/i;
-/** npm's answer when a workflow publishes without an attached trusted publisher. */
-const PUBLISH_REJECTED = /\bE404\b|404 Not Found|invalid-publisher/i;
 /** Where `--browser` opens URLs that need no automation. */
 export const BROWSER_MODES = ["default", "automated"];
 
@@ -245,6 +244,9 @@ export class SetupSession {
   }
 
   async check(step) {
+    if (step.id === "inspect-release-run") {
+      return this.inspectReleaseRun();
+    }
     const result = INTERACTIVE_CHECKS.has(step.id)
       ? await this.runProcess(step, false)
       : await this.capture(step);
@@ -273,14 +275,12 @@ export class SetupSession {
       case "check-2fa":
       case "verify-2fa":
         return this.checkTwoFactor(step, result);
-      case "inspect-release-run":
-        return this.inspectReleaseRun(result);
       case "read-release-failure":
         if (result.code !== 0) {
           console.error("warning: could not read the failed release log");
         } else if (PUBLISH_REJECTED.test(output)) {
           console.log(
-            "  It failed at publish: npm rejected the workflow (E404/invalid-publisher) because no trusted publisher is attached yet. After attaching trust, its failed jobs can be re-run.",
+            "  It failed at publish: the registry rejected the workflow's trusted publishing identity (OIDC/E404/invalid-publisher). After attaching trust, its failed jobs can be re-run.",
           );
           this.conditions.add("release-failed-publish");
         } else {
@@ -380,19 +380,24 @@ export class SetupSession {
     return pagesSettingsUrl(`${github_owner}/${github_repository}`);
   }
 
-  inspectReleaseRun(result) {
-    if (result.code !== 0) {
-      console.error("warning: could not list the release workflow runs");
+  async inspectReleaseRun() {
+    let selection;
+    try {
+      selection = await selectReleaseRun(this);
+    } catch (error) {
+      console.error(`warning: ${error.message}`);
       return;
     }
-    const [run] = JSON.parse(String(result.stdout || "[]"));
+    const { run, publishFailure } = selection;
     if (!run) {
       console.log("  The release workflow has not run yet.");
       return;
     }
     const outcome = run.conclusion || run.status;
-    console.log(`  The latest release run ${outcome}: ${run.url}`);
-    if (run.conclusion === "failure") {
+    console.log(
+      `  The ${publishFailure ? "selected failed" : "latest"} release run ${outcome}: ${run.url}`,
+    );
+    if (publishFailure) {
       this.values.failed_run_id = String(run.databaseId);
       this.conditions.add("release-failed");
     }
@@ -487,6 +492,11 @@ export class SetupSession {
       this.temporary = await mkdtemp(path.join(os.tmpdir(), "prm-release-"));
       this.values.worktree = path.join(this.temporary, "worktree");
       this.values.pack_destination = this.temporary;
+    }
+    if (step.id === "rerun-release" && this.releaseSelection?.run) {
+      console.log(
+        `  Re-running failed release jobs: ${this.releaseSelection.run.url}`,
+      );
     }
     // Pack output is captured so npm's warnings can be reviewed.
     const result =

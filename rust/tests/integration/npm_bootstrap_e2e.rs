@@ -376,7 +376,9 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
                 "npm publish {destination}/pipeline-app-0.1.0.tgz --access public --auth-type=web --browser=false --provenance=false"
             ),
             "npx -y npm@^11.10 trust list pipeline-app --browser=false".to_owned(),
-            "gh run list --repo acme/pipeline-app --workflow release.yml --limit 1 --json databaseId,conclusion,status,url".to_owned(),
+            "gh api repos/acme/pipeline-app --jq .default_branch".to_owned(),
+            "gh run list --repo acme/pipeline-app --workflow release.yml --branch main --event push --limit 100 --json databaseId,conclusion,status,url,headSha,headBranch,event,createdAt".to_owned(),
+            "gh run list --repo acme/pipeline-app --workflow release.yml --branch main --event workflow_dispatch --limit 100 --json databaseId,conclusion,status,url,headSha,headBranch,event,createdAt".to_owned(),
             "npx -y npm@^11.10 trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false".to_owned(),
             "gh secret list --repo acme/pipeline-app --json name".to_owned(),
             "gh secret delete NPM_TOKEN --repo acme/pipeline-app".to_owned(),
@@ -930,6 +932,7 @@ fn enables_github_pages_for_a_workflow_that_deploys_there() {
     assert_eq!(
         pages,
         [
+            "gh api repos/acme/pipeline-app --jq .default_branch",
             "gh api repos/acme/pipeline-app/pages",
             "gh api -X POST repos/acme/pipeline-app/pages -f build_type=workflow",
         ]

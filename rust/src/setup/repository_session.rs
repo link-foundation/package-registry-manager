@@ -1,7 +1,6 @@
 //! Execute transfer repairs without trusting a historical publisher identity.
 
 use anyhow::{anyhow, bail, Result};
-use serde_json::Value;
 
 use super::{is_yes, prompt, Session};
 use crate::crates_api::page_fetch_script;
@@ -270,42 +269,17 @@ impl Session<'_> {
                     bail!("verify repository repairs before retrying release jobs");
                 }
                 let slug = repository_slug(&self.plan.repository).unwrap_or_default();
-                let expected = self
-                    .plan
-                    .oidc_publisher
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("unknown replacement publisher"))?;
-                let lookup = SetupStep::new(
-                    "release-lookup",
-                    "Read failed release jobs",
-                    StepKind::Check,
-                    "Read the latest workflow run",
-                )
-                .command(
-                    "gh",
-                    &[
-                        "run",
-                        "list",
-                        "--repo",
-                        &slug,
-                        "--workflow",
-                        &expected.workflow,
-                        "--limit",
-                        "1",
-                        "--json",
-                        "databaseId,conclusion,headSha",
-                    ],
-                )
-                .cwd(".");
-                let result = self.capture(&lookup).await?;
-                if result.code != 0 {
-                    bail!("could not inspect release jobs after repository repair");
-                }
-                let runs: Value = serde_json::from_str(&result.stdout)?;
-                let run = &runs[0];
-                if run["conclusion"] != "failure" {
+                let selection = self.select_release_run().await?;
+                if !selection.publish_failure {
                     return Ok(());
                 }
+                let Some(run) = selection.run else {
+                    return Ok(());
+                };
+                println!(
+                    "  Selected failed release run: {}",
+                    super::json_text(&run["url"])
+                );
                 let corrected =
                     if let Some(sha) = run["headSha"].as_str().filter(|sha| !sha.is_empty()) {
                         verify_remote_manifest(
@@ -329,11 +303,24 @@ impl Session<'_> {
                 {
                     bail!("merge the manifest repository URL fix before retrying release jobs");
                 }
-                let id = run["databaseId"].to_string();
+                let expected = self
+                    .plan
+                    .oidc_publisher
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("unknown replacement publisher"))?;
+                let id = super::json_text(&run["databaseId"]);
                 let args = if corrected {
                     vec!["run", "rerun", &id, "--repo", &slug, "--failed"]
                 } else {
-                    vec!["workflow", "run", &expected.workflow, "--repo", &slug]
+                    vec![
+                        "workflow",
+                        "run",
+                        &expected.workflow,
+                        "--repo",
+                        &slug,
+                        "--ref",
+                        &selection.branch,
+                    ]
                 };
                 let retry = SetupStep::new(
                     "retry-repaired-release",
@@ -345,6 +332,10 @@ impl Session<'_> {
                 .cwd(".")
                 .confirmed();
                 self.command(&retry).await?;
+                if corrected {
+                    self.values.insert("run_id".into(), id);
+                    self.conditions.remove("release-dispatch");
+                }
             }
         }
         Ok(())

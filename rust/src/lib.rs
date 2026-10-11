@@ -30,6 +30,7 @@ pub mod profile;
 pub mod publishers;
 pub mod python;
 pub mod registry_state;
+pub mod release_runs;
 pub mod repository_identity;
 pub mod repository_repair;
 pub mod setup;

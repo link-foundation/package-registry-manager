@@ -350,11 +350,24 @@ test("release retry blocks stale metadata and dispatches only a corrected defaul
     const session = sessionWith([evidence.publishers[1]]);
     await runRepositoryRepair(session, { id: "verify-repository-publisher" });
     const sent = [];
-    session.capture = async () => ({
+    session.capture = async ({ command: { args } }) => ({
       code: 0,
-      stdout: JSON.stringify([
-        { databaseId: 99, conclusion: "failure", headSha: "deadbeef" },
-      ]),
+      stdout:
+        args[0] === "api"
+          ? "main"
+          : JSON.stringify(
+              args[1] === "list"
+                ? [
+                    {
+                      databaseId: 99,
+                      conclusion: "failure",
+                      headSha: "deadbeef",
+                      headBranch: "main",
+                      event: "push",
+                    },
+                  ]
+                : { jobs: [{ name: "publish", conclusion: "failure" }] },
+            ),
     });
     session.command = async (step) => sent.push(step.command.args);
     let reference;

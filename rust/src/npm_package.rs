@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::auth_urls::ANSI_PATTERN;
 
 /// npm's rejection of a publish from a workflow it does not trust.
-pub const PUBLISH_REJECTED: &str = r"(?i)\bE404\b|404 Not Found|invalid-publisher";
+pub const PUBLISH_REJECTED: &str = r"(?i)\bE404\b|404 Not Found|invalid[-_ ]publisher|(?:npm|crates\.io|PyPI) refused the OIDC (?:package |token )?exchange\s*\((?:400|401|403|404)\)|trusted publisher[^\n]*(?:does not match|mismatch)|(?:invalid|unregistered)[-_ ](?:publishing[-_ ])?publisher";
 
 /// Whether `npm trust list` output, human-readable or JSON, names a trusted
 /// publisher.

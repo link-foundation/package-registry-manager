@@ -228,7 +228,7 @@ if (tool === "git") {
 }
 if (tool === "gh") {
   if (process.env.FAKE_TRANSFER && args.includes(".full_name")) console.log("acme/pipeline-app");
-  if (process.env.FAKE_TRANSFER_METADATA && args.includes(".default_branch")) console.log("main");
+  if (args.includes(".default_branch")) console.log("main");
   if (process.env.FAKE_TRANSFER_METADATA && command.startsWith("pr create")) console.log("https://github.com/acme/pipeline-app/pull/100");
   if (/^api (?:-X (?:POST|PUT) )?repos\/[^ ]+\/pages\b/.test(command)) {
     if (command.includes("-X ")) set("pages", true);
@@ -270,6 +270,14 @@ if (tool === "gh") {
       }),
     );
   if (command.startsWith("run list")) {
+    if (process.env.FAKE_RELEASE_RUN === "mixed") {
+      const fixture = JSON.parse(fs.readFileSync(path.join(process.env.FAKE_STATE, "release-runs.json"), "utf8"));
+      const branch = args.includes("--branch") ? args[args.indexOf("--branch") + 1] : null;
+      const event = args.includes("--event") ? args[args.indexOf("--event") + 1] : null;
+      const limit = Number(args[args.indexOf("--limit") + 1]);
+      console.log(JSON.stringify(fixture.filter(run => (!branch || run.headBranch === branch) && (!event || run.event === event)).slice(0, limit)));
+      process.exit(0);
+    }
     const failed = process.env.FAKE_RELEASE_RUN === "failed-publish";
     const id = failed ? 42 : 41;
     console.log(
@@ -277,6 +285,9 @@ if (tool === "gh") {
         {
           databaseId: id,
           conclusion: failed ? "failure" : "success",
+          headBranch: "main",
+          event: args.includes("--event") ? args[args.indexOf("--event") + 1] : "push",
+          createdAt: "2026-10-10T09:00:00Z",
           ...(process.env.FAKE_TRANSFER_METADATA ? {headSha:"original-sha"} : {}),
           status: "completed",
           url: `https://github.com/acme/pipeline-app/actions/runs/${id}`,
@@ -285,9 +296,17 @@ if (tool === "gh") {
     );
   }
   if (command.startsWith("run view") && command.includes("--log-failed")) {
+    if (process.env.FAKE_RELEASE_RUN === "mixed") {
+      console.log(args[2] === "42" ? "release-preflight\tCheck\tnpm refused the OIDC package exchange (404) -- the trusted publisher on npmjs.com does not match" : "lint\tCheck\tmissing changeset");
+      process.exit(0);
+    }
     console.log("release\tPublish\tnpm error code E404");
     console.log(
       "release\tPublish\tnpm error 404 Not Found - PUT https://registry.npmjs.org/pipeline-app",
     );
+  }
+  if (command.startsWith("run view") && args.includes("--json")) {
+    const failed = process.env.FAKE_RELEASE_RUN;
+    console.log(JSON.stringify({ jobs: [{ name: failed === "mixed" && !["42", "41"].includes(args[2]) ? "lint" : "release-preflight", conclusion: failed ? "failure" : "success" }] }));
   }
 }
