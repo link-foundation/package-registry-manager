@@ -188,7 +188,23 @@ fn release_retry_skips_newer_pr_and_lint_runs() {
             "workflow".into(),
             "run".into()
         ])));
-        assert!(stdout.contains("https://github.com/acme/pipeline-app/actions/runs/42"));
+        let lines: Vec<_> = stdout.lines().collect();
+        let selected = lines
+            .iter()
+            .position(|line| {
+                *line == "  The selected failed release run failure: https://github.com/acme/pipeline-app/actions/runs/42"
+            })
+            .expect("the selected release URL must be printed");
+        let retry_message = if repair {
+            "  Selected failed release run: https://github.com/acme/pipeline-app/actions/runs/42"
+        } else {
+            "  Re-running the failed release jobs."
+        };
+        let retry = lines
+            .iter()
+            .position(|line| *line == retry_message)
+            .expect("the release retry must be announced");
+        assert!(selected < retry, "{stdout}");
         assert!(stdout.contains("OIDC"));
         assert!(!stdout.contains("trusted publishing alone will not fix it"));
         for args in log
