@@ -129,10 +129,17 @@ export async function withAccountScan(options, callback) {
     };
     for (const [index, repo] of repositories.entries()) {
       const slug = repo.full_name;
-      if (!/^[\w.-]+\/[\w.-]+$/.test(slug)) {
-        throw new Error("gh-manager returned an invalid repository name");
-      }
+      const item = {
+        repository: slug,
+        default_branch: repo.default_branch,
+        errors: [],
+      };
+      const onError = (error) => item.errors.push(error);
+      const findingStart = scan.findings.length;
       try {
+        if (!/^[\w.-]+\/[\w.-]+$/.test(slug)) {
+          throw new Error("gh-manager returned an invalid repository name");
+        }
         const root = path.join(directory, String(index));
         await writeSnapshot(
           root,
@@ -145,70 +152,138 @@ export async function withAccountScan(options, callback) {
         );
         const discovered = await inspectRepository(root, {
           includeSkipped: options.verbose,
+          onError,
         });
-        const inspection = options.offline
-          ? discovered
-          : await (options.probe ?? probeRegistryState)(discovered, {
-              ...options,
-              runIdentity: async (program, args) =>
-                program === "gh"
-                  ? slug
-                  : identityCommand(program, args, {
-                      ...options,
-                      repository: root,
-                    }),
-              repository: root,
-            });
-        scan.repositories.push({
-          repository: slug,
-          default_branch: repo.default_branch,
-          inspection,
-        });
-        scan.findings.push(...packageFindings(inspection));
-      } catch (error) {
-        scan.repositories.push({ repository: slug, error: error.message });
-      }
-    }
-    if (!options.offline) {
-      let failures;
-      if (options.org) {
-        failures = await github.runs.failures({
-          org: options.org,
-          grep: RELEASE_FAILURE_PATTERNS,
-        });
-      } else {
-        failures = [];
-        for (const repo of repositories) {
-          const [latest] = await github.runs.list(repo.full_name, {
-            branch: repo.default_branch,
-            limit: 1,
-          });
-          if (latest?.conclusion === "failure") {
-            const matches = await github.runs.logs(latest.id, {
-              repo: repo.full_name,
-              grep: RELEASE_FAILURE_PATTERNS,
-            });
-            if (matches.length) {
-              failures.push({
-                repository: repo.full_name,
-                runUrl: latest.html_url,
-                matches,
+        item.inspection = discovered;
+        if (!options.offline) {
+          // Probe packages independently so an unexpected failure retains peers.
+          const packages = [];
+          for (const pkg of discovered.packages) {
+            try {
+              const inspection = await (options.probe ?? probeRegistryState)(
+                { ...discovered, packages: [pkg] },
+                {
+                  ...options,
+                  onError,
+                  runIdentity: async (program, args) =>
+                    program === "gh"
+                      ? slug
+                      : identityCommand(program, args, {
+                          ...options,
+                          repository: root,
+                        }),
+                  repository: root,
+                },
+              );
+              item.inspection.repository = inspection.repository;
+              packages.push(...inspection.packages);
+            } catch (error) {
+              onError({
+                stage: "registry",
+                manifest: pkg.manifest,
+                package: pkg.name,
+                message: error.message,
               });
+              packages.push(pkg);
             }
           }
+          item.inspection.packages = packages;
         }
+        scan.findings.push(...packageFindings(item.inspection));
+        if (!options.offline) {
+          await releaseHealth(github, item, scan.findings, onError);
+        }
+      } catch (error) {
+        onError({ stage: "repository", message: error.message });
       }
-      scan.findings.push(
-        ...failures.map((evidence) => ({
-          repository: evidence.repository,
-          type: "release-failing",
-          evidence,
-        })),
+      if (item.errors.length) {
+        item.error = item.errors
+          .map(
+            (error) =>
+              `${error.manifest ? `${error.manifest}: ` : ""}${error.message}`,
+          )
+          .join("; ");
+      } else {
+        delete item.errors;
+      }
+      scan.repositories.push(item);
+      await options.onRepository?.(
+        item,
+        scan.findings.slice(findingStart),
+        index + 1,
+        repositories.length,
       );
     }
     return await callback(scan, github);
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/** Only inspect the newest default-branch release; successful runs need no logs. */
+async function releaseHealth(github, item, findings, onError) {
+  const workflows = new Set(
+    [
+      item.inspection.repository.release_workflow,
+      ...item.inspection.packages.flatMap((pkg) => [
+        pkg.workflow,
+        ...(pkg.workflow_candidates ?? []),
+      ]),
+    ].filter(Boolean),
+  );
+  for (const workflow of workflows) {
+    try {
+      if (!item.default_branch) {
+        throw new Error(
+          "repository has no default branch for release inspection",
+        );
+      }
+      const runs = [];
+      for (const event of ["push", "workflow_dispatch"]) {
+        runs.push(
+          ...(await github.runs.list(item.repository, {
+            workflow,
+            branch: item.default_branch,
+            event,
+            limit: 1,
+          })),
+        );
+      }
+      const latest = runs
+        .filter(
+          (run) =>
+            run.head_branch === item.default_branch &&
+            ["push", "workflow_dispatch"].includes(run.event),
+        )
+        .sort(
+          (left, right) =>
+            String(right.created_at).localeCompare(String(left.created_at)) ||
+            right.id - left.id,
+        )[0];
+      if (latest?.conclusion !== "failure") {
+        continue;
+      }
+      const evidence = {
+        repository: item.repository,
+        workflow,
+        runId: latest.id,
+        runUrl: latest.html_url,
+        conclusion: latest.conclusion,
+      };
+      // Preserve known failed-release health even if its diagnostic logs expired.
+      const finding = {
+        repository: item.repository,
+        type: "release-failing",
+        evidence,
+      };
+      findings.push(finding);
+      evidence.matches = await github.runs.logs(latest.id, {
+        repo: item.repository,
+        grep: RELEASE_FAILURE_PATTERNS,
+      });
+    } catch (error) {
+      onError({ stage: "release", workflow, message: error.message });
+    }
   }
 }
 

@@ -43,6 +43,18 @@ pub fn inspect_repository(root: &Path) -> Result<Inspection> {
 /// Inspect a repository with explicit options. Manifests in test and example
 /// directories, or matched by the ignore list, are left out.
 pub fn inspect_repository_with(root: &Path, options: InspectOptions) -> Result<Inspection> {
+    inspect_repository_recovering(root, options, None)
+}
+
+/// Callback receiving the manifest path and a recoverable parsing error.
+pub type ManifestErrorHandler<'a> = dyn FnMut(&str, &str) + 'a;
+
+/// Inspect an account snapshot, reporting malformed manifests while keeping valid peers.
+pub fn inspect_repository_recovering(
+    root: &Path,
+    options: InspectOptions,
+    mut on_error: Option<&mut ManifestErrorHandler<'_>>,
+) -> Result<Inspection> {
     let root = root
         .canonicalize()
         .with_context(|| format!("repository does not exist: {}", root.display()))?;
@@ -79,7 +91,13 @@ pub fn inspect_repository_with(root: &Path, options: InspectOptions) -> Result<I
             Err(_) if test_directory(&relative).is_some() => {
                 kept(&workflows, &relative, false, &mut skipped);
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                if let Some(report) = on_error.as_mut() {
+                    report(&relative, &error.to_string());
+                } else {
+                    return Err(error);
+                }
+            }
         }
     }
     let coordinate_manifests = manifests

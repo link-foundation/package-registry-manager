@@ -12,6 +12,14 @@ use crate::registry_state::{Endpoints, Lookup, RegistryClient};
 
 /// The Node.js versions npm 11 runs on.
 pub const NPM_11_ENGINES: &str = "^20.17.0 || >=22.9.0";
+/// Minimum Node.js runtime for the GitHub dependency used by both ports.
+pub const NODE_ENGINES: &str = ">=22.12.0";
+
+/// Whether Node.js can load the installed GitHub dependency.
+#[must_use]
+pub fn supports_node(version: &str) -> bool {
+    parse_version(version).is_some_and(|version| version >= [22, 12, 0])
+}
 /// The Node.js versions npm 12 runs on.
 pub const NPM_12_ENGINES: &str = "^22.22.2 || ^24.15.0 || >=26.0.0";
 /// Where an npm account turns on two-factor authentication.
@@ -350,24 +358,23 @@ pub fn plan_prerequisites(
     if plan.steps.is_empty() {
         return Vec::new();
     }
-    let mut items = Vec::new();
+    let node_ok = environment.node.as_deref().is_some_and(supports_node);
+    let mut items = vec![prerequisite(
+        "node",
+        "Node.js",
+        environment
+            .node
+            .clone()
+            .unwrap_or_else(|| "not found".into()),
+        NODE_ENGINES.into(),
+        Some(node_ok),
+    )];
     let unchecked = if environment.offline {
         "not checked (--offline)"
     } else {
         "not checked"
     };
     if plan.registry == Registry::Npm {
-        let node_ok = environment.node.as_deref().is_some_and(supports_npm11);
-        items.push(prerequisite(
-            "node",
-            "Node.js",
-            environment
-                .node
-                .clone()
-                .unwrap_or_else(|| "not found".to_owned()),
-            NPM_11_ENGINES.to_owned(),
-            Some(node_ok),
-        ));
         items.push(prerequisite(
             "npm",
             "npm",

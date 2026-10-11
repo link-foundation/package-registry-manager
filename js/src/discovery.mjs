@@ -92,7 +92,15 @@ export async function inspectRepository(repository, options = {}) {
           return await parseManifest(manifestPath, manifest);
         } catch (error) {
           if (testDirectory(manifest) === null) {
-            throw error;
+            if (!options.onError) {
+              throw error;
+            }
+            options.onError({
+              stage: "manifest",
+              manifest,
+              message: error.message,
+            });
+            return null;
           }
           return { manifest, publishable: false, invalid: true };
         }

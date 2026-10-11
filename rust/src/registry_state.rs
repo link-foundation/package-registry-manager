@@ -458,7 +458,10 @@ impl RegistryClient {
                 tasks.spawn(async move { (index, client.probe_package(&package).await) });
             }
         }
-        while let Some(Ok((index, state))) = tasks.join_next().await {
+        while let Some(result) = tasks.join_next().await {
+            let Ok((index, state)) = result else {
+                continue;
+            };
             let package = &mut probed.packages[index];
             if state.exists.is_some() {
                 package.exists_on_registry = state.exists;

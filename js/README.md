@@ -33,7 +33,25 @@ package-registry-manager setup --org link-foundation --all --execute --browser-i
 Scans read matched manifests/workflows through gh-manager. Account setup shares
 one browser, groups npm approvals, and uses CI evidence to preserve healthy tokens
 or verify replacements before revocation. `--secret-name '{REGISTRY}_TOKEN_{REPO}'`
-selects custom credential names. Rust requires Node.js and npm for its pinned
-GitHub CLI dependency.
+selects custom credential names.
+
+Account scans print progress to stderr (`[37/169] owner/repository`) and stream
+text inspection results as each repository finishes. JSON inspection remains one
+report on stdout. Repository, manifest, registry lookup, and release-log failures are
+included in each repository's `error` and structured `errors` fields; valid
+packages and later repositories are retained. The command exits nonzero after
+printing all results, and `setup --org ORG --all` still plans the usable packages.
+Release health checks only the latest default-branch push or manual run of each
+detected publishing workflow; it downloads logs only when that run failed.
+Expired logs retain the failed run's URL and conclusion alongside the error.
+Account `plan` and `setup` JSON reports also include a `plans` array.
+
+Without `--repository`, online commands prefer the current repository's
+organization, then a sole organization membership, then the signed-in GitHub
+user. Multiple memberships fall back to the user; select an organization with
+`--org`. If GitHub account discovery is unavailable, the current directory is
+inspected. Explicit `--repository` (including `--repository .`), `--ref`, and
+local `--offline` commands keep local scope. Both CLIs' GitHub dependency needs
+Node.js 22.12 or newer and npm; JavaScript checks the runtime before loading it.
 
 See the [bootstrap, wrapper and credential guide](../docs/registry-setup.md) for branch/PR setup, dual npm names, registry policies and integration limits.

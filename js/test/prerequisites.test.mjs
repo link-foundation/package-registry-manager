@@ -79,9 +79,9 @@ test("lists manual prerequisites before an npm plan", () => {
   assert.deepEqual(
     items.map((item) => [item.id, item.ok]),
     [
-      ["node", true],
+      ["node", false],
       ["npm", true],
-      ["npm-trust", true],
+      ["npm-trust", false],
       ["npm-2fa", false],
       ["gh", false],
       ["browser", null],
@@ -89,9 +89,9 @@ test("lists manual prerequisites before an npm plan", () => {
   );
   assert.deepEqual(renderPrerequisites(items), [
     "  prerequisites:",
-    "    - Node.js: v20.19.4; needs ^20.17.0 || >=22.9.0",
+    "    - Node.js: v20.19.4; needs >=22.12.0 [action needed]",
     "    - npm: 10.8.2; needs installed",
-    "    - npm for npm trust: npm@^11.10, resolves to 11.21.0; needs npm 11.10 or newer; npm 12 only on Node.js ^22.22.2 || ^24.15.0 || >=26.0.0",
+    "    - npm for npm trust: npm@^11.10, resolves to 11.21.0; needs npm 11.10 or newer; npm 12 only on Node.js ^22.22.2 || ^24.15.0 || >=26.0.0 [action needed]",
     "    - npm two-factor authentication: off; needs enabled at https://docs.npmjs.com/configuring-two-factor-authentication/; npm trust requires it [action needed]",
     "    - GitHub CLI: signed in as octo (scopes: gist); needs signed in with the repo scope, for gh secret and gh run [action needed]",
     "    - Browser: none; URLs are printed (--no-browser); needs signed in to the registry, or ready to sign in",

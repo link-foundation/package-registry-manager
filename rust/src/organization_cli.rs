@@ -4,7 +4,9 @@ use super::{
 };
 use anyhow::{bail, Context, Result};
 use package_registry_manager::github::GhManager;
-use package_registry_manager::organization_scan::{scan_repositories, ScannedRepository};
+use package_registry_manager::organization_scan::{
+    scan_repositories_with_progress, ScanReport, ScannedRepository,
+};
 use package_registry_manager::{
     plan::{build_plans_with, PlanOptions},
     prerequisites::probe_environment,
@@ -97,27 +99,79 @@ async fn prepare(repo: &ScannedRepository) -> Result<()> {
 
 #[allow(clippy::future_not_send)] // Browser Commander's CDP transport is intentionally !Sync.
 pub async fn run(args: &Args) -> Result<()> {
+    if matches!(args.command, Commands::Inspect) && matches!(args.format, OutputFormat::Text) {
+        write_stdout("Repository\tRegistry\tPackage\tFinding\n")?;
+    }
     let endpoints = Endpoints::from_env();
     let client = RegistryClient::new(endpoints.clone(), args.verbose);
-    let mut scan = scan_repositories(
+    let mut scan = scan_repositories_with_progress(
         &GhManager,
         args.org.as_deref(),
         args.user.as_deref(),
         args.offline,
         &client,
         args.verbose,
+        |item, findings, index, total| {
+            eprintln!(
+                "[{index}/{total}] {}{}",
+                item.repository,
+                item.error
+                    .as_ref()
+                    .map_or_else(String::new, |error| format!(": {error}"))
+            );
+            if matches!(args.command, Commands::Inspect)
+                && matches!(args.format, OutputFormat::Text)
+            {
+                let report = ScanReport {
+                    schema_version: 1,
+                    github_owner: String::new(),
+                    repositories: vec![item.clone()],
+                    findings: findings.to_vec(),
+                };
+                let rendered = report.render();
+                write_stdout(rendered.split_once('\n').map_or("", |(_, rows)| rows))?;
+            }
+            Ok(())
+        },
     )
     .await?;
     if matches!(args.command, Commands::Inspect) {
         scan.report.public_paths();
-        return match args.format {
+        match args.format {
             OutputFormat::Json => write_stdout(&format!(
                 "{}\n",
                 serde_json::to_string_pretty(&scan.report)?
-            ))
-            .map_err(Into::into),
-            OutputFormat::Text => write_stdout(&scan.report.render()).map_err(Into::into),
-        };
+            ))?,
+            OutputFormat::Text => {
+                let errors: Vec<_> = scan
+                    .report
+                    .repositories
+                    .iter()
+                    .filter(|repo| repo.error.is_some())
+                    .collect();
+                write_stdout(&format!(
+                    "Scanned {} repositories; {} with errors.\n",
+                    scan.report.repositories.len(),
+                    errors.len()
+                ))?;
+                for repo in errors {
+                    write_stdout(&format!(
+                        "{}: {}\n",
+                        repo.repository,
+                        repo.error.as_deref().unwrap_or_default()
+                    ))?;
+                }
+            }
+        }
+        if scan
+            .report
+            .repositories
+            .iter()
+            .any(|repo| repo.error.is_some())
+        {
+            bail!("some repositories could not be scanned; see scan errors");
+        }
+        return Ok(());
     }
     let (registry, verify_release, package, manual, publisher) = match &args.command {
         Commands::Plan {
@@ -180,7 +234,7 @@ pub async fn run(args: &Args) -> Result<()> {
         None
     };
     let mut plans = Vec::new();
-    for repo in &scan.report.repositories {
+    for repo in &mut scan.report.repositories {
         let Some(inspection) = &repo.inspection else {
             continue;
         };
@@ -193,11 +247,23 @@ pub async fn run(args: &Args) -> Result<()> {
                 })
             });
         }
+        let workflow = match publisher.workflow(std::path::Path::new(&inspection.repository.root)) {
+            Ok(workflow) => workflow,
+            Err(error) => {
+                repo.error = Some(repo.error.as_ref().map_or_else(
+                    || error.to_string(),
+                    |previous| format!("{previous}; {error}"),
+                ));
+                repo.errors
+                    .push(serde_json::json!({"stage":"plan","message":error.to_string()}));
+                continue;
+            }
+        };
         let options = PlanOptions {
             python: python.clone(),
             add_publish_job: publisher.add_publish_job,
             verify_release,
-            workflow: publisher.workflow(std::path::Path::new(&inspection.repository.root))?,
+            workflow,
             publisher_environment: publisher.environment()?,
             endpoints: endpoints.clone(),
             environment: Some(environment.clone()),
@@ -224,7 +290,15 @@ pub async fn run(args: &Args) -> Result<()> {
                 .unwrap_or_default()
         );
     }
-    output_plans(&display, args.format)?;
+    if matches!(args.format, OutputFormat::Json) {
+        let mut report = scan.report.clone();
+        report.public_paths();
+        let mut document = serde_json::to_value(report)?;
+        document["plans"] = serde_json::to_value(&display)?;
+        write_stdout(&format!("{}\n", serde_json::to_string_pretty(&document)?))?;
+    } else {
+        output_plans(&display, args.format)?;
+    }
     if let Commands::Setup {
         execute,
         yes,

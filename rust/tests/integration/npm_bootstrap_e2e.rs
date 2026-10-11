@@ -436,7 +436,7 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
         "  Two-factor authentication is on (auth-and-writes).",
         "  pipeline-app --version: 0.1.0",
         "  The latest release run success: https://github.com/acme/pipeline-app/actions/runs/41",
-        "    - Node.js: v20.19.4; needs ^20.17.0 || >=22.9.0",
+        "    - Node.js: v20.19.4; needs >=22.12.0 [action needed]",
     ] {
         assert!(
             run.stdout.lines().any(|output| output == line),

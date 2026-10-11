@@ -21,6 +21,7 @@ use package_registry_manager::sign_in_import::import_sources;
 use package_registry_manager::{
     inspect_repository_with, InspectOptions, Inspection, Package, PlanMode, Registry, SetupPlan,
 };
+mod default_scope;
 mod organization_cli;
 
 fn browser_channel_help() -> String {
@@ -44,8 +45,9 @@ fn browser_import_help() -> String {
     about = "Inspect repositories and guide secure package-registry setup"
 )]
 struct Args {
-    #[arg(long, global = true, default_value = ".")]
-    repository: PathBuf,
+    /// Inspect only this repository; otherwise prefer organization or user scope.
+    #[arg(long, global = true)]
+    repository: Option<PathBuf>,
 
     /// Scan all repositories of this organization through gh-manager.
     #[arg(long, global = true, conflicts_with_all = ["user", "repository", "bootstrap_ref"])]
@@ -256,10 +258,22 @@ enum OutputFormat {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
+    if args.repository.is_none()
+        && args.bootstrap_ref.is_none()
+        && args.org.is_none()
+        && args.user.is_none()
+        && !args.offline
+    {
+        (args.org, args.user) = default_scope::resolve().await;
+    }
     if args.org.is_some() || args.user.is_some() {
         return organization_cli::run(&args).await;
     }
+    let repository = args
+        .repository
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("."));
     let endpoints = Endpoints::from_env();
     let inspect_options = InspectOptions {
         include_skipped: args.verbose,
@@ -271,12 +285,12 @@ async fn main() -> Result<()> {
         .transpose()?;
     let discovered = if let Some(reference) = &bootstrap_ref {
         package_registry_manager::bootstrap_reference::inspect_reference(
-            &args.repository,
+            &repository,
             reference,
             inspect_options,
         )?
     } else {
-        inspect_repository_with(&args.repository, inspect_options)?
+        inspect_repository_with(&repository, inspect_options)?
     };
     let inspection = if args.offline {
         discovered
@@ -324,7 +338,7 @@ async fn main() -> Result<()> {
                 python,
                 add_publish_job: publisher.add_publish_job,
                 verify_release,
-                workflow: publisher.workflow(&args.repository)?,
+                workflow: publisher.workflow(&repository)?,
                 publisher_environment: publisher.environment()?,
                 endpoints,
                 environment: Some(environment),
@@ -393,7 +407,7 @@ async fn main() -> Result<()> {
                 python,
                 add_publish_job: publisher.add_publish_job,
                 verify_release,
-                workflow: publisher.workflow(&args.repository)?,
+                workflow: publisher.workflow(&repository)?,
                 publisher_environment: publisher.environment()?,
                 endpoints,
                 environment: Some(environment),
@@ -413,7 +427,7 @@ async fn main() -> Result<()> {
             execute_plans_with(
                 &selected_plans,
                 &ExecuteOptions {
-                    repository: &args.repository,
+                    repository: &repository,
                     browser,
                     browser_profile: &profile,
                     browser_options: &browser_options,

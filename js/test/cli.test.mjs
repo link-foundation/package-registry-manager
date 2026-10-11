@@ -71,6 +71,27 @@ test("prints the package version", async () => {
   assert.equal(stdout, `package-registry-manager ${manifest.version}\n`);
 });
 
+test("unsupported Node versions fail before loading dependencies (#48)", async () => {
+  for (const version of ["20.19.4", "22.11.0"]) {
+    await assert.rejects(
+      execute(process.execPath, [
+        "--input-type=module",
+        "-e",
+        `Object.defineProperty(process.versions, 'node', { value: ${JSON.stringify(version)} }); process.argv = ['node', ${JSON.stringify(cli)}, '--help']; await import(${JSON.stringify(pathToFileURL(cli).href)});`,
+      ]),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.equal(error.stdout, "");
+        assert.equal(
+          error.stderr,
+          `package-registry-manager needs Node.js 22.12 or newer (found ${version})\n`,
+        );
+        return true;
+      },
+    );
+  }
+});
+
 test("inspect emits machine-readable output", async () => {
   const { stdout } = await execute(process.execPath, [
     cli,
