@@ -76,6 +76,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.22.9] - 2026-10-11
+
+### Changed
+- Require browser-commander ^0.28.0 in JavaScript to keep browser automation current and pass the latest-upstream dependency check.
+
+### Fixed
+- Select failed default-branch push or workflow_dispatch releases with failed publish/preflight jobs during trusted-publisher setup and repository repair, excluding newer pull request and lint runs. Classify OIDC preflight rejections and show the selected run URL before retrying its failed jobs (#44).
+
+### Changed
+- Require current browser-commander and command-stream releases to satisfy the upstream dependency checks.
+
 ## [0.22.8] - 2026-10-10
 
 ### Added
