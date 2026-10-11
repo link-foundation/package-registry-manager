@@ -104,12 +104,12 @@ for (const repair of [false, true]) {
         assert.ok(
           !commands.some((args) => args[1] === "workflow" && args[2] === "run"),
         );
+        const selected =
+          "  The selected failed release run failure: https://github.com/acme/pipeline-app/actions/runs/42";
+        assert.ok(lines.includes(selected));
         assert.ok(
-          lines.some((line) =>
-            line.includes(
-              "https://github.com/acme/pipeline-app/actions/runs/42",
-            ),
-          ),
+          lines.indexOf(selected) <
+            lines.indexOf("  Re-running the failed release jobs."),
         );
         assert.ok(lines.some((line) => line.includes("OIDC")));
         assert.ok(
