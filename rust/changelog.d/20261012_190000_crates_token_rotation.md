@@ -10,3 +10,4 @@ bump: minor
 ### Fixed
 - Detect scripted Cargo publishing with variable executables and multiline argument arrays through local reusable workflow callers, including account scan snapshots.
 - Preserve the publishing callee's environment while registering the top-level caller workflow, including nested reusable calls.
+- Preserve multiline Cargo publishing conditions in authentication steps and stop conversions when publishing steps require different authentication conditions.

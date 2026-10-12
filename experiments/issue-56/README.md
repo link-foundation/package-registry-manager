@@ -31,6 +31,8 @@ Use `migration-preview.mjs --record` to update this golden output intentionally.
 Cleanup mocks cover real OIDC uploads versus successful no-op runs, stale commits,
 changed default branches, shared consumers, dynamic secret forwarding and incomplete
 scans. Workflow tests preserve permissions, conditions, commands and unrelated jobs.
+Multiline publishing guards are copied in full; different publishing guards in one
+Cargo job stop conversion before a PR can leave a publisher without a token.
 
 For a read-only GitHub API probe against the current `link-foundation/start`, run
 `node examples/inspect-start-publisher.mjs` after authenticating `gh` and installing

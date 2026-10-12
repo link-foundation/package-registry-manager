@@ -495,8 +495,10 @@ to existing `changelog.d` directories. crates.io authentication uses an immutabl
 action commit and passes its token output to Cargo. npm gets Node 22, npm 11 and
 provenance; simple PyPI Twine uploads become trusted-publishing actions.
 `--add-publish-job` also offers this conversion when existing jobs use tokens.
-Inline mappings, inherited/dynamic secret wiring, complex Twine commands and
-existing mixed crates.io authentication require workflow review before conversion.
+Inline mappings, inherited/dynamic secret wiring, complex Twine commands,
+different Cargo publishing conditions within one job and existing mixed crates.io
+authentication require workflow review before conversion. Multiline publishing
+conditions are preserved in the authentication step.
 
 Review and merge the generated PR, then run the same `--migrate --execute` command
 to attach the trusted publishers. Registration uses the top-level caller filename

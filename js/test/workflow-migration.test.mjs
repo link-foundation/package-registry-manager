@@ -104,6 +104,30 @@ test("npm and PyPI conversions remove publishing credentials and retain build st
   }
 });
 
+test("crates authentication preserves multiline guards and refuses different publishing guards", async () => {
+  const { workflowMigrationProposal } =
+    await import("../src/workflow-migration.mjs");
+  const contents =
+    "on: push\njobs:\n  release:\n    steps:\n      - name: Publish first crate\n        if: >-\n          steps.first.outputs.changed == 'true'\n        run: cargo publish -p first\n";
+  const propose = (text) =>
+    workflowMigrationProposal(
+      root,
+      [{ registry: "crates-io" }],
+      [{ name: "release.yml", contents: text }],
+    );
+  const converted = await propose(contents);
+  assert.equal(
+    converted.files["release.yml"].match(/steps.first.outputs.changed/g).length,
+    2,
+  );
+  await assert.rejects(
+    propose(
+      `${contents}      - name: Publish second crate\n        if: steps.second.outputs.changed == 'true'\n        run: cargo publish -p second\n`,
+    ),
+    /different publishing conditions/,
+  );
+});
+
 test("PyPI conversion retains step identity, condition, package directory and unrelated environment", async () => {
   const { workflowMigrationProposal } =
     await import("../src/workflow-migration.mjs");

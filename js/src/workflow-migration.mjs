@@ -162,6 +162,7 @@ async function convertJob(root, parsed, lines, registry) {
     lines.slice(position, positions[index + 1] ?? end),
   );
   const edits = [];
+  const guards = [];
   let first = -1;
   for (const [index, step] of steps.entries()) {
     const publishes = await jobPublishes(
@@ -179,6 +180,10 @@ async function convertJob(root, parsed, lines, registry) {
         first = index;
       }
       if (registry === "crates-io") {
+        const guard = step.findIndex(
+          (line) => indent(line) === stepLevel + 2 && /^\s*if:/.test(line),
+        );
+        guards.push(guard < 0 ? [] : step.slice(guard, endOf(step, guard)));
         updated = withEnv(
           updated,
           "CARGO_REGISTRY_TOKEN",
@@ -247,6 +252,15 @@ async function convertJob(root, parsed, lines, registry) {
   const prefix = " ".repeat(stepLevel);
   if (registry === "crates-io") {
     if (
+      guards.some(
+        (guard) => JSON.stringify(guard) !== JSON.stringify(guards[0]),
+      )
+    ) {
+      throw new Error(
+        "different publishing conditions require separate authentication steps; review this job before migration",
+      );
+    }
+    if (
       lines.some((line) =>
         /\bid:\s*prm_auth\b|rust-lang\/crates-io-auth-action@/.test(line),
       )
@@ -255,14 +269,11 @@ async function convertJob(root, parsed, lines, registry) {
         "existing crates.io auth step needs review before converting token wiring",
       );
     }
-    const condition = steps[first].find(
-      (line) => indent(line) === stepLevel + 2 && /^\s*if:/.test(line),
-    );
     edits.splice(first, 0, [
       `${prefix}- name: Authenticate with crates.io (trusted publishing)`,
       `${prefix}  uses: ${CRATES_AUTH_ACTION}`,
       `${prefix}  id: prm_auth`,
-      ...(condition ? [`${prefix}  ${condition.trimStart()}`] : []),
+      ...guards[0],
     ]);
   } else if (registry === "npm") {
     edits.splice(first, 0, [

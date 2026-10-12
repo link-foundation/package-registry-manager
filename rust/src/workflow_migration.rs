@@ -178,6 +178,7 @@ fn convert_job(
             .context("publishing job has no editable steps")?],
     );
     let mut edits = Vec::new();
+    let mut guards = Vec::new();
     let mut first = None;
     for (index, &position) in positions.iter().enumerate() {
         let step = &lines[position..positions.get(index + 1).copied().unwrap_or(end)];
@@ -201,6 +202,12 @@ fn convert_job(
         if publishes || credential {
             first.get_or_insert(index);
             if registry == Registry::CratesIo {
+                let guard = step.iter().position(|line| {
+                    indent(line) == step_level + 2 && line.trim_start().starts_with("if:")
+                });
+                guards.push(
+                    guard.map_or_else(Vec::new, |start| step[start..end_of(step, start)].to_vec()),
+                );
                 updated = with_env(
                     updated,
                     "CARGO_REGISTRY_TOKEN",
@@ -260,22 +267,21 @@ fn convert_job(
     let first = first.context("cannot locate publishing step for migration")?;
     let prefix = " ".repeat(step_level);
     if registry == Registry::CratesIo {
+        if guards.iter().any(|guard| guard != &guards[0]) {
+            bail!("different publishing conditions require separate authentication steps; review this job before migration");
+        }
         if lines
             .iter()
             .any(|line| rx(r"\bid:\s*prm_auth\b|rust-lang/crates-io-auth-action@").is_match(line))
         {
             bail!("existing crates.io auth step needs review before converting token wiring");
         }
-        let condition = lines[positions[first]..positions.get(first + 1).copied().unwrap_or(end)]
-            .iter()
-            .find(|line| indent(line) == step_level + 2 && line.trim_start().starts_with("if:"))
-            .map(|line| format!("{prefix}  {}", line.trim_start()));
         let mut auth = vec![
             format!("{prefix}- name: Authenticate with crates.io (trusted publishing)"),
             format!("{prefix}  uses: {CRATES_AUTH_ACTION}"),
             format!("{prefix}  id: prm_auth"),
         ];
-        auth.extend(condition);
+        auth.extend_from_slice(&guards[0]);
         edits.insert(first, auth);
     } else if registry == Registry::Npm {
         edits.insert(

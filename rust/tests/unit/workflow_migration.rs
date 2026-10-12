@@ -118,3 +118,32 @@ fn oidc_evidence_requires_successful_authentication_and_an_actual_upload() {
         Registry::CratesIo
     ));
 }
+
+#[test]
+fn crates_auth_preserves_multiline_guards_and_refuses_different_conditions() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/token-rotation");
+    let inspection = inspect_repository(&root).unwrap();
+    let contents = "on: push\njobs:\n  release:\n    steps:\n      - name: Publish first crate\n        if: >-\n          steps.first.outputs.changed == 'true'\n        run: cargo publish -p first\n";
+    let propose = |text: &str| {
+        package_registry_manager::workflow_migration::workflow_migration_proposal(
+            &root,
+            &inspection.packages,
+            &[Workflow {
+                name: "release.yml".into(),
+                contents: text.into(),
+            }],
+        )
+    };
+    let files = propose(contents).unwrap();
+    assert_eq!(
+        files["release.yml"]
+            .matches("steps.first.outputs.changed")
+            .count(),
+        2
+    );
+    let differing = format!("{contents}      - name: Publish second crate\n        if: steps.second.outputs.changed == 'true'\n        run: cargo publish -p second\n");
+    assert!(propose(&differing)
+        .unwrap_err()
+        .to_string()
+        .contains("different publishing conditions"));
+}
