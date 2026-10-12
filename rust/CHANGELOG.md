@@ -78,6 +78,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.22.11] - 2026-10-12
+
+### Fixed
+
+- Reuse the automated browser for npm login and approval, and retain the npm session after a naming refusal so a renamed retry does not need another login.
+- Poll PyPI's GitHub publisher forms through sign-in and verify submission without terminal input, including pending and existing projects with `--yes` or closed stdin.
+- Build Python packages in a temporary environment that supplies the build frontend itself.
+- Flag likely npm punctuation and edit-distance collisions before authentication and suggest names verified as currently available.
+- When automatic cookie import finds no session, migrate registry-scoped saved passwords and supported passkeys; explain missing logins and Safari Full Disk Access failures before opening the login form.
+
 ## [0.22.10] - 2026-10-11
 
 ### Fixed
