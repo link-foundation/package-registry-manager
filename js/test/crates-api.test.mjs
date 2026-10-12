@@ -388,6 +388,12 @@ test("offers only the registry's sign-in cookies, the default browser first", as
         : [{ name: "Default", path: `/${browser}/Default` }],
     readCookies: async (options) => {
       reads.push(options);
+      // Browser Commander selects a profile by name, not by its path.
+      if (options.profile !== "Default") {
+        throw new Error(
+          `Could not find a cookie database for ${options.browser}`,
+        );
+      }
       return options.browser === "chrome" &&
         options.domainFilter === "github.com"
         ? []
@@ -397,13 +403,13 @@ test("offers only the registry's sign-in cookies, the default browser first", as
   assert.deepEqual(sources, [
     {
       browser: "firefox",
-      profile: "/firefox/Default",
+      profile: "Default",
       label: "Firefox",
       domains: ["crates.io", "github.com"],
     },
     {
       browser: "chrome",
-      profile: "/chrome/Default",
+      profile: "Default",
       label: "Google Chrome",
       domains: ["crates.io"],
     },

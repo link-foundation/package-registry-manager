@@ -89,7 +89,7 @@ export async function findSignInSources(domains, options = {}) {
       for (const domain of domains) {
         const cookies = await read({
           browser,
-          profile: profile.path,
+          profile: profile.name,
           domainFilter: domain,
           ignoreDecryptionErrors: true,
           cache: false,
@@ -109,7 +109,7 @@ export async function findSignInSources(domains, options = {}) {
         const name = profile.displayName ?? profile.name;
         found.push({
           browser,
-          profile: profile.path,
+          profile: profile.name,
           label:
             profiles.length > 1
               ? `${sourceName(browser)} (${name})`
