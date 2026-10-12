@@ -11,6 +11,25 @@ const manifests = [
   { path: "tests/package.json", content: '{"name":"ignored-fixture"}' },
 ];
 
+test("shared credential maintenance includes archived and forked consumers", async () => {
+  for (const options of [{ rotateToken: "CARGO_TOKEN" }, { migrate: true }]) {
+    await scanRepositories({
+      org: "team",
+      offline: true,
+      ...options,
+      github: {
+        repos: {
+          list: async (scope) => {
+            assert.equal(scope.includeArchived, true);
+            assert.equal(scope.includeForks, true);
+            return [];
+          },
+        },
+      },
+    });
+  }
+});
+
 test("account scan uses gh-manager files and reports all four findings (#43)", async () => {
   const calls = [];
   const github = {

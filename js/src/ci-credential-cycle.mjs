@@ -48,13 +48,18 @@ export function completeRotation(state, repos, secret, id) {
 }
 
 /** CI drives rotation. Uncertain tests preserve every existing credential. */
-export async function cycleCredential(adapter) {
+export async function cycleCredential(adapter, { force = false } = {}) {
   const health = await adapter.health();
-  if (health.status === "ok") {
+  if (!force && health.status === "ok") {
     return { status: "ok", changed: false };
   }
   const previous = await adapter.metadata();
-  if (health.status === "unknown" && previous && previous.present !== false) {
+  if (
+    !force &&
+    health.status === "unknown" &&
+    previous &&
+    previous.present !== false
+  ) {
     const tested = await adapter.test();
     if (tested.status === "ok") {
       return { status: "ok", changed: false };

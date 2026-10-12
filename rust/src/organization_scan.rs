@@ -188,6 +188,23 @@ pub async fn scan_repositories_with_progress(
     offline: bool,
     client: &RegistryClient,
     verbose: bool,
+    progress: impl FnMut(&ScannedRepository, &[Value], usize, usize) -> Result<()>,
+) -> Result<RepositoryScan> {
+    scan_repositories_with_inactive(github, org, user, offline, client, verbose, false, progress)
+        .await
+}
+
+/// Include archived and forked repositories when maintaining shared credentials.
+/// Normal inspection keeps the existing active-repository scope.
+#[allow(clippy::future_not_send, clippy::too_many_arguments)]
+pub async fn scan_repositories_with_inactive(
+    github: &impl GithubGateway,
+    org: Option<&str>,
+    user: Option<&str>,
+    offline: bool,
+    client: &RegistryClient,
+    verbose: bool,
+    include_inactive: bool,
     mut progress: impl FnMut(&ScannedRepository, &[Value], usize, usize) -> Result<()>,
 ) -> Result<RepositoryScan> {
     if org.is_some() == user.is_some() {
@@ -202,13 +219,11 @@ pub async fn scan_repositories_with_progress(
     }
     let workspace = tempfile::tempdir()?;
     let scope = if org.is_some() { "--org" } else { "--user" };
-    let repos = github
-        .call(
-            &["repo".into(), "list".into(), scope.into(), owner.into()],
-            None,
-            workspace.path(),
-        )
-        .await?;
+    let mut args = vec!["repo".into(), "list".into(), scope.into(), owner.into()];
+    if include_inactive {
+        args.extend(["--include-archived".into(), "--include-forks".into()]);
+    }
+    let repos = github.call(&args, None, workspace.path()).await?;
     let repos = repos
         .as_array()
         .ok_or_else(|| anyhow!("gh-manager returned an invalid repository list"))?;
@@ -241,11 +256,50 @@ pub async fn scan_repositories_with_progress(
                 args.extend(["--match".into(), pattern]);
             }
             let root = workspace.path().join(index.to_string());
-            snapshot(
-                &root,
-                slug,
-                &github.call(&args, None, workspace.path()).await?,
-            )?;
+            let mut files = github.call(&args, None, workspace.path()).await?;
+            let lines: Vec<String> = files
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|file| {
+                    file["content"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .lines()
+                        .map(str::to_owned)
+                })
+                .collect();
+            let scripts: Vec<String> = crate::publishers::script_references(&lines)
+                .into_iter()
+                .map(|reference| reference.trim_start_matches("./").to_owned())
+                .filter(|reference| !reference.split('/').any(|part| part == ".."))
+                .collect();
+            if !scripts.is_empty() {
+                let mut script_args = vec![
+                    "repo".into(),
+                    "files".into(),
+                    slug.into(),
+                    "--content".into(),
+                ];
+                if let Some(branch) = branch {
+                    script_args.extend(["--branch".into(), branch.into()]);
+                }
+                for script in scripts {
+                    script_args.extend(["--match".into(), format!("**/{script}")]);
+                }
+                let scripts = github.call(&script_args, None, workspace.path()).await?;
+                files
+                    .as_array_mut()
+                    .ok_or_else(|| anyhow!("invalid repository file list"))?
+                    .extend(
+                        scripts
+                            .as_array()
+                            .ok_or_else(|| anyhow!("invalid repository script list"))?
+                            .iter()
+                            .cloned(),
+                    );
+            }
+            snapshot(&root, slug, &files)?;
             let discovered = crate::discovery::inspect_repository_recovering(
                 &root,
                 InspectOptions {
@@ -383,11 +437,18 @@ impl ScanReport {
         for finding in &self.findings {
             let _ = writeln!(
                 output,
-                "{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}{}",
                 finding["repository"].as_str().unwrap_or("-"),
                 finding["registry"].as_str().unwrap_or("-"),
                 finding["package"].as_str().unwrap_or("-"),
-                finding["type"].as_str().unwrap_or("-").replace('-', " ")
+                finding["type"].as_str().unwrap_or("-").replace('-', " "),
+                finding["evidence"]["expires_at"].as_str().map_or_else(
+                    String::new,
+                    |expiry| format!(
+                        ": {} expires {expiry}",
+                        finding["evidence"]["name"].as_str().unwrap_or("token")
+                    )
+                )
             );
         }
         for repo in &self.repositories {

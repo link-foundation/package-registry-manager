@@ -26,3 +26,5 @@ mod ci_credential_cycle;
 mod organization_scan;
 
 mod first_publish;
+mod token_rotation;
+mod workflow_migration;

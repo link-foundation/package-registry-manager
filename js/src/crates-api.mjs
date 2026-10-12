@@ -104,15 +104,16 @@ export async function readSession(page) {
  * unverified one stops here with the settings link.
  */
 export async function signIn(page, options = {}) {
+  const log = options.log ?? console.log;
   await page.goto(CRATES_IO_URL);
   let session = await readSession(page);
   const signedInBefore = session.signedIn;
   if (!session.signedIn) {
-    console.log(
+    log(
       "  Not signed in to crates.io; finish the GitHub sign-in in the automated browser.",
     );
     if (!(await page.evaluate(LOGIN_CLICK_SCRIPT))) {
-      console.log('  Click "Log in with GitHub" on crates.io.');
+      log('  Click "Log in with GitHub" on crates.io.');
     }
     const deadline = Date.now() + (options.timeoutMs ?? SIGN_IN_TIMEOUT_MS);
     const interval = options.pollIntervalMs ?? 2_000;
@@ -124,9 +125,7 @@ export async function signIn(page, options = {}) {
       session = await readSession(page);
     }
   }
-  console.log(
-    `  Signed in to crates.io as ${session.login ?? "your account"}.`,
-  );
+  log(`  Signed in to crates.io as ${session.login ?? "your account"}.`);
   if (!session.emailVerified) {
     const sent = session.emailSent
       ? " A verification email was sent; follow its link,"

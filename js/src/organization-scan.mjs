@@ -7,6 +7,8 @@ import { probeRegistryState } from "./registry-state.mjs";
 import { RELEASE_FAILURE_PATTERNS } from "./publishing-policy.mjs";
 import { credentialPolicy } from "./credential-cycle.mjs";
 import { identityCommand } from "./repository-identity.mjs";
+import { tokenExpiryFindings } from "./crates-tokens.mjs";
+import { scriptReferences } from "./publishers.mjs";
 
 /** Only files used by existing discovery; no full repository clones for scans. */
 export const SCAN_MATCHES = [
@@ -120,6 +122,10 @@ export async function withAccountScan(options, callback) {
     const repositories = await github.repos.list({
       org: options.org,
       user: options.user,
+      ...((options.rotateToken || options.migrate) && {
+        includeArchived: true,
+        includeForks: true,
+      }),
     });
     const scan = {
       schema_version: 1,
@@ -127,6 +133,15 @@ export async function withAccountScan(options, callback) {
       repositories: [],
       findings: [],
     };
+    if (options.cratesTokens) {
+      scan.findings.push(
+        ...tokenExpiryFindings(
+          options.cratesTokens,
+          scan.account,
+          options.tokenExpiryDays,
+        ),
+      );
+    }
     for (const [index, repo] of repositories.entries()) {
       const slug = repo.full_name;
       const item = {
@@ -141,15 +156,27 @@ export async function withAccountScan(options, callback) {
           throw new Error("gh-manager returned an invalid repository name");
         }
         const root = path.join(directory, String(index));
-        await writeSnapshot(
-          root,
-          slug,
-          await github.repos.files(slug, {
-            match: SCAN_MATCHES,
-            content: true,
-            ref: repo.default_branch,
-          }),
-        );
+        const files = await github.repos.files(slug, {
+          match: SCAN_MATCHES,
+          content: true,
+          ref: repo.default_branch,
+        });
+        // Fetch only scripts named by manifests/workflows, rather than all source blobs.
+        const scripts = scriptReferences(
+          files.flatMap((file) => (file.content ?? "").split(/\r?\n/)),
+        )
+          .map((reference) => reference.replace(/^\.\//, ""))
+          .filter((reference) => !reference.split("/").includes(".."));
+        if (scripts.length) {
+          files.push(
+            ...(await github.repos.files(slug, {
+              match: scripts.map((script) => `**/${script}`),
+              content: true,
+              ref: repo.default_branch,
+            })),
+          );
+        }
+        await writeSnapshot(root, slug, files);
         const discovered = await inspectRepository(root, {
           includeSkipped: options.verbose,
           onError,
@@ -302,7 +329,7 @@ export function renderScan(scan) {
   const rows = ["Repository\tRegistry\tPackage\tFinding"];
   for (const item of scan.findings) {
     rows.push(
-      `${item.repository}\t${item.registry ?? "-"}\t${item.package ?? "-"}\t${item.type.replaceAll("-", " ")}`,
+      `${item.repository}\t${item.registry ?? "-"}\t${item.package ?? "-"}\t${item.type.replaceAll("-", " ")}${item.evidence?.expires_at ? `: ${item.evidence.name} expires ${item.evidence.expires_at}` : ""}`,
     );
   }
   for (const item of scan.repositories.filter((repo) => repo.error)) {

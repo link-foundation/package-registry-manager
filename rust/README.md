@@ -32,6 +32,21 @@ one browser, groups npm approvals, and uses CI evidence to preserve healthy toke
 or verify replacements before revocation. `--secret-name '{REGISTRY}_TOKEN_{REPO}'`
 selects custom credential names.
 
+For legacy crates.io consumers, use `setup --org ORG --registry crates-io
+--rotate-token CARGO_TOKEN --execute --browser-import auto`. Rotation preserves
+scopes and GitHub visibility, stores an expiry companion secret, verifies every
+consumer in CI before revocation, and lists migration targets. Ordinary crates.io
+setup uses trusted publishing. `inspect --org ORG --token-expiry-days 7` opens the
+private browser token inventory for advance expiry warnings. See the
+[rotation configuration](../README.md#configuration) for matching and failure behavior.
+
+`setup --org ORG --registry crates-io --migrate --execute --browser-import auto`
+proposes a reviewed conversion of existing jobs and reusable callers. After merging,
+rerun it to register trust, and rerun after a real OIDC release to remove verified
+legacy secrets. Shared organization secrets remain while other consumers exist.
+The same flow supports `--registry npm` and `--registry pypi`; see the
+[migration workflow](../README.md#configuration) for supported layouts and safeguards.
+
 Account scans print progress to stderr (`[37/169] owner/repository`) and stream
 text inspection results as each repository finishes. JSON inspection remains one
 report on stdout. Repository, manifest, registry lookup, and release-log failures are

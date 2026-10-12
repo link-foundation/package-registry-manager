@@ -35,6 +35,9 @@ Global options:
   --repository <path>             Inspect only this repository (default: widest scope)
   --org <org> | --user <login>      Scan repositories through gh-manager
   --secret-name <template>         Secret name; supports {REGISTRY}, {REPO}, {ORG}
+  --rotate-token <secret>          Explicitly replace a legacy crates.io token
+  --migrate                       Convert token jobs in PRs, then verify OIDC and clean up secrets
+  --token-expiry-days <N>          Read browser token inventory in account scans
   --format <text|json>            Output format (default: text)
   --offline                       Do not look up packages on registries
   --verbose                       Print command details and output, and
@@ -111,6 +114,9 @@ export async function main(args = process.argv.slice(2)) {
       org: { type: "string" },
       user: { type: "string" },
       "secret-name": { type: "string" },
+      "rotate-token": { type: "string" },
+      migrate: { type: "boolean", default: false },
+      "token-expiry-days": { type: "string" },
       format: { type: "string", default: "text" },
       verbose: { type: "boolean", default: false },
       offline: { type: "boolean", default: false },
@@ -174,6 +180,47 @@ export async function main(args = process.argv.slice(2)) {
   }
   const repository = path.resolve(values.repository ?? ".");
   const command = positionals[0];
+  const rotateToken = values["rotate-token"];
+  if (
+    values.migrate &&
+    (command !== "setup" ||
+      rotateToken !== undefined ||
+      !values.registry?.length ||
+      (values.registry ?? []).some(
+        (registry) => !["crates-io", "npm", "pypi"].includes(registry),
+      ))
+  ) {
+    throw new Error(
+      "--migrate requires setup with crates-io, npm or pypi and cannot use --rotate-token",
+    );
+  }
+  if (
+    rotateToken !== undefined &&
+    (command !== "setup" ||
+      (values.registry ?? []).map(parseRegistry).join() !== "crates-io" ||
+      !/^[A-Z_][A-Z0-9_]{0,244}$/.test(rotateToken) ||
+      rotateToken.startsWith("GITHUB_"))
+  ) {
+    throw new Error(
+      "--rotate-token requires setup --registry crates-io and a valid secret name",
+    );
+  }
+  const tokenExpiryDays =
+    values["token-expiry-days"] === undefined
+      ? undefined
+      : Number(values["token-expiry-days"]);
+  if (
+    tokenExpiryDays !== undefined &&
+    (!/^\d+$/.test(values["token-expiry-days"]) ||
+      !Number.isInteger(tokenExpiryDays) ||
+      tokenExpiryDays < 0 ||
+      tokenExpiryDays > 365 ||
+      !(values.org || values.user))
+  ) {
+    throw new Error(
+      "--token-expiry-days requires an account scan and an integer between 0 and 365",
+    );
+  }
   if (values.org || values.user) {
     if (values.org && values.user) {
       throw new Error("--org and --user are mutually exclusive");
@@ -184,7 +231,10 @@ export async function main(args = process.argv.slice(2)) {
     if (!["inspect", "plan", "setup"].includes(command)) {
       throw new Error(`unknown command '${command}'`);
     }
-    if (command === "setup" && (!values.all || values.package)) {
+    if (
+      command === "setup" &&
+      ((!values.all && !rotateToken && !values.migrate) || values.package)
+    ) {
       throw new Error("account setup requires --all without --package");
     }
     if (values["dry-run"] && values.execute) {
@@ -215,6 +265,9 @@ export async function main(args = process.argv.slice(2)) {
         yes: values.yes,
         noBrowser: values["no-browser"],
         secretName: values["secret-name"],
+        rotateToken,
+        migrate: values.migrate,
+        tokenExpiryDays,
         package: values.package,
         browser: values.browser,
         browserOptions,
@@ -228,6 +281,7 @@ export async function main(args = process.argv.slice(2)) {
           workflow: values.workflow,
           publisherEnvironment: values.environment,
           addPublishJob: values["add-publish-job"],
+          migrate: values.migrate,
           manual: values.manual,
           verifyRelease: values["verify-release"],
         },
@@ -269,6 +323,8 @@ export async function main(args = process.argv.slice(2)) {
     ),
   });
   const planOptions = {
+    rotateToken,
+    migrate: values.migrate,
     ref: values.ref,
     verifyRelease: values["verify-release"],
     manual: values.manual,
@@ -327,8 +383,12 @@ export async function main(args = process.argv.slice(2)) {
       openWith: nonEmpty(values["open-with"], "--open-with"),
       keepSession: values["keep-session"],
       secretName: values["secret-name"],
+      rotateToken,
+      migrate: values.migrate,
       quietBrowser: selected.some((plan) =>
-        plan.steps.some((step) => step.id === "manage-registry-token"),
+        plan.steps.some((step) =>
+          ["manage-registry-token", "rotate-crates-token"].includes(step.id),
+        ),
       ),
       browser: values.browser,
       browserOptions,

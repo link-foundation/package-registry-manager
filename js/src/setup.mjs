@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
+import { stdin, stdout, stderr } from "node:process";
 
 import { exec } from "command-stream";
 
@@ -23,6 +23,7 @@ import { detachedRunner, openInUserBrowser } from "./browser.mjs";
 import { detectDefaultBrowser, openWithCommand } from "./default-browser.mjs";
 import { CLEANUP_CONDITIONS } from "./flows.mjs";
 import { setupCredential } from "./credential-setup.mjs";
+import { rotateCratesToken } from "./crates-token-rotation.mjs";
 import { checkNamePolicy, policyRefusal } from "./npm-policy.mjs";
 import { namingError } from "./npm-similarity.mjs";
 import { pagesSettingsUrl, pagesState } from "./pages.mjs";
@@ -38,6 +39,7 @@ import {
   publisherMatches,
 } from "./repository-identity.mjs";
 import { reportTokenSecrets, verifyTokenRevoked } from "./tokens.mjs";
+import { cleanupMigratedSecrets } from "./migration-cleanup.mjs";
 
 export { defaultBrowserProfile } from "./profile.mjs";
 
@@ -154,6 +156,12 @@ export class SetupSession {
   }
 
   async runStep(step) {
+    if (step.id === "rotate-crates-token") {
+      return rotateCratesToken(this);
+    }
+    if (step.id === "cleanup-migrated-secrets") {
+      return cleanupMigratedSecrets(this);
+    }
     if (
       [
         "check-repository-publisher",
@@ -923,7 +931,7 @@ function render(command) {
 
 /** Asks a question on the terminal; a closed stdin answers with "". */
 export async function prompt(message) {
-  const terminal = createInterface({ input: stdin, output: stdout });
+  const terminal = createInterface({ input: stdin, output: stderr });
   try {
     return await new Promise((resolve) => {
       terminal.once("close", () => resolve(""));

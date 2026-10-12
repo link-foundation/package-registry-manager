@@ -16,6 +16,11 @@ pub struct TokenProvider {
 #[must_use]
 pub const fn token_provider(registry: Registry) -> Option<TokenProvider> {
     let (url, secret, scope) = match registry {
+        Registry::CratesIo => (
+            "https://crates.io/settings/tokens",
+            "CARGO_TOKEN",
+            "preserve existing endpoint and crate scopes",
+        ),
         Registry::DockerHub => (
             "https://app.docker.com/settings/personal-access-tokens/create",
             "DOCKERHUB_TOKEN",

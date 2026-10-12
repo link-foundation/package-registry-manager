@@ -5,7 +5,7 @@ use super::{
 use anyhow::{bail, Context, Result};
 use package_registry_manager::github::GhManager;
 use package_registry_manager::organization_scan::{
-    scan_repositories_with_progress, ScanReport, ScannedRepository,
+    scan_repositories_with_inactive, ScanReport, ScannedRepository,
 };
 use package_registry_manager::{
     plan::{build_plans_with, PlanOptions},
@@ -104,13 +104,14 @@ pub async fn run(args: &Args) -> Result<()> {
     }
     let endpoints = Endpoints::from_env();
     let client = RegistryClient::new(endpoints.clone(), args.verbose);
-    let mut scan = scan_repositories_with_progress(
+    let mut scan = scan_repositories_with_inactive(
         &GhManager,
         args.org.as_deref(),
         args.user.as_deref(),
         args.offline,
         &client,
         args.verbose,
+        args.rotate_token.is_some() || args.migrate,
         |item, findings, index, total| {
             eprintln!(
                 "[{index}/{total}] {}{}",
@@ -135,6 +136,28 @@ pub async fn run(args: &Args) -> Result<()> {
         },
     )
     .await?;
+    if let Some(days) = args.token_expiry_days {
+        let tokens =
+            package_registry_manager::setup::read_account_token_inventory(scan.workspace.path())
+                .await?;
+        let findings = package_registry_manager::crates_tokens::token_expiry_findings(
+            &tokens,
+            &scan.report.github_owner,
+            i64::from(days),
+            chrono::Utc::now(),
+        )?;
+        if matches!(args.command, Commands::Inspect) && matches!(args.format, OutputFormat::Text) {
+            let report = ScanReport {
+                schema_version: 1,
+                github_owner: scan.report.github_owner.clone(),
+                repositories: Vec::new(),
+                findings: findings.clone(),
+            };
+            let rendered = report.render();
+            write_stdout(rendered.split_once('\n').map_or("", |(_, rows)| rows))?;
+        }
+        scan.report.findings.extend(findings);
+    }
     if matches!(args.command, Commands::Inspect) {
         scan.report.public_paths();
         match args.format {
@@ -196,7 +219,7 @@ pub async fn run(args: &Args) -> Result<()> {
             publisher,
             ..
         } => {
-            if !all || package.is_some() {
+            if (!all && args.rotate_token.is_none() && !args.migrate) || package.is_some() {
                 bail!("account setup requires --all without --package");
             }
             (
@@ -239,8 +262,27 @@ pub async fn run(args: &Args) -> Result<()> {
             continue;
         };
         let mut inspection = inspection.clone();
+        let rotation_consumer = if let Some(secret) = &args.rotate_token {
+            let reference = regex::Regex::new(&format!(r"\bsecrets\.{secret}\b"))?;
+            package_registry_manager::workflows::read_workflows(std::path::Path::new(
+                &inspection.repository.root,
+            ))?
+            .iter()
+            .any(|workflow| reference.is_match(&workflow.contents))
+        } else {
+            false
+        };
         if matches!(args.command, Commands::Setup { .. }) {
             inspection.packages.retain(|package| {
+                if args.migrate {
+                    return matches!(
+                        package.registry,
+                        Registry::CratesIo | Registry::Npm | Registry::PyPi
+                    );
+                }
+                if args.rotate_token.is_some() {
+                    return package.registry == Registry::CratesIo && rotation_consumer;
+                }
                 scan.report.findings.iter().any(|finding| {
                     finding["repository"] == repo.repository
                         && (finding["package"].is_null() || finding["package"] == package.name)
@@ -260,6 +302,8 @@ pub async fn run(args: &Args) -> Result<()> {
             }
         };
         let options = PlanOptions {
+            migrate: args.migrate,
+            rotate_token: args.rotate_token.clone(),
             python: python.clone(),
             add_publish_job: publisher.add_publish_job,
             verify_release,
@@ -279,6 +323,15 @@ pub async fn run(args: &Args) -> Result<()> {
         );
     }
     plans.sort_by_key(|plan| plan.registry != Registry::Npm);
+    if (args.rotate_token.is_some() || args.migrate)
+        && scan
+            .report
+            .repositories
+            .iter()
+            .any(|repo| repo.error.is_some())
+    {
+        bail!("token rotation requires a complete account scan");
+    }
     let mut display = plans.clone();
     for plan in &mut display {
         plan.repository.root = format!(
@@ -372,6 +425,15 @@ pub async fn run(args: &Args) -> Result<()> {
             }
             if plans.is_empty() {
                 bail!("some repositories could not be prepared; see scan errors");
+            }
+            if (args.rotate_token.is_some() || args.migrate)
+                && scan
+                    .report
+                    .repositories
+                    .iter()
+                    .any(|repo| repo.error.is_some())
+            {
+                bail!("token rotation requires a complete account scan");
             }
         }
         execute_plans_with(

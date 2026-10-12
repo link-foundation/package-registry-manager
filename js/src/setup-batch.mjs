@@ -34,6 +34,7 @@ export async function executePlan(plan, options) {
 
 /** Runs all plans with one browser session and defers sign-out until the end. */
 export async function executePlans(plans, options, summary = true) {
+  options = { ...options, rotatedSecrets: options.rotatedSecrets ?? new Map() };
   if (plans.length === 0) {
     throw new Error("no publishable package manifests were found");
   }

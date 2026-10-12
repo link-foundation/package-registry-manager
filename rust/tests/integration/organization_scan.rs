@@ -9,6 +9,74 @@ use std::path::Path;
 
 struct FakeGithub;
 
+struct ScriptedGithub;
+
+struct InactiveGithub;
+#[allow(clippy::unused_async_trait_impl)]
+impl GithubGateway for InactiveGithub {
+    async fn call(&self, args: &[String], _: Option<&str>, _: &Path) -> Result<Value> {
+        assert!(args.iter().any(|arg| arg == "--include-archived"));
+        assert!(args.iter().any(|arg| arg == "--include-forks"));
+        Ok(json!([]))
+    }
+}
+
+#[tokio::test]
+async fn shared_credential_maintenance_includes_archived_and_forked_repositories() {
+    let client = RegistryClient::new(Endpoints::default(), false);
+    package_registry_manager::organization_scan::scan_repositories_with_inactive(
+        &InactiveGithub,
+        Some("team"),
+        None,
+        true,
+        &client,
+        false,
+        true,
+        |_, _, _, _| Ok(()),
+    )
+    .await
+    .unwrap();
+}
+
+#[allow(clippy::unused_async_trait_impl)]
+impl GithubGateway for ScriptedGithub {
+    async fn call(&self, args: &[String], _: Option<&str>, _: &Path) -> Result<Value> {
+        if args[1] == "list" {
+            return Ok(json!([{"full_name":"team/start","default_branch":"main"}]));
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/token-rotation");
+        let scripted = args
+            .windows(2)
+            .any(|pair| pair == ["--match", "**/scripts/publish-to-crates.mjs"]);
+        let paths = if scripted {
+            vec!["scripts/publish-to-crates.mjs"]
+        } else {
+            vec![
+                "Cargo.toml",
+                ".github/workflows/js.yml",
+                ".github/workflows/rust.yml",
+            ]
+        };
+        Ok(json!(paths.into_iter().map(|path| json!({"path":path,"content":std::fs::read_to_string(root.join(path)).unwrap()})).collect::<Vec<_>>()))
+    }
+}
+
+#[tokio::test]
+async fn account_snapshot_follows_referenced_script_to_reusable_caller() {
+    let client = RegistryClient::new(Endpoints::default(), false);
+    let scan = scan_repositories(&ScriptedGithub, Some("team"), None, true, &client, false)
+        .await
+        .unwrap();
+    let repo = &scan.report.repositories[0];
+    assert!(repo.error.is_none(), "{:?}", repo.error);
+    assert_eq!(
+        repo.inspection.as_ref().unwrap().packages[0]
+            .workflow
+            .as_deref(),
+        Some("js.yml")
+    );
+}
+
 struct ExpiredGithub;
 
 #[allow(clippy::unused_async_trait_impl)]

@@ -228,21 +228,25 @@ export async function defaultSource(options = {}) {
  * first; `auto` takes it without asking. Returns the chosen source or
  * `undefined`.
  */
-export async function chooseSignInSource(sources, domains, ask, auto) {
+export async function chooseSignInSource(
+  sources,
+  domains,
+  ask,
+  auto,
+  log = console.log,
+) {
   if (sources.length === 0) {
     return undefined;
   }
   const [first] = sources;
   const question = `Import your ${domains.join(" / ")} sign-in from ${first.label} into the automated profile?`;
   if (auto) {
-    console.log(`  ${question} yes (--browser-import auto)`);
+    log(`  ${question} yes (--browser-import auto)`);
     return first;
   }
   if (sources.length > 1) {
     sources.forEach((source, index) =>
-      console.log(
-        `  ${index + 1}. ${source.label} (${source.domains.join(", ")})`,
-      ),
+      log(`  ${index + 1}. ${source.label} (${source.domains.join(", ")})`),
     );
   }
   const choices = sources.length > 1 ? `[Y/n/1-${sources.length}]` : "[Y/n]";
@@ -358,6 +362,7 @@ export async function offerSignInImport(session, domains) {
     domains,
     (message) => session.prompt(message),
     Boolean(choice),
+    session.options.log ?? console.log,
   );
   if (!source) {
     return false;
@@ -370,7 +375,7 @@ export async function offerSignInImport(session, domains) {
       ...(source.savedLogins ? { savedLogins: true } : {}),
     },
   });
-  console.log(
+  (session.options.log ?? console.log)(
     `  Imported the ${domains.join(" / ")} sign-in from ${source.label}.`,
   );
   return true;

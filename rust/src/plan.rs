@@ -14,7 +14,12 @@ use crate::registry_state::Endpoints;
 
 /// Options that shape setup plans.
 #[derive(Debug, Clone, Default)]
+#[allow(clippy::struct_excessive_bools)] // Independent CLI choices, rather than exclusive states.
 pub struct PlanOptions {
+    /// Convert legacy workflow jobs, then verify OIDC publication and clean up secrets.
+    pub migrate: bool,
+    /// Explicit maintenance of a legacy crates.io secret during OIDC migration.
+    pub rotate_token: Option<String>,
     /// Pushed branch or PR head for the first publication.
     pub bootstrap_ref: Option<String>,
     /// Append release-verification steps to flows that support them.
@@ -90,6 +95,16 @@ fn base_plan(inspection: &Inspection, package: &Package, steps: Vec<SetupStep>) 
 }
 
 fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) -> SetupPlan {
+    if let Some(secret) = options
+        .rotate_token
+        .as_ref()
+        .filter(|_| package.registry == Registry::CratesIo && package.publishable)
+    {
+        let mut plan = base_plan(inspection, package, vec![SetupStep::new("rotate-crates-token", &format!("Rotate {secret} through crates.io"), StepKind::Api, "Match the existing token, copy endpoint and crate scopes, store the replacement and expiry through gh-manager, verify consumers in CI, then revoke the old token. Migrate the listed repositories to trusted publishing.").confirmed()]);
+        plan.credential_policy.mode = "token".into();
+        plan.credential_policy.description = "Explicit maintenance of a legacy crates.io secret during migration to trusted publishing".into();
+        return plan;
+    }
     if !package.publishable {
         return SetupPlan {
             skipped_reason: Some(skipped_reason(package)),
@@ -99,6 +114,15 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
     let check = |id: &str, title: &str, description: &str, program: &str, args: &[&str]| {
         SetupStep::new(id, title, StepKind::Check, description).command(program, args)
     };
+    if (options.migrate || options.add_publish_job)
+        && matches!(
+            package.registry,
+            Registry::CratesIo | Registry::Npm | Registry::PyPi
+        )
+        && !package.token_secrets.is_empty()
+    {
+        return base_plan(inspection,package,vec![SetupStep::new("add-publishing-workflow", "Convert token publishing in a reviewed pull request", StepKind::Manual, "Convert existing publishing jobs and reusable callers to OIDC, preserve release commands and environment, and remove legacy token wiring. Review and merge the PR, then re-run setup --migrate to register trust and verify an OIDC release before deleting secrets.").confirmed()]);
+    }
     let browser = |id: &str, title: &str, description: &str, url: &str| {
         SetupStep::new(id, title, StepKind::Browser, description).url(url)
     };
@@ -245,6 +269,17 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
         ),
         _ => flow(package, &context),
     };
+    if options.migrate {
+        steps.retain(|step| {
+            ![
+                "audit-token-secrets",
+                "confirm-oidc-cleanup",
+                "delete-token-secret",
+            ]
+            .contains(&step.id.as_str())
+        });
+        steps.push(SetupStep::new("cleanup-migrated-secrets", "Verify OIDC publication and clean up legacy secrets", StepKind::Api, "Read current default-branch workflows and successful publishing steps. Delete repository secrets only after verification; delete organization secrets only after a fresh complete consumer scan.").confirmed());
+    }
     if let Some(reference) = &options.bootstrap_ref {
         if let Some(fetch) = steps
             .iter_mut()

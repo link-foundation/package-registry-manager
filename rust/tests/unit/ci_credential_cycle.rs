@@ -1,8 +1,8 @@
 use anyhow::Result;
 use package_registry_manager::{
     ci_credential_cycle::{
-        complete_rotation, cycle_credential, record_token_id, secret_name, tracked_token_ids,
-        CiCredentialAdapter,
+        complete_rotation, cycle_credential, cycle_credential_with, record_token_id, secret_name,
+        tracked_token_ids, CiCredentialAdapter,
     },
     credential_cycle::Credential,
     Registry,
@@ -32,7 +32,6 @@ impl CiCredentialAdapter for Host {
         Ok(json!({"status":self.status}))
     }
     async fn metadata(&mut self) -> Result<Value> {
-        assert_ne!(self.status, "ok");
         Ok(self.previous.clone())
     }
     async fn create(&mut self) -> Result<Credential> {
@@ -60,6 +59,15 @@ impl CiCredentialAdapter for Host {
     async fn revoked(&mut self, _: &str) -> Result<bool> {
         Ok(true)
     }
+}
+#[tokio::test]
+async fn explicit_rotation_replaces_healthy_secret_after_verification() {
+    let mut host = Host::new("ok", vec!["ok"]);
+    cycle_credential_with(&mut host, true).await.unwrap();
+    assert_eq!(host.calls, ["create", "ensure", "test", "revoke:old"]);
+    let mut uncertain = Host::new("ok", vec!["unknown"]);
+    assert!(cycle_credential_with(&mut uncertain, true).await.is_err());
+    assert_eq!(uncertain.calls, ["create", "ensure", "test"]);
 }
 #[tokio::test]
 async fn healthy_ci_is_noop_and_fallback_survives_verification() {

@@ -240,6 +240,8 @@ pub async fn execute_plans_with(
     let mut sessions = Vec::new();
     let mut outcomes = Vec::new();
     let mut failure = None;
+    let mut rotations: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
     let plan_options: Vec<_> = plans
         .iter()
         .map(|plan| ExecuteOptions {
@@ -257,7 +259,51 @@ pub async fn execute_plans_with(
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
-    for (plan, options) in plans.iter().zip(&plan_options) {
+    let rotation_keys = plans
+        .iter()
+        .zip(&plan_options)
+        .map(|(plan, options)| -> Result<Option<String>> {
+            Ok(
+                if plan
+                    .steps
+                    .iter()
+                    .any(|step| step.id == "rotate-crates-token")
+                {
+                    let config_path = options.repository.join(".package-registry-manager.json");
+                    let config: serde_json::Value = match std::fs::read_to_string(config_path) {
+                        Ok(contents) => serde_json::from_str(&contents)?,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            serde_json::Value::Null
+                        }
+                        Err(error) => return Err(error.into()),
+                    };
+                    let owner = plan.repository.github_owner.as_deref().unwrap_or_default();
+                    let scope = if config["tokens"]["crates-io"]["level"] == "repo" {
+                        format!(
+                            "{owner}/{}",
+                            plan.repository
+                                .github_repository
+                                .as_deref()
+                                .unwrap_or_default()
+                        )
+                    } else {
+                        owner.into()
+                    };
+                    Some(format!(
+                        "{scope}:{}",
+                        options.secret_name.unwrap_or("CARGO_TOKEN")
+                    ))
+                } else {
+                    None
+                },
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for ((plan, options), rotation_key) in plans.iter().zip(&plan_options).zip(rotation_keys) {
+        if let Some(status) = rotation_key.as_ref().and_then(|key| rotations.get(key)) {
+            outcomes.push(status.clone());
+            continue;
+        }
         let mut session = Session::new(plan, options);
         session.browser = browser.take();
         session.domains.clone_from(&domains);
@@ -277,7 +323,9 @@ pub async fn execute_plans_with(
                 )
             });
         if result.is_ok() {
-            let status = if session.values.contains_key("manifest_pr") {
+            let status = if let Some(status) = session.values.get("migration_status") {
+                status.as_str()
+            } else if session.values.contains_key("manifest_pr") {
                 if session.values["manifest_pr"].is_empty() {
                     "blocked"
                 } else {
@@ -299,6 +347,9 @@ pub async fn execute_plans_with(
             }
         }
         sessions.push((session, deferred));
+        if let Some(key) = rotation_key {
+            rotations.insert(key, outcomes.last().expect("rotation outcome").clone());
+        }
         if failure.is_some() && !options.repository_batch {
             break;
         }

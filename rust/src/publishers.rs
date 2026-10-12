@@ -1,7 +1,7 @@
 //! Job-aware detection of the workflow that publishes to a registry, so the
 //! trusted publisher names the workflow file CI actually publishes from.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
@@ -26,7 +26,7 @@ pub const TRUSTED_REGISTRIES: [Registry; 6] = [
 // Scripts usually pass the subcommand as a separate argument, as in
 // `spawnSync("npm", ["publish"])` or `Command::new("cargo")` followed by
 // `.arg("publish")` within the next few lines.
-const SCRIPT_WINDOW: usize = 3;
+const SCRIPT_WINDOW: usize = 12;
 const MAX_SCRIPT_BYTES: u64 = 1024 * 1024;
 
 fn regex(pattern: &str) -> Regex {
@@ -302,29 +302,43 @@ pub fn detect_publisher(root: &Path, workflows: &[Workflow], registry: Registry)
                 .iter()
                 .find_map(|line| LOCAL_WORKFLOW.captures(line))
                 .and_then(|captures| parsed_workflows.get(&captures[1]));
-            let publishes = callee.map_or_else(
-                || job_publishes(root, parsed, job, registry),
+            let environments = callee.map_or_else(
+                || {
+                    if job_publishes(root, parsed, job, registry) {
+                        vec![environment_name(
+                            child_block(&job.lines, child_indent(&job.lines), "environment")
+                                .as_ref(),
+                        )]
+                    } else {
+                        Vec::new()
+                    }
+                },
                 |callee| {
-                    callee
-                        .jobs
-                        .iter()
-                        .any(|job| job_publishes(root, callee, job, registry))
+                    called_environments(
+                        root,
+                        &parsed_workflows,
+                        callee,
+                        registry,
+                        &mut BTreeSet::from([workflow.name.as_str()]),
+                    )
                 },
             );
-            if !publishes {
+            if environments.is_empty() {
                 continue;
             }
             let indent = child_indent(&job.lines);
-            found.push(Found {
-                workflow: workflow.name.clone(),
-                job: job.name.clone(),
-                id_token: grants_id_token(child_block(&job.lines, indent, "permissions").as_ref())
+            for environment in environments {
+                found.push(Found {
+                    workflow: workflow.name.clone(),
+                    job: job.name.clone(),
+                    id_token: grants_id_token(
+                        child_block(&job.lines, indent, "permissions").as_ref(),
+                    )
                     .or(workflow_grant)
                     .unwrap_or(false),
-                environment: environment_name(
-                    child_block(&job.lines, indent, "environment").as_ref(),
-                ),
-            });
+                    environment,
+                });
+            }
         }
     }
     let trusted = found
@@ -413,6 +427,37 @@ fn unique<T: PartialEq>(items: impl IntoIterator<Item = T>) -> Vec<T> {
     result
 }
 
+fn called_environments<'a>(
+    root: &Path,
+    workflows: &BTreeMap<&'a str, ParsedWorkflow>,
+    parsed: &ParsedWorkflow,
+    registry: Registry,
+    visited: &mut BTreeSet<&'a str>,
+) -> Vec<Option<String>> {
+    let mut environments = Vec::new();
+    for job in &parsed.jobs {
+        if let Some(captures) = job
+            .lines
+            .iter()
+            .find_map(|line| LOCAL_WORKFLOW.captures(line))
+        {
+            if let Some((&name, callee)) = workflows.get_key_value(&captures[1]) {
+                if visited.insert(name) {
+                    environments.extend(called_environments(
+                        root, workflows, callee, registry, visited,
+                    ));
+                    visited.remove(name);
+                }
+            }
+        } else if job_publishes(root, parsed, job, registry) {
+            environments.push(environment_name(
+                child_block(&job.lines, child_indent(&job.lines), "environment").as_ref(),
+            ));
+        }
+    }
+    unique(environments)
+}
+
 /// List the long-lived registry token secrets that workflows read, which
 /// trusted publishing makes unnecessary.
 #[must_use]
@@ -452,7 +497,9 @@ pub fn token_secret_warning(registry: Registry, secret: &TokenSecret) -> String 
     )
 }
 
-fn job_publishes(root: &Path, parsed: &ParsedWorkflow, job: &Job, registry: Registry) -> bool {
+/// Detect publication in one job, including referenced scripts.
+#[must_use]
+pub fn job_publishes(root: &Path, parsed: &ParsedWorkflow, job: &Job, registry: Registry) -> bool {
     let Some(pattern) = job_pattern(registry) else {
         return false;
     };
@@ -599,8 +646,20 @@ fn script_publishes(lines: &[String], registry: Registry) -> bool {
     }) {
         return true;
     }
+    let declaration = regex(r"\b(?:const|let|var)\s+(\w+)\s*=");
+    let variables: Vec<_> = lines
+        .iter()
+        .filter_map(|line| {
+            let captures = declaration.captures(line)?;
+            program.is_match(line).then(|| captures[1].to_owned())
+        })
+        .collect();
     lines.iter().enumerate().any(|(index, line)| {
-        program.is_match(line)
+        (program.is_match(line)
+            || variables.iter().any(|name| {
+                let nearby = lines[index..(index + 3).min(lines.len())].join("\n");
+                regex(&format!(r"\b{name}\b")).is_match(&nearby)
+            }))
             && regex(
                 r"(?:exec|spawn|run|Command::new|subprocess|system|(?:npm|pnpm|yarn)\s*\(\s*\[)",
             )
@@ -651,9 +710,10 @@ fn working_directories<'a>(lines: impl Iterator<Item = &'a String>) -> Vec<Strin
 
 fn read_inside(root: &Path, directories: &[String], file: &str) -> Option<String> {
     let canonical_root = root.canonicalize().ok()?;
+    let lexical_root = normalize(root);
     directories.iter().find_map(|directory| {
-        let candidate = normalize(&root.join(directory).join(file));
-        if !is_inside(root, &candidate) {
+        let candidate = normalize(&lexical_root.join(directory).join(file));
+        if !is_inside(&lexical_root, &candidate) {
             return None;
         }
         let resolved = candidate.canonicalize().ok()?;

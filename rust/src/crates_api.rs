@@ -231,11 +231,11 @@ pub async fn sign_in(
     host.goto(CRATES_IO_URL).await?;
     let mut session = read_session(host).await?;
     if !session.signed_in {
-        println!(
+        eprintln!(
             "  Not signed in to crates.io; finish the GitHub sign-in in the automated browser."
         );
         if host.evaluate(LOGIN_CLICK_SCRIPT).await? != Value::Bool(true) {
-            println!("  Click \"Log in with GitHub\" on crates.io.");
+            eprintln!("  Click \"Log in with GitHub\" on crates.io.");
         }
         let deadline = Instant::now() + timeout;
         while !session.signed_in {
@@ -246,7 +246,7 @@ pub async fn sign_in(
             session = read_session(host).await?;
         }
     }
-    println!(
+    eprintln!(
         "  Signed in to crates.io as {}.",
         session.login.as_deref().unwrap_or("your account")
     );

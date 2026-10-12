@@ -41,7 +41,7 @@ export const JOB_PATTERNS = new Map([
 // Scripts usually pass the subcommand as a separate argument, as in
 // `spawnSync("npm", ["publish"])` or `Command::new("cargo")` followed by
 // `.arg("publish")` within the next few lines.
-const SCRIPT_WINDOW = 3;
+const SCRIPT_WINDOW = 12;
 const SCRIPT_PATTERNS = new Map([
   ["rubygems", [/\bgem\b/, /["'`]push["'`]/]],
   ["nuget", [/\b(?:dotnet|nuget)\b/, /["'`]push["'`]/]],
@@ -168,24 +168,36 @@ export async function detectPublisher(root, workflows, registry) {
         job.lines.find((line) => LOCAL_WORKFLOW.test(line)) ?? "",
       )?.[1];
       const callee = called ? parsedWorkflows.get(called) : null;
-      const publishes = callee
-        ? await anyJobPublishes(root, callee, registry)
-        : await jobPublishes(root, parsed, job, registry);
-      if (!publishes) {
+      const environments = callee
+        ? await calledEnvironments(
+            root,
+            parsedWorkflows,
+            called,
+            registry,
+            new Set([workflow.name]),
+          )
+        : (await jobPublishes(root, parsed, job, registry))
+          ? [
+              environmentName(
+                childBlock(job.lines, childIndent(job.lines), "environment"),
+              ),
+            ]
+          : [];
+      if (!environments.length) {
         continue;
       }
       const indent = childIndent(job.lines);
-      found.push({
-        workflow: workflow.name,
-        job: job.name,
-        idToken:
-          grantsIdToken(childBlock(job.lines, indent, "permissions")) ??
-          workflowGrant ??
-          false,
-        environment: environmentName(
-          childBlock(job.lines, indent, "environment"),
-        ),
-      });
+      for (const environment of environments) {
+        found.push({
+          workflow: workflow.name,
+          job: job.name,
+          idToken:
+            grantsIdToken(childBlock(job.lines, indent, "permissions")) ??
+            workflowGrant ??
+            false,
+          environment,
+        });
+      }
     }
   }
   const trusted = found.filter(
@@ -286,16 +298,41 @@ export function registryTokenSecrets(registry) {
   return TOKEN_SECRETS.get(registry) ?? [];
 }
 
-async function anyJobPublishes(root, parsed, registry) {
+async function calledEnvironments(root, workflows, name, registry, visited) {
+  if (visited.has(name)) {
+    return [];
+  }
+  const parsed = workflows.get(name);
+  if (!parsed) {
+    return [];
+  }
+  const seen = new Set([...visited, name]);
+  const environments = [];
   for (const job of parsed.jobs) {
-    if (await jobPublishes(root, parsed, job, registry)) {
-      return true;
+    const called = job.lines.find((line) => LOCAL_WORKFLOW.test(line));
+    if (called) {
+      environments.push(
+        ...(await calledEnvironments(
+          root,
+          workflows,
+          LOCAL_WORKFLOW.exec(called)[1],
+          registry,
+          seen,
+        )),
+      );
+    } else if (await jobPublishes(root, parsed, job, registry)) {
+      environments.push(
+        environmentName(
+          childBlock(job.lines, childIndent(job.lines), "environment"),
+        ),
+      );
     }
   }
-  return false;
+  return [...new Set(environments)];
 }
 
-async function jobPublishes(root, parsed, job, registry) {
+/** Detect publication in one job, including scripts referenced by its commands. */
+export async function jobPublishes(root, parsed, job, registry) {
   const pattern = JOB_PATTERNS.get(registry);
   const executable = executableLines(job.lines);
   if (publishingLine(executable, pattern)) {
@@ -427,9 +464,21 @@ function scriptPublishes(lines, registry) {
     return false;
   }
   const [program, subcommand] = patterns;
+  const variables = new Set();
+  for (const line of lines) {
+    const declaration = /\b(?:const|let|var)\s+(\w+)\s*=/.exec(line);
+    if (declaration && program.test(line.slice(declaration.index))) {
+      variables.add(declaration[1]);
+    }
+  }
   return lines.some(
     (line, index) =>
-      program.test(line) &&
+      (program.test(line) ||
+        [...variables].some((name) =>
+          new RegExp(`\\b${name}\\b`).test(
+            lines.slice(index, index + 3).join("\n"),
+          ),
+        )) &&
       /(?:exec|spawn|run|Command::new|subprocess|system|(?:npm|pnpm|yarn)\s*\(\s*\[)/.test(
         line,
       ) &&

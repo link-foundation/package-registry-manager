@@ -11,6 +11,45 @@ fn polyglot() -> String {
         .to_owned()
 }
 
+#[test]
+fn token_maintenance_flags_reject_invalid_or_offline_private_inventory() {
+    for args in [
+        vec![
+            "setup",
+            "--registry",
+            "npm",
+            "--rotate-token",
+            "CARGO_TOKEN",
+        ],
+        vec![
+            "setup",
+            "--registry",
+            "crates-io",
+            "--rotate-token",
+            "{ORG}_TOKEN",
+        ],
+        vec![
+            "inspect",
+            "--org",
+            "acme",
+            "--offline",
+            "--token-expiry-days",
+            "7",
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_package-registry-manager"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("--rotate-token") || error.contains("--token-expiry-days"),
+            "{error}"
+        );
+    }
+}
+
 fn run(args: &[&str], registry: Option<&MockRegistry>) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_package-registry-manager"));
     command.args(args);
