@@ -469,7 +469,8 @@ the known ID. The replacement preserves endpoint and crate scopes, expires after
 30 days (`tokens.crates-io.expiry_days`, 1–90), and is stored through gh-manager
 with `CARGO_TOKEN_EXPIRES_AT`. Organization storage preserves visibility and
 selected grants; repository fallback and existing repository overrides receive
-the replacement too. Every discovered consumer must pass CI verification before
+the replacement too. Every discovered consumer, including readers without a
+publishable manifest, must pass CI verification before
 the old token is revoked. Failed or inconclusive verification retains both
 credentials, and incomplete account scans block rotation.
 

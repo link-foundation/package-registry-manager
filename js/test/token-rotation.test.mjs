@@ -177,7 +177,7 @@ test("account snapshots fetch publishing scripts (#56)", async () => {
   assert.equal(scriptFetch, true);
 });
 
-test("account rotation selects healthy crates consumers with a custom secret name", async () => {
+test("account rotation verifies custom-secret readers even without package manifests", async () => {
   let executed = false;
   await accountCommand(
     "setup",
@@ -191,21 +191,30 @@ test("account rotation selects healthy crates consumers with a custom secret nam
         repos: {
           list: async () => [
             { full_name: "acme/start", default_branch: "main" },
+            { full_name: "acme/consumer", default_branch: "main" },
           ],
-          files: async () =>
-            Promise.all(
-              [
-                "Cargo.toml",
-                ".github/workflows/js.yml",
-                ".github/workflows/rust.yml",
-                "scripts/publish-to-crates.mjs",
-              ].map(async (name) => ({
-                path: name,
-                content: (
-                  await readFile(path.join(root, name), "utf8")
-                ).replaceAll("CARGO_TOKEN", "PRIVATE_CARGO"),
-              })),
-            ),
+          files: async (slug) =>
+            slug === "acme/consumer"
+              ? [
+                  {
+                    path: ".github/workflows/check.yml",
+                    content:
+                      "on: push\njobs:\n  consumer:\n    steps:\n      - run: cargo search example\n        env:\n          CARGO_TOKEN: ${{ secrets.PRIVATE_CARGO }}\n",
+                  },
+                ]
+              : Promise.all(
+                  [
+                    "Cargo.toml",
+                    ".github/workflows/js.yml",
+                    ".github/workflows/rust.yml",
+                    "scripts/publish-to-crates.mjs",
+                  ].map(async (name) => ({
+                    path: name,
+                    content: (
+                      await readFile(path.join(root, name), "utf8")
+                    ).replaceAll("CARGO_TOKEN", "PRIVATE_CARGO"),
+                  })),
+                ),
         },
       },
       executePlans: async (plans, options) => {
@@ -213,7 +222,7 @@ test("account rotation selects healthy crates consumers with a custom secret nam
         assert.equal(plans.length, 1);
         assert.equal(plans[0].steps[0].id, "rotate-crates-token");
         assert.deepEqual(options.secretRepositories, {
-          "crates-io:PRIVATE_CARGO": ["acme/start"],
+          "crates-io:PRIVATE_CARGO": ["acme/start", "acme/consumer"],
         });
         return [];
       },

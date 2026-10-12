@@ -289,6 +289,11 @@ export async function accountCommand(command, options, outputPlans) {
         }
       }
     }
+    if (options.rotateToken) {
+      secretRepositories[`crates-io:${options.rotateToken}`] = [
+        ...rotationConsumers,
+      ];
+    }
     const outcomes = await (options.executePlans ?? executePlans)(
       plans,
       {

@@ -22,6 +22,7 @@ use std::{
 fn secret_repositories(
     plans: &[package_registry_manager::model::SetupPlan],
     template: Option<&str>,
+    rotation: Option<(&str, &BTreeSet<String>)>,
 ) -> Result<BTreeMap<String, Vec<String>>> {
     let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for plan in plans {
@@ -53,7 +54,9 @@ fn secret_repositories(
                 .unwrap_or_default()
         );
         let name = package_registry_manager::ci_credential_cycle::secret_name(
-            template
+            rotation
+                .map(|(secret, _)| secret)
+                .or(template)
                 .or_else(|| settings["tokens"][plan.registry.to_string()]["secret"].as_str())
                 .or_else(|| plan.package.token_secrets.first().map(String::as_str))
                 .unwrap_or(provider.secret),
@@ -66,6 +69,12 @@ fn secret_repositories(
         if !targets.contains(&slug) {
             targets.push(slug);
         }
+    }
+    if let Some((secret, consumers)) = rotation {
+        groups.insert(
+            format!("crates-io:{secret}"),
+            consumers.iter().cloned().collect(),
+        );
     }
     Ok(groups)
 }
@@ -257,6 +266,7 @@ pub async fn run(args: &Args) -> Result<()> {
         None
     };
     let mut plans = Vec::new();
+    let mut rotation_consumers = BTreeSet::new();
     for repo in &mut scan.report.repositories {
         let Some(inspection) = &repo.inspection else {
             continue;
@@ -272,6 +282,9 @@ pub async fn run(args: &Args) -> Result<()> {
         } else {
             false
         };
+        if rotation_consumer {
+            rotation_consumers.insert(repo.repository.clone());
+        }
         if matches!(args.command, Commands::Setup { .. }) {
             inspection.packages.retain(|package| {
                 if args.migrate {
@@ -459,6 +472,9 @@ pub async fn run(args: &Args) -> Result<()> {
                 secret_repositories: Some(&secret_repositories(
                     &plans,
                     args.secret_name.as_deref(),
+                    args.rotate_token
+                        .as_deref()
+                        .map(|secret| (secret, &rotation_consumers)),
                 )?),
                 endpoints,
                 poll_interval: Duration::from_secs(5),
@@ -481,4 +497,33 @@ pub async fn run(args: &Args) -> Result<()> {
         bail!("some repositories could not be scanned");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotation_groups_include_unplanned_readers_and_use_the_explicit_secret() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fixtures/token-rotation");
+        let mut inspection = package_registry_manager::inspect_repository(&root).unwrap();
+        inspection.repository.github_owner = Some("acme".into());
+        inspection.repository.github_repository = Some("start".into());
+        let plans = build_plans_with(
+            &inspection,
+            &BTreeSet::from([Registry::CratesIo]),
+            &PlanOptions {
+                rotate_token: Some("PRIVATE_CARGO".into()),
+                ..PlanOptions::default()
+            },
+        );
+        let readers = BTreeSet::from(["acme/start".into(), "acme/consumer".into()]);
+        let groups = secret_repositories(&plans, None, Some(("PRIVATE_CARGO", &readers))).unwrap();
+        assert_eq!(
+            groups["crates-io:PRIVATE_CARGO"],
+            vec!["acme/consumer", "acme/start"]
+        );
+        assert!(!groups.contains_key("crates-io:CARGO_TOKEN"));
+    }
 }
