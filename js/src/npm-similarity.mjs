@@ -128,7 +128,9 @@ export async function checkSimilarity(name, options = {}) {
       throw await namingError(name, candidate, options);
     }
   }
-  const queries = [...new Set([name, name.split(/[._-]/).at(-1)])];
+  const queries = [...new Set([name, name.split(/[._-]/).at(-1)])].filter(
+    Boolean,
+  );
   for (const query of queries) {
     const response = await lookup(
       base,

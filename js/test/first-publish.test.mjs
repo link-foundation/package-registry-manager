@@ -92,6 +92,27 @@ test("authorization failures are not npm naming failures (#51)", () => {
   );
 });
 
+test("npm similarity preflight never searches an empty trailing segment (#51)", async () => {
+  for (const suffix of ["-", "_", "."]) {
+    const name = `unique-publish-example${suffix}`;
+    const queries = [];
+    await policy.checkNamePolicy(name, {
+      fetch: async (url) => {
+        const query = new URL(url).searchParams.get("text");
+        if (query !== null) {
+          queries.push(query);
+        }
+        return {
+          status: query === "" ? 400 : query === null ? 404 : 200,
+          ok: query !== null && query !== "",
+          json: async () => ({ objects: [] }),
+        };
+      },
+    });
+    assert.deepEqual(queries, [name]);
+  }
+});
+
 test("Python build installs its frontend only into an isolated environment (#50)", async () => {
   assert.equal(typeof python.buildPythonDistribution, "function");
   const calls = [];

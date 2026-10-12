@@ -155,6 +155,7 @@ pub async fn check_similarity(name: &str, base: &str, scope: Option<&str>) -> Re
         }
     }
     let mut queries = vec![name, tail];
+    queries.retain(|query| !query.is_empty());
     queries.dedup();
     for query in queries {
         let response = client
