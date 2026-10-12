@@ -36,10 +36,13 @@ mod batch;
 mod browser_session;
 mod crates_session;
 mod credential_session;
+mod migration_cleanup;
 mod publisher_session;
 mod release_session;
 mod repository_session;
+mod token_inventory;
 pub use batch::{execute_plan, execute_plans, execute_plans_with};
+pub use token_inventory::read_account_token_inventory;
 
 const PREFILLED_FORMS: [&str; 2] = ["configure-trusted-publisher", "create-pending-publisher"];
 const INTERACTIVE_CHECKS: [&str; 2] = ["check-trust", "verify-trusted-publisher"];
@@ -231,6 +234,9 @@ impl<'a> Session<'a> {
     }
 
     async fn run_step(&mut self, step: &SetupStep) -> Result<()> {
+        if step.id == "cleanup-migrated-secrets" {
+            return self.cleanup_migrated_secrets().await;
+        }
         if [
             "check-repository-publisher",
             "verify-repository-publisher",
@@ -273,7 +279,14 @@ impl<'a> Session<'a> {
             StepKind::Command => self.command(step).await,
             StepKind::Wait => self.wait(step).await,
             StepKind::Browser => self.browser_step(step).await,
-            StepKind::Api if step.id == "manage-registry-token" => self.setup_credential().await,
+            StepKind::Api
+                if matches!(
+                    step.id.as_str(),
+                    "manage-registry-token" | "rotate-crates-token"
+                ) =>
+            {
+                self.setup_credential().await
+            }
             StepKind::Api => self.api_step(step).await,
             StepKind::Manual => {
                 println!("{}", step.description);
@@ -913,8 +926,8 @@ pub(crate) fn is_yes(answer: &str) -> bool {
 }
 
 pub(crate) fn prompt(message: &str) -> Result<String> {
-    print!("{message}");
-    io::stdout().flush()?;
+    eprint!("{message}");
+    io::stderr().flush()?;
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
     Ok(answer)

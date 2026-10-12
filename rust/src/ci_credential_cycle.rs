@@ -104,12 +104,24 @@ pub fn complete_rotation(state: &mut Value, repos: &[String], secret: &str, id: 
 
 /// Keep healthy secrets, test uncertain existing secrets, and retry auth rejection once.
 pub async fn cycle_credential(adapter: &mut impl CiCredentialAdapter) -> Result<Value> {
+    cycle_credential_with(adapter, false).await
+}
+
+/// Explicit rotations replace healthy secrets while retaining verification-before-revocation.
+pub async fn cycle_credential_with(
+    adapter: &mut impl CiCredentialAdapter,
+    force: bool,
+) -> Result<Value> {
     let health = adapter.health().await?;
-    if health["status"] == "ok" {
+    if !force && health["status"] == "ok" {
         return Ok(json!({"status":"ok","changed":false}));
     }
     let previous = adapter.metadata().await?;
-    if health["status"] == "unknown" && !previous.is_null() && previous["present"] != false {
+    if !force
+        && health["status"] == "unknown"
+        && !previous.is_null()
+        && previous["present"] != false
+    {
         let tested = adapter.test().await?;
         if tested["status"] == "ok" {
             return Ok(json!({"status":"ok","changed":false}));

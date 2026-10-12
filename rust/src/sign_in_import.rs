@@ -283,12 +283,12 @@ pub fn choose_sign_in_source(
         first.label
     );
     if auto {
-        println!("  {question} yes (--browser-import auto)");
+        eprintln!("  {question} yes (--browser-import auto)");
         return Ok(sources.into_iter().next());
     }
     if sources.len() > 1 {
         for (index, source) in sources.iter().enumerate() {
-            println!(
+            eprintln!(
                 "  {}. {} ({})",
                 index + 1,
                 source.label,

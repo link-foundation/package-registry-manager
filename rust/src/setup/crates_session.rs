@@ -298,7 +298,7 @@ impl Session<'_> {
             profile: source.profile,
         });
         self.connect(&imported).await?;
-        println!(
+        eprintln!(
             "  Imported the {} sign-in from {}.",
             domains.join(" / "),
             source.label

@@ -1,0 +1,13 @@
+on:
+  workflow_call:
+    secrets:
+      CARGO_TOKEN:
+        required: false
+jobs:
+  release:
+    environment: release-main
+    steps:
+      - name: Publish start-command to crates.io
+        run: node scripts/publish-to-crates.mjs
+        env:
+          CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}

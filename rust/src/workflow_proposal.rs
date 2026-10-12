@@ -1,6 +1,6 @@
 //! Reviewable workflow jobs and a branch/PR offer for missing CI publication.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -16,6 +16,8 @@ use crate::workflows::{read_workflows, Workflow};
 /// Proposed contents, generated before any repository mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowProposal {
+    /// Additional workflow files when converting reusable publishing paths.
+    pub files: BTreeMap<String, String>,
     /// Filename in .github/workflows.
     pub workflow: String,
     /// Complete updated YAML for review.
@@ -279,6 +281,7 @@ pub fn workflow_proposal(
         String::new()
     };
     Ok(WorkflowProposal {
+        files: BTreeMap::new(),
         workflow: workflow.to_owned(),
         contents: format!(
             "{}\n\n{addition}{suffix}",
@@ -326,13 +329,41 @@ pub async fn offer_workflow(
     options: WorkflowOptions<'_>,
 ) -> Result<Option<String>> {
     let packages: Vec<_> = plans.iter().map(|plan| plan.package.clone()).collect();
-    let proposal = workflow_proposal(
-        inspection,
-        &packages,
-        &read_workflows(repository)?,
-        options.workflow,
-        options.environment,
-    )?;
+    let migration = packages
+        .iter()
+        .any(|package| !package.token_secrets.is_empty());
+    let propose = |root: &Path, override_file: Option<&str>| -> Result<WorkflowProposal> {
+        if migration {
+            let files = crate::workflow_migration::workflow_migration_proposal(
+                root,
+                &packages,
+                &read_workflows(root)?,
+            )?;
+            let workflow = override_file
+                .or(packages[0].workflow.as_deref())
+                .unwrap_or("release.yml")
+                .into();
+            let contents = files
+                .iter()
+                .map(|(name, contents)| format!(".github/workflows/{name}:\n{contents}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(WorkflowProposal {
+                files,
+                workflow,
+                contents,
+            })
+        } else {
+            workflow_proposal(
+                inspection,
+                &packages,
+                &read_workflows(root)?,
+                override_file,
+                options.environment,
+            )
+        }
+    };
+    let proposal = propose(repository, options.workflow)?;
     println!(
         "Proposed .github/workflows/{}:\n{}",
         proposal.workflow, proposal.contents
@@ -404,27 +435,39 @@ pub async fn offer_workflow(
     )
     .await?;
     let result = async {
-        let current = workflow_proposal(inspection, &packages, &read_workflows(&checkout)?, Some(&proposal.workflow), options.environment)?;
+        let current = propose(&checkout, Some(&proposal.workflow))?;
         if current.contents != proposal.contents {
             println!("Updated proposal from {base}:\n{}", current.contents);
             if !yes && !crate::setup::is_yes(&crate::setup::prompt("Use this updated proposal? [y/N] ")?) {
                 return Ok(None);
             }
         }
-        let file = format!(".github/workflows/{}", current.workflow);
-        let target = checkout.join(&file);
+        let mut files: BTreeMap<String,String> = if migration {current.files.into_iter().map(|(name,contents)| (format!(".github/workflows/{name}"),contents)).collect()} else {BTreeMap::from([(format!(".github/workflows/{}",current.workflow),current.contents)])};
+        if migration {
+            for directory in ["changelog.d","rust/changelog.d","js/changelog.d"] {
+                if fs::symlink_metadata(checkout.join(directory)).is_ok_and(|metadata| metadata.is_dir()) {
+                    files.insert(format!("{directory}/{}_trusted_publishing.md",chrono::Utc::now().format("%Y%m%d_%H%M%S")),"---\nbump: patch\n---\n\n### Changed\n- Publish through GitHub Actions trusted publishing and remove long-lived registry token workflow inputs.\n".into());
+                }
+            }
+        }
+        for (file,contents) in &files {
+        let target = checkout.join(file);
         fs::create_dir_all(target.parent().context("workflow directory")?)?;
         let parent = target.parent().context("workflow directory")?.canonicalize()?;
         if !parent.starts_with(checkout.canonicalize()?) || fs::symlink_metadata(&target).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
             bail!("workflow must stay inside the proposal worktree without symlinks");
         }
-        fs::write(target, current.contents)?;
-        run(&checkout, "git", &["add", "--", &file], verbose).await?;
-        run(&checkout, "git", &["commit", "-m", "Add missing trusted publishing jobs"], verbose).await?;
+        fs::write(target, contents)?;
+        }
+        let mut add = vec!["add","--"]; add.extend(files.keys().map(String::as_str));
+        run(&checkout, "git", &add, verbose).await?;
+        let title = if migration {"Migrate registry publishing to OIDC"} else {"Add missing trusted publishing jobs"};
+        run(&checkout, "git", &["commit", "-m", title], verbose).await?;
         run(&checkout, "git", &["push", "origin", &format!("HEAD:refs/heads/{branch}")], verbose).await?;
         let names = plans.iter().map(|plan| format!("{}: {}", plan.registry, plan.package.name)).collect::<Vec<_>>().join(", ");
-        let body = format!("Add missing publishing jobs for {names} in {}. Review the build, versioning, triggers and job dependencies before merging. Then re-run setup to attach the trusted publishers to this file.", current.workflow);
-        let url = run(&checkout, "gh", &["pr", "create", "--repo", &slug, "--base", &base, "--head", &branch, "--draft", "--title", "Add missing trusted publishing jobs", "--body", &body], verbose).await?;
+        let body = format!("{} for {names} in {}. Review the build, versioning, triggers and job dependencies before merging. Then re-run setup{} to attach the trusted publishers to the caller workflow{}.",if migration {"Convert existing token publishing"} else {"Add missing publishing jobs"},files.keys().cloned().collect::<Vec<_>>().join(", "),if migration {" --migrate"} else {""},if migration {" and verify an OIDC release before cleaning up legacy secrets"} else {""});
+        let body_file = temporary.path().join("pr-body.md"); fs::write(&body_file,body)?;
+        let url = run(&checkout, "gh", &["pr", "create", "--repo", &slug, "--base", &base, "--head", &branch, "--draft", "--title", title, "--body-file", &body_file.to_string_lossy()], verbose).await?;
         println!("Review {url}, merge it, then re-run setup. Trusted publishers have not been attached.");
         Ok(Some(url))
     }.await;

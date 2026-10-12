@@ -7,12 +7,15 @@ import {
   rm,
   symlink,
   writeFile,
+  cp,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { offerWorkflow, workflowProposal } from "../src/workflow-proposal.mjs";
 import { buildPlans } from "../src/plan.mjs";
 import { detectPublisher } from "../src/publishers.mjs";
+import { inspectRepository } from "../src/discovery.mjs";
+import { fileURLToPath } from "node:url";
 
 const packages = [
   { registry: "npm", name: "tool", manifest: "js/package.json" },
@@ -28,6 +31,78 @@ const inspection = {
   repository: { release_workflow: "release.yml" },
   packages,
 };
+
+test("migration offer writes caller, callee and repository-format changelog in one reviewed PR", async () => {
+  const fixture = fileURLToPath(
+    new URL("../../tests/fixtures/token-rotation", import.meta.url),
+  );
+  const root = await mkdtemp(path.join(os.tmpdir(), "prm-migration-pr-"));
+  const commands = [];
+  let checkout;
+  let files;
+  let body;
+  try {
+    await cp(fixture, root, { recursive: true });
+    await mkdir(path.join(root, "rust/changelog.d"), { recursive: true });
+    const inspected = await inspectRepository(root);
+    inspected.repository.github_owner = "acme";
+    inspected.repository.github_repository = "tool";
+    const plans = buildPlans(inspected, ["crates-io"], { migrate: true });
+    const result = await offerWorkflow(plans, {
+      repository: root,
+      inspection: inspected,
+      yes: true,
+      run: async (program, args) => {
+        commands.push([program, ...args]);
+        if (args[0] === "remote") {
+          return "https://github.com/acme/tool.git";
+        }
+        if (args[0] === "repo") {
+          return "main";
+        }
+        if (args[0] === "worktree" && args[1] === "add") {
+          checkout = args[4];
+          await cp(root, checkout, { recursive: true });
+        }
+        if (args[0] === "add") {
+          files = Object.fromEntries(
+            await Promise.all(
+              args
+                .slice(2)
+                .map(async (name) => [
+                  name,
+                  await readFile(path.join(checkout, name), "utf8"),
+                ]),
+            ),
+          );
+        }
+        if (args[0] === "pr") {
+          body = await readFile(args[args.indexOf("--body-file") + 1], "utf8");
+          return "https://github.com/acme/tool/pull/2";
+        }
+        return "";
+      },
+    });
+    assert.equal(result.status, "workflow-pr");
+    assert.match(files[".github/workflows/js.yml"], /id-token: write/);
+    assert.match(
+      files[".github/workflows/rust.yml"],
+      /crates-io-auth-action@[a-f0-9]{40}/,
+    );
+    const fragment = Object.keys(files).find((name) =>
+      name.startsWith("rust/changelog.d/"),
+    );
+    assert.match(files[fragment], /bump: patch/);
+    assert.match(body, /re-run setup --migrate/);
+    assert.match(
+      commands.find((args) => args[1] === "push")[3],
+      /^HEAD:refs\/heads\/prm\/publish-jobs-/,
+    );
+    assert.ok(commands.find((args) => args[1] === "pr").includes("--draft"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("adds missing jobs in the workflow already used by the other registries (#33)", () => {
   const contents =

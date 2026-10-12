@@ -25,6 +25,7 @@ export function githubServices(options = {}) {
   };
   const context = { rest, log };
   return {
+    rest,
     repos: createRepoManager(context),
     runs: createRunManager(context),
     health: createSecretHealth(context),

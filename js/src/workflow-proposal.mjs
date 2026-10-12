@@ -13,6 +13,7 @@ import { packageDirectory } from "./plan.mjs";
 import { parseWorkflow } from "./publishers.mjs";
 import { versionGuard } from "./version-guard.mjs";
 import { readWorkflows } from "./workflows.mjs";
+import { workflowMigrationProposal } from "./workflow-migration.mjs";
 
 const quote = (text) => `'${text.replaceAll("'", "''")}'`;
 const RELEASE_IF =
@@ -211,15 +212,30 @@ export async function offerWorkflow(plans, options) {
     repository: plans[0].repository,
     packages: plans.map((plan) => plan.package),
   };
-  const proposal = workflowProposal(
-    inspection,
-    plans.map((plan) => plan.package),
+  const migration = plans.some((plan) => plan.package.token_secrets?.length);
+  const propose = async (root, workflows, override) =>
+    migration
+      ? workflowMigrationProposal(
+          root,
+          plans.map((plan) => plan.package),
+          workflows,
+        )
+      : workflowProposal(
+          inspection,
+          plans.map((plan) => plan.package),
+          workflows,
+          override,
+          options.publisherEnvironment,
+        );
+  const proposal = await propose(
+    options.repository,
     await readWorkflows(options.repository),
     options.workflow,
-    options.publisherEnvironment,
   );
   console.log(
-    `Proposed .github/workflows/${proposal.workflow}:\n${proposal.contents}`,
+    migration
+      ? `Proposed workflow conversion:\n${JSON.stringify(proposal.files, null, 2)}`
+      : `Proposed .github/workflows/${proposal.workflow}:\n${proposal.contents}`,
   );
   if (
     !options.yes &&
@@ -291,15 +307,15 @@ export async function offerWorkflow(plans, options) {
     ]);
     created = true;
     // Recompute from the default branch to preserve edits made since inspection.
-    const current = workflowProposal(
-      inspection,
-      plans.map((plan) => plan.package),
+    const current = await propose(
+      checkout,
       await readWorkflows(checkout),
       proposal.workflow,
-      options.publisherEnvironment,
     );
-    if (current.contents !== proposal.contents) {
-      console.log(`Updated proposal from ${base}:\n${current.contents}`);
+    if (JSON.stringify(current) !== JSON.stringify(proposal)) {
+      console.log(
+        `Updated proposal from ${base}:\n${JSON.stringify(current, null, 2)}`,
+      );
       if (
         !options.yes &&
         !/^y(?:es)?$/i.test(
@@ -309,27 +325,58 @@ export async function offerWorkflow(plans, options) {
         return { status: "blocked" };
       }
     }
-    const file = `.github/workflows/${current.workflow}`;
-    await mkdir(path.dirname(path.join(checkout, file)), { recursive: true });
-    const target = path.join(checkout, file);
-    const physicalParent = await realpath(path.dirname(target));
-    if (
-      !physicalParent.startsWith(`${await realpath(checkout)}${path.sep}`) ||
-      (await lstat(target).catch(() => null))?.isSymbolicLink()
-    ) {
-      throw new Error(
-        "workflow must stay inside the proposal worktree without symlinks",
-      );
+    const files = migration
+      ? Object.fromEntries(
+          Object.entries(current.files).map(([name, contents]) => [
+            `.github/workflows/${name}`,
+            contents,
+          ]),
+        )
+      : { [`.github/workflows/${current.workflow}`]: current.contents };
+    if (migration) {
+      for (const directory of [
+        "changelog.d",
+        "rust/changelog.d",
+        "js/changelog.d",
+      ]) {
+        if (
+          (
+            await lstat(path.join(checkout, directory)).catch(() => null)
+          )?.isDirectory()
+        ) {
+          const stamp = new Date()
+            .toISOString()
+            .replaceAll(/[-:]/g, "")
+            .replace("T", "_")
+            .slice(0, 15);
+          files[`${directory}/${stamp}_trusted_publishing.md`] =
+            "---\nbump: patch\n---\n\n### Changed\n- Publish through GitHub Actions trusted publishing and remove long-lived registry token workflow inputs.\n";
+        }
+      }
     }
-    await writeFile(target, current.contents);
-    await run("git", ["add", "--", file], checkout);
-    await run(
-      "git",
-      ["commit", "-m", "Add missing trusted publishing jobs"],
-      checkout,
-    );
+    for (const [file, contents] of Object.entries(files)) {
+      await mkdir(path.dirname(path.join(checkout, file)), { recursive: true });
+      const target = path.join(checkout, file);
+      const physicalParent = await realpath(path.dirname(target));
+      if (
+        !physicalParent.startsWith(`${await realpath(checkout)}${path.sep}`) ||
+        (await lstat(target).catch(() => null))?.isSymbolicLink()
+      ) {
+        throw new Error(
+          "workflow must stay inside the proposal worktree without symlinks",
+        );
+      }
+      await writeFile(target, contents);
+    }
+    await run("git", ["add", "--", ...Object.keys(files)], checkout);
+    const title = migration
+      ? "Migrate registry publishing to OIDC"
+      : "Add missing trusted publishing jobs";
+    await run("git", ["commit", "-m", title], checkout);
     await run("git", ["push", "origin", `HEAD:refs/heads/${branch}`], checkout);
-    const body = `Add missing publishing jobs for ${plans.map((plan) => `${plan.registry}: ${plan.package.name}`).join(", ")} in ${current.workflow}. Review the build, versioning, triggers and job dependencies before merging. Then re-run setup to attach the trusted publishers to this file.`;
+    const body = `${migration ? "Convert existing token publishing" : "Add missing publishing jobs"} for ${plans.map((plan) => `${plan.registry}: ${plan.package.name}`).join(", ")} in ${Object.keys(current.files ?? { [current.workflow]: current.contents }).join(", ")}. Review the build, versioning, triggers and job dependencies before merging. Then re-run setup${migration ? " --migrate" : ""} to attach the trusted publishers to the caller workflow${migration ? " and verify an OIDC release before cleaning up legacy secrets" : ""}.`;
+    const bodyFile = path.join(temporary, "pr-body.md");
+    await writeFile(bodyFile, body);
     const url = await run(
       "gh",
       [
@@ -343,9 +390,9 @@ export async function offerWorkflow(plans, options) {
         branch,
         "--draft",
         "--title",
-        "Add missing trusted publishing jobs",
-        "--body",
-        body,
+        title,
+        "--body-file",
+        bodyFile,
       ],
       checkout,
     );

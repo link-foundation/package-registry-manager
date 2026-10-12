@@ -43,6 +43,28 @@ export function buildPlans(inspection, selected = [], options = {}) {
 }
 
 function buildPlan(inspection, packageInfo, options) {
+  if (
+    options.rotateToken &&
+    packageInfo.registry === "crates-io" &&
+    packageInfo.publishable
+  ) {
+    const plan = basePlan(inspection, packageInfo, [
+      {
+        id: "rotate-crates-token",
+        title: `Rotate ${options.rotateToken} through crates.io`,
+        kind: "api",
+        confirm: true,
+        description:
+          "Match the existing token by ID or name and secret update time, copy its endpoint and crate scopes, store the replacement and expiry through gh-manager, verify every consumer in CI, then revoke the old token. Migrate the listed repositories to trusted publishing.",
+      },
+    ]);
+    plan.credential_policy = {
+      mode: "token",
+      description:
+        "Explicit maintenance of a legacy crates.io secret during migration to trusted publishing",
+    };
+    return plan;
+  }
   if (!packageInfo.publishable) {
     return {
       ...basePlan(inspection, packageInfo, []),
@@ -50,6 +72,22 @@ function buildPlan(inspection, packageInfo, options) {
     };
   }
   const command = (program, args) => ({ program, args });
+  if (
+    (options.migrate || options.addPublishJob) &&
+    ["crates-io", "npm", "pypi"].includes(packageInfo.registry) &&
+    packageInfo.token_secrets?.length
+  ) {
+    return basePlan(inspection, packageInfo, [
+      {
+        id: "add-publishing-workflow",
+        title: "Convert token publishing in a reviewed pull request",
+        kind: "manual",
+        confirm: true,
+        description:
+          "Convert existing publishing jobs and reusable callers to OIDC, preserve the release commands and environment, and remove legacy token wiring. Review and merge the PR, then re-run setup --migrate to register trust and verify an OIDC release before deleting secrets.",
+      },
+    ]);
+  }
   const check = (id, title, description, commandSpec) => ({
     id,
     title,
@@ -202,6 +240,24 @@ function flowPlan(inspection, packageInfo, options) {
         ? steps
         : steps.filter((item) => !BOOTSTRAP_CONDITIONS.has(item.when)),
     );
+  }
+  if (options.migrate) {
+    steps = steps.filter(
+      (step) =>
+        ![
+          "audit-token-secrets",
+          "confirm-oidc-cleanup",
+          "delete-token-secret",
+        ].includes(step.id),
+    );
+    steps.push({
+      id: "cleanup-migrated-secrets",
+      title: "Verify OIDC publication and clean up legacy secrets",
+      kind: "api",
+      confirm: true,
+      description:
+        "Read the default-branch workflows and successful publishing steps at its current commit. Delete repository token secrets only after verification; delete organization secrets only after a complete fresh scan proves no remaining consumer.",
+    });
   }
   if (options.ref) {
     const ref = bootstrapRef(options.ref);

@@ -61,6 +61,17 @@ struct Args {
     #[arg(long, global = true)]
     secret_name: Option<String>,
 
+    /// Explicitly rotate an existing crates.io secret while workflows still use it.
+    #[arg(long, global = true)]
+    rotate_token: Option<String>,
+    /// Convert existing token jobs in reviewed PRs, then verify OIDC before cleanup.
+    #[arg(long, global = true)]
+    migrate: bool,
+
+    /// Inspect private crates.io token expiry in the browser during an account scan.
+    #[arg(long, global = true, value_parser = clap::value_parser!(u16).range(0..=365))]
+    token_expiry_days: Option<u16>,
+
     /// Bootstrap a pushed branch or pull-request head before merge.
     #[arg(long = "ref", global = true)]
     bootstrap_ref: Option<String>,
@@ -260,6 +271,43 @@ enum OutputFormat {
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut args = Args::parse();
+    if args.migrate
+        && (args.rotate_token.is_some()
+            || !matches!(
+                args.command,
+                Commands::Setup {
+                    registry: Some(Registry::CratesIo | Registry::Npm | Registry::PyPi),
+                    ..
+                }
+            ))
+    {
+        bail!("--migrate requires setup --registry crates-io, npm or pypi and cannot use --rotate-token");
+    }
+    if let Some(secret) = &args.rotate_token {
+        if !matches!(
+            args.command,
+            Commands::Setup {
+                registry: Some(Registry::CratesIo),
+                ..
+            }
+        ) {
+            bail!("--rotate-token requires setup --registry crates-io");
+        }
+        let resolved = package_registry_manager::ci_credential_cycle::secret_name(
+            secret,
+            Registry::CratesIo,
+            "owner/repo",
+        )?;
+        if resolved != *secret {
+            bail!("--rotate-token requires a literal secret name");
+        }
+        args.secret_name = Some(secret.clone());
+    }
+    if args.token_expiry_days.is_some()
+        && (args.offline || (args.org.is_none() && args.user.is_none()))
+    {
+        bail!("--token-expiry-days requires an online account scan");
+    }
     if args.repository.is_none()
         && args.bootstrap_ref.is_none()
         && args.org.is_none()
@@ -335,6 +383,8 @@ async fn main() -> Result<()> {
             publisher,
         } => {
             let options = PlanOptions {
+                migrate: false,
+                rotate_token: None,
                 bootstrap_ref: bootstrap_ref.clone(),
                 python,
                 add_publish_job: publisher.add_publish_job,
@@ -404,6 +454,8 @@ async fn main() -> Result<()> {
                 None => PathBuf::new(),
             };
             let options = PlanOptions {
+                migrate: args.migrate,
+                rotate_token: args.rotate_token.clone(),
                 bootstrap_ref: bootstrap_ref.clone(),
                 python,
                 add_publish_job: publisher.add_publish_job,

@@ -7,6 +7,10 @@ import { probeEnvironment } from "./prerequisites.mjs";
 import { executePlans } from "./setup-batch.mjs";
 import { secretName } from "./ci-credential-cycle.mjs";
 import { TOKEN_PROVIDERS } from "./credential-browser.mjs";
+import { listCratesTokens, tokenExpiryFindings } from "./crates-tokens.mjs";
+import { SetupSession } from "./setup.mjs";
+import { runCratesApiStep } from "./crates-api.mjs";
+import { readWorkflows } from "./workflows.mjs";
 
 async function prepareRepository(item) {
   const root = item.inspection.repository.root;
@@ -27,8 +31,47 @@ async function prepareRepository(item) {
 
 /** Plan from API snapshots; fetch worktrees only for repositories being changed. */
 export async function accountCommand(command, options, outputPlans) {
+  if (options.tokenExpiryDays !== undefined && !options.cratesTokens) {
+    if (options.offline) {
+      throw new Error(
+        "--token-expiry-days requires an online browser inventory",
+      );
+    }
+    const session = new SetupSession(
+      { registry: "crates-io", package: {}, steps: [] },
+      {
+        ...options,
+        repository: options.repository ?? ".",
+        quietBrowser: true,
+        log: console.error,
+      },
+    );
+    try {
+      await runCratesApiStep(session, { id: "crates-sign-in" });
+      options.cratesTokens = await listCratesTokens(
+        await session.automatedPage(options.browserOptions, true),
+      );
+    } finally {
+      await session.automation?.close();
+    }
+  }
   if (command === "inspect" && options.format !== "json") {
     process.stdout.write("Repository\tRegistry\tPackage\tFinding\n");
+    if (options.cratesTokens) {
+      process.stdout.write(
+        renderScan({
+          repositories: [],
+          findings: tokenExpiryFindings(
+            options.cratesTokens,
+            options.org ?? options.user,
+            options.tokenExpiryDays,
+          ),
+        })
+          .split("\n")
+          .slice(1)
+          .join("\n"),
+      );
+    }
   }
   const scanOptions = {
     ...options,
@@ -101,6 +144,9 @@ export async function accountCommand(command, options, outputPlans) {
     if (errors.length) {
       console.error(renderScan({ repositories: errors, findings: [] }));
     }
+    if (options.migrate && errors.length) {
+      throw new Error("migration requires a complete account scan");
+    }
     const packages = items.flatMap((item) => item.inspection.packages);
     const environment = await (options.probeEnvironment ?? probeEnvironment)({
       offline: options.offline,
@@ -108,6 +154,19 @@ export async function accountCommand(command, options, outputPlans) {
       npm: packages.some((item) => item.registry === "npm"),
       python: packages.some((item) => item.registry === "pypi"),
     });
+    const rotationConsumers = new Set();
+    if (options.rotateToken) {
+      const reference = new RegExp(`\\bsecrets\\.${options.rotateToken}\\b`);
+      for (const item of items) {
+        if (
+          (await readWorkflows(item.inspection.repository.root)).some(
+            (workflow) => reference.test(workflow.contents),
+          )
+        ) {
+          rotationConsumers.add(item.repository);
+        }
+      }
+    }
     let plans = items
       .flatMap((item) => {
         const relevant = scan.findings.filter(
@@ -118,7 +177,12 @@ export async function accountCommand(command, options, outputPlans) {
           packages: item.inspection.packages.filter(
             (pkg) =>
               (!options.package || pkg.name === options.package) &&
+              (!options.rotateToken ||
+                (pkg.registry === "crates-io" &&
+                  rotationConsumers.has(item.repository))) &&
               (command === "plan" ||
+                options.migrate ||
+                options.rotateToken ||
                 relevant.some(
                   (finding) => !finding.package || finding.package === pkg.name,
                 )),
@@ -126,6 +190,7 @@ export async function accountCommand(command, options, outputPlans) {
         };
         return buildPlans(inspection, options.registries ?? [], {
           ...options.planOptions,
+          rotateToken: options.rotateToken,
           environment,
         }).filter((plan) => plan.package.publishable);
       })
@@ -182,10 +247,17 @@ export async function accountCommand(command, options, outputPlans) {
           "some repositories could not be prepared; see scan errors",
         );
       }
+      if (options.migrate && scan.repositories.some((item) => item.error)) {
+        throw new Error("migration requires a complete account scan");
+      }
     }
     const secretRepositories = {};
     for (const plan of plans) {
-      const provider = TOKEN_PROVIDERS[plan.registry];
+      const provider =
+        TOKEN_PROVIDERS[plan.registry] ??
+        (options.rotateToken && plan.registry === "crates-io"
+          ? { secret: options.rotateToken }
+          : null);
       if (provider) {
         const config = JSON.parse(
           await readFile(
@@ -203,7 +275,8 @@ export async function accountCommand(command, options, outputPlans) {
         }
         const slug = `${plan.repository.github_owner}/${plan.repository.github_repository}`;
         const name = secretName(
-          options.secretName ??
+          options.rotateToken ??
+            options.secretName ??
             config.tokens?.[plan.registry]?.secret ??
             plan.package.token_secrets?.[0] ??
             provider.secret,
@@ -216,12 +289,18 @@ export async function accountCommand(command, options, outputPlans) {
         }
       }
     }
+    if (options.rotateToken) {
+      secretRepositories[`crates-io:${options.rotateToken}`] = [
+        ...rotationConsumers,
+      ];
+    }
     const outcomes = await (options.executePlans ?? executePlans)(
       plans,
       {
         ...options,
         github,
         accountScan: true,
+        scanErrors: scan.repositories.some((item) => item.error),
         browser: options.openWith ? options.browser : "automated",
         quietBrowser: true,
         secretRepositories,

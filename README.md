@@ -454,6 +454,66 @@ when prompted so Packagist observes new tags. See
 
 ## Configuration
 
+While repositories still use a legacy crates.io secret, explicitly rotate it:
+
+```sh
+package-registry-manager setup --org link-foundation --registry crates-io --rotate-token CARGO_TOKEN
+package-registry-manager setup --org link-foundation --registry crates-io --rotate-token CARGO_TOKEN --execute --browser-import auto
+package-registry-manager inspect --org link-foundation --token-expiry-days 7
+```
+
+Rotation matches the private crates.io token inventory by name and creation time
+against GitHub's secret `updated_at`. Ambiguous matches stop before creating a
+token; set `tokens.crates-io.token_id` in `.package-registry-manager.json` to choose
+the known ID. The replacement preserves endpoint and crate scopes, expires after
+30 days (`tokens.crates-io.expiry_days`, 1–90), and is stored through gh-manager
+with `CARGO_TOKEN_EXPIRES_AT`. Organization storage preserves visibility and
+selected grants; repository fallback and existing repository overrides receive
+the replacement too. Every discovered consumer, including readers without a
+publishable manifest, must pass CI verification before
+the old token is revoked. Failed or inconclusive verification retains both
+credentials, and incomplete account scans block rotation.
+
+The command lists consumers to migrate to trusted publishing. Ordinary crates.io
+setup still uses trusted publishing. Scripted publishing and local reusable
+workflow callers are detected during account scans. Expiry inspection opens the
+dedicated crates.io browser session and reports expired tokens and those expiring
+within the inclusive N-day window; it requires online account scope. The default
+scan uses public registry metadata and does not open this private inventory.
+
+Migrate existing crates.io, npm or PyPI publishing with the same reviewed setup:
+
+```sh
+package-registry-manager setup --org link-foundation --registry crates-io --migrate
+package-registry-manager setup --org link-foundation --registry crates-io --migrate --execute --browser-import auto
+```
+
+The first execution proposes a draft PR converting the existing publishing jobs
+and their local reusable callers. It preserves release commands, job dependencies,
+conditions, environments and mapping permissions, grants `id-token: write` on
+each caller and publishing job, removes legacy token inputs, and adds fragments
+to existing `changelog.d` directories. crates.io authentication uses an immutable
+action commit and passes its token output to Cargo. npm gets Node 22, npm 11 and
+provenance; simple PyPI Twine uploads become trusted-publishing actions.
+`--add-publish-job` also offers this conversion when existing jobs use tokens.
+Inline mappings, inherited/dynamic secret wiring, complex Twine commands,
+different Cargo publishing conditions within one job and existing mixed crates.io
+authentication require workflow review before conversion. Multiline publishing
+conditions are preserved in the authentication step.
+
+Review and merge the generated PR, then run the same `--migrate --execute` command
+to attach the trusted publishers. Registration uses the top-level caller filename
+and the actual publishing callee's environment, including nested local calls.
+The CLI retains secrets until a successful default-branch run at the current
+commit shows an actual OIDC upload. Trigger a normal release through your workflow
+and rerun the command after it succeeds; the CLI never uploads package artifacts.
+It then deletes verified repository secrets and expiry companions. Organization
+cleanup reads fresh default-branch workflows in every repository, including forks
+and archived repositories, lists remaining consumers, and retains shared secrets
+until none remain. Missing evidence, inaccessible repositories, dynamic secret
+references and branch changes block deletion. Repository-only setup retains
+organization secrets; use account scope for the complete consumer check.
+
 The CLIs intentionally use the same options and JSON schema:
 
 | Option | Purpose |
@@ -462,6 +522,9 @@ The CLIs intentionally use the same options and JSON schema:
 | `--format text\|json` | Human or machine-readable output |
 | `--verbose` | Enable command and browser tracing |
 | `--registry <name>` | Restrict `plan`, or select exactly one registry for `setup` |
+| `--rotate-token <secret>` | Explicitly replace an existing crates.io token during `setup --registry crates-io` |
+| `--migrate` | Convert existing crates.io/npm/PyPI jobs in a reviewed PR, register trust, and verify publication before secret cleanup |
+| `--token-expiry-days <N>` | Read private crates.io token expiry during an online account scan (0–365 days) |
 | `--package <name>` | Plan only this package, or select it for `setup` when a registry has several |
 | `--offline` | Skip the public registry lookups; unknown state keeps every conditional step |
 | `--dry-run` | Print the whole setup flow without running it; the default |
