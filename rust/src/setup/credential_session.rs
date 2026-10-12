@@ -184,8 +184,7 @@ impl CiCredentialAdapter for TokenHost<'_, '_> {
             )?;
             if self.session.options.verbose {
                 eprintln!(
-                    "Rotate {}: token {}; verify {}",
-                    self.secret,
+                    "Rotate crates.io token {}; verify {}",
                     self.crates_previous["id"],
                     self.test_targets.join(", ")
                 );
@@ -623,8 +622,7 @@ impl Session<'_> {
         let result = cycle_credential_with(&mut host, rotation).await?;
         if rotation {
             println!(
-                "Migrate these repositories to crates.io trusted publishing before deleting {}: {}",
-                host.secret,
+                "Migrate these repositories to crates.io trusted publishing before deleting the legacy token secret: {}",
                 host.test_targets.join(", ")
             );
         }

@@ -145,7 +145,7 @@ export async function rotateCratesToken(session) {
   );
   if (options.verbose) {
     console.error(
-      `Rotate ${secret}: token ${previousId}; verify ${consumers.join(", ")}`,
+      `Rotate crates.io token ${previousId}; verify ${consumers.join(", ")}`,
     );
   }
   const result = await cycleCredential(
@@ -260,6 +260,6 @@ export async function rotateCratesToken(session) {
   };
   options.rotatedSecrets?.set(key, session.outcome);
   console.log(
-    `Migrate these repositories to crates.io trusted publishing before deleting ${secret}: ${consumers.join(", ")}`,
+    `Migrate these repositories to crates.io trusted publishing before deleting the legacy token secret: ${consumers.join(", ")}`,
   );
 }
