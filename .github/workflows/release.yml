@@ -672,7 +672,7 @@ jobs:
           JAVASCRIPT_SMOKE_BUDGET_SECONDS: 300
         run: >-
           bash scripts/run-with-budget-warning.sh "$JAVASCRIPT_SMOKE_BUDGET_SECONDS" "JavaScript browser smoke test"
-          xvfb-run -a node --test --test-timeout=180000 js/test/browser-parity.test.mjs
+          xvfb-run -a node --test --test-timeout=180000 js/test/browser-parity.test.mjs js/test/publisher-dom.test.mjs
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-10-01
@@ -697,7 +697,7 @@ jobs:
         run: >-
           bash scripts/run-with-budget-warning.sh "$RUST_SMOKE_BUDGET_SECONDS" "Rust browser smoke test"
           xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration
-          browser_parity -- --nocapture
+          browser_ -- --nocapture
 
   # === RELEASE SCRIPT TESTS ===
   # `cargo test` only builds the library crate, so the inline `#[cfg(test)]`

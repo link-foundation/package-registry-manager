@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use super::{is_yes, prompt, Session};
 use crate::automation::Automation;
-use crate::browser_options::{BrowserOptions, ImportSource};
+use crate::browser_options::{BrowserOptions, ImportScope, ImportSource};
 use crate::crates_api::{
     attach_with_session, crate_version, first_publish, first_publish_question, read_session,
     sign_in, CratesHost, CRATES_IO_URL, SIGN_IN_TIMEOUT,
@@ -16,8 +16,8 @@ use crate::crates_api::{
 use crate::default_browser::detect_default_browser;
 use crate::model::{Registry, SetupStep};
 use crate::sign_in_import::{
-    choose_sign_in_source, default_sources, default_unreadable, find_sign_in_sources,
-    sign_in_domains, source_id, InstalledBrowsers, IMPORT_CHOICES,
+    choose_sign_in_source, default_sources, default_unreadable, find_saved_login_sources,
+    find_sign_in_sources, sign_in_domains, source_id, InstalledBrowsers, IMPORT_CHOICES,
 };
 use crate::tokens::TokenState;
 
@@ -223,15 +223,19 @@ impl Session<'_> {
                 profile: None,
             })
         } else {
-            find_sign_in_sources(
+            let mut sources = find_sign_in_sources(
                 &InstalledBrowsers,
                 &domains,
                 preferred,
                 self.options.verbose,
-            )
-            .into_iter()
-            .next()
-            .map(|source| ImportSource {
+            );
+            if sources.is_empty() {
+                sources = self.saved_login_sources(browser, &domains, preferred);
+                if !sources.is_empty() {
+                    resolved.import_scope = ImportScope::SavedLogins;
+                }
+            }
+            sources.into_iter().next().map(|source| ImportSource {
                 browser: source.browser,
                 profile: source.profile,
             })
@@ -272,16 +276,23 @@ impl Session<'_> {
             return Ok(false);
         }
         let preferred = self.default_source().await;
-        let sources = if choice == Some("default") {
+        let mut sources = if choice == Some("default") {
             default_sources(preferred, domains)
         } else {
             find_sign_in_sources(&InstalledBrowsers, domains, preferred, self.options.verbose)
         };
+        let saved = sources.is_empty();
+        if saved {
+            sources = self.saved_login_sources(browser, domains, preferred);
+        }
         let Some(source) = choose_sign_in_source(sources, domains, prompt, choice.is_some())?
         else {
             return Ok(false);
         };
         let mut imported = browser.clone();
+        if saved {
+            imported.import_scope = ImportScope::SavedLogins;
+        }
         imported.import = Some(ImportSource {
             browser: source.browser,
             profile: source.profile,
@@ -293,5 +304,20 @@ impl Session<'_> {
             source.label
         );
         Ok(true)
+    }
+
+    fn saved_login_sources(
+        &self,
+        browser: &BrowserOptions,
+        domains: &[&str],
+        preferred: Option<&str>,
+    ) -> Vec<crate::sign_in_import::SignInSource> {
+        if browser_commander::find_browser_source(&browser.channel)
+            .is_some_and(|source| source.control_protocol.as_deref() == Some("bidi"))
+        {
+            eprintln!("Saved-password migration into Firefox is unavailable in Browser Commander; use --browser-channel chrome for saved-login autofill, or sign in in Firefox.");
+            return Vec::new();
+        }
+        find_saved_login_sources(&InstalledBrowsers, domains, preferred, self.options.verbose)
     }
 }

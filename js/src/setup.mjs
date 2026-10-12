@@ -19,15 +19,12 @@ import {
 } from "./approvals.mjs";
 import { connectAutomation } from "./automation.mjs";
 import { runCratesApiStep } from "./crates-api.mjs";
-import {
-  detachedRunner,
-  npmPrefillScript,
-  openInUserBrowser,
-} from "./browser.mjs";
+import { detachedRunner, openInUserBrowser } from "./browser.mjs";
 import { detectDefaultBrowser, openWithCommand } from "./default-browser.mjs";
 import { CLEANUP_CONDITIONS } from "./flows.mjs";
 import { setupCredential } from "./credential-setup.mjs";
 import { checkNamePolicy, policyRefusal } from "./npm-policy.mjs";
+import { namingError } from "./npm-similarity.mjs";
 import { pagesSettingsUrl, pagesState } from "./pages.mjs";
 import { packageDirectory } from "./plan.mjs";
 import { twoFactorMode } from "./prerequisites.mjs";
@@ -35,6 +32,7 @@ import { getJson, probePackage } from "./registry-state.mjs";
 import { launchBrowser, signInDomains } from "./sign-in-import.mjs";
 import { PUBLISH_REJECTED, selectReleaseRun } from "./release-runs.mjs";
 import { runRepositoryRepair } from "./repository-repair.mjs";
+import { buildPythonDistribution } from "./python.mjs";
 import {
   publisherIdentities,
   publisherMatches,
@@ -105,16 +103,16 @@ export class SetupSession {
         ["sign-out", "crates-sign-out"].includes(step.id) &&
         this.conditions.has(step.when)
       ) {
-        if (step.id === "sign-out" && this.options.keepSession) {
+        if (step.id === "sign-out" && this.keepsSession(step)) {
           console.log(
-            "Keeping the npm session (--keep-session); run npm logout to revoke it.",
+            "Keeping the npm session for reuse; run npm logout to revoke it.",
           );
         } else {
           deferred.push(step);
         }
       } else if (step.id === "sign-out" && this.keepsSession(step)) {
         console.log(
-          "Keeping the npm session (--keep-session): its token stays in npm's user configuration until you run npm logout, and the next run reuses it while npm whoami succeeds.",
+          "Keeping the npm session for reuse: its token stays in npm's user configuration until you run npm logout, and the next run reuses it while npm whoami succeeds.",
         );
       } else if (this.conditions.has(step.when) && step.kind === "api") {
         this.log(`==> ${step.title}`);
@@ -148,7 +146,8 @@ export class SetupSession {
 
   keepsSession(step) {
     return (
-      Boolean(this.options.keepSession) &&
+      (Boolean(this.options.keepSession) ||
+        this.conditions.has("npm-name-refused")) &&
       this.conditions.has(step.when) &&
       step.command?.program === "npm"
     );
@@ -168,8 +167,19 @@ export class SetupSession {
     }
     switch (step.kind) {
       case "check":
+        if (step.id === "build-package" && this.plan.registry === "pypi") {
+          return buildPythonDistribution(
+            step.command.program,
+            this.cwd(step),
+            this.options,
+          );
+        }
         if (step.id === "check-name-policy") {
-          return checkNamePolicy(this.plan.package.name, this.options);
+          return checkNamePolicy(this.plan.package.name, {
+            ...this.options,
+            npmScope:
+              this.options.npmScope ?? this.plan.repository?.github_owner,
+          });
         }
         if (step.id === "check-registry") {
           return this.checkRegistry();
@@ -508,8 +518,19 @@ export class SetupSession {
         step.id === "first-publish" &&
         policyRefusal(String(result.stderr) + String(result.stdout))
       ) {
-        throw new Error(
-          "npm refused this name under its policy; no retry. Choose @owner/name or a longer descriptive name.",
+        this.conditions.add("npm-name-refused");
+        const output = String(result.stderr) + String(result.stdout);
+        const suggested = output.match(/@[a-z0-9._-]+\/[a-z0-9._-]+/g) ?? [];
+        throw await namingError(
+          this.plan.package.name,
+          output.match(/similar to existing package\s+([^\s;]+)/i)?.[1] ??
+            "another package",
+          {
+            ...this.options,
+            npmScope:
+              this.options.npmScope ?? this.plan.repository?.github_owner,
+            nameAlternatives: suggested,
+          },
         );
       }
       if (step.id === "attach-trusted-publisher") {
@@ -625,6 +646,7 @@ export class SetupSession {
     await this.open(step.url, Boolean(fill));
     if (fill && this.automation) {
       await this.prefill();
+      return;
     }
     await this.prompt("Finish this step in the browser, then press Enter...");
     if (step.id === "create-pending-publisher") {
@@ -633,32 +655,8 @@ export class SetupSession {
   }
 
   async prefill() {
-    await this.prompt("Press Enter when the form is visible...");
-    const page = this.automation;
-    const script = npmPrefillScript(this.plan.trusted_publisher, false);
-    let result = await page.evaluate(script);
-    if (result.filled?.length === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      result = await page.evaluate(script);
-    }
-    console.log(`Prefill result: ${JSON.stringify(result)}`);
-    const submit =
-      this.options.yes ||
-      /^(?:y|yes)$/i.test(
-        await this.prompt(
-          "Submit this trusted-publisher configuration? [y/N] ",
-        ),
-      );
-    if (submit) {
-      const submission = await page.evaluate(
-        npmPrefillScript(this.plan.trusted_publisher, true),
-      );
-      if (!submission.submitted) {
-        throw new Error(
-          "the form was not submitted; review the visible browser and submit manually",
-        );
-      }
-    }
+    const { fillPublisherForm } = await import("./publisher-form.mjs");
+    await fillPublisherForm(this);
   }
 
   async open(url, automate = false) {
@@ -698,6 +696,7 @@ export class SetupSession {
         browser: await launchBrowser(browser, domains, {
           deferred: this.plan.registry === "crates-io",
           verbose: quiet ? false : this.options.verbose,
+          ...this.options.importDiscovery,
         }),
         profile: this.options.browserProfile,
         verbose: quiet ? false : this.options.verbose,
@@ -798,12 +797,12 @@ export class SetupSession {
     return npm ? withFreshLinks(run) : run();
   }
 
-  openLink(url, kind) {
+  async openLink(url, kind) {
     console.log(approvalDeadline(kind));
     if (kind === "approve") {
       console.log(TWO_FACTOR_HINT);
     }
-    this.open(url).catch((error) =>
+    await this.open(url, !this.options.openWith).catch((error) =>
       console.error(`warning: could not open ${url}: ${error.message}`),
     );
   }

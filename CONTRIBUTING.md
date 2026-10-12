@@ -22,7 +22,8 @@ node js/src/cli.mjs --help
 ```
 
 Form filling requires an installed Chromium-family browser or a Firefox-family
-browser with geckodriver; sign-in URLs open in the default browser. Automated
+browser with geckodriver. npm sign-in and approvals reuse that profile; other
+web-auth links follow `--browser` or `--open-with`. Automated
 tests do not require a registry account or browser. Never use a personal default profile for development automation; use
 the CLI's dedicated profile, which lives in the per-user state directory and
 must never be placed where Git can commit it.
@@ -53,8 +54,8 @@ that the command line has no switches a browser started by hand would not
 have. It needs a display, so it is skipped unless `PRM_BROWSER_SMOKE=1`:
 
 ```bash
-PRM_BROWSER_SMOKE=1 xvfb-run -a node --test js/test/browser-parity.test.mjs
-PRM_BROWSER_SMOKE=1 xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration browser_parity
+PRM_BROWSER_SMOKE=1 xvfb-run -a node --test js/test/browser-parity.test.mjs js/test/publisher-dom.test.mjs
+PRM_BROWSER_SMOKE=1 xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration browser_
 ```
 
 The link-foundation libraries (browser-commander, command-stream, and

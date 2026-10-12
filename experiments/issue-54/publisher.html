@@ -1,0 +1,23 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Pending publisher regression fixture</title>
+<style>body{font:16px system-ui;margin:40px;max-width:900px;color:#223}h1{color:#086493}label{display:block;margin-top:12px}input{padding:8px;width:350px}input[type=submit]{margin-top:24px;width:auto;background:#086493;color:white;border:0}table{border-collapse:collapse;width:100%;margin-top:24px}td,th{padding:12px;border:1px solid #aaa;text-align:left}.form-errors{color:#a11}.is-hidden{display:none}.fixture{padding:12px;background:#eef4f8}</style>
+<h1>Trusted Publisher Management</h1><p class="fixture">Local fixture based on Warehouse's GitHub pending-publisher form. No registry account is used.</p>
+<h2>Pending publishers</h2><table class="table--publisher-list"><tbody id="publishers"></tbody></table>
+<h2>Add a new pending publisher</h2><button type="button">GitHub</button>
+<form id="pending-github-publisher-form">
+<input type="hidden" name="csrf_token" value="fixture">
+<label for="project_name">PyPI Project Name</label><input id="project_name" name="project_name" required>
+<label for="owner">Owner</label><input id="owner" name="owner" required>
+<label for="repository">Repository name</label><input id="repository" name="repository" required>
+<label for="workflow_filename">Workflow name</label><input id="workflow_filename" name="workflow_filename" required>
+<label for="environment">Environment name (optional)</label><input id="environment" name="environment">
+<input type="submit" value="Add">
+</form>
+<div class="is-hidden"><form id="pending-google-publisher-form"><label for="google_project">PyPI Project Name</label><input id="google_project" name="project_name"><input type="submit" value="Add"></form></div>
+<script>
+document.querySelector('#pending-github-publisher-form').onsubmit = event => {
+ event.preventDefault(); const data = new FormData(event.target);
+ const row = document.createElement('tr');
+ for (const value of [data.get('project_name'), 'GitHub']) { const cell=document.createElement('td');cell.textContent=value;row.append(cell); }
+ const details=document.createElement('td');const link=document.createElement('a');link.href='https://github.com/'+data.get('owner')+'/'+data.get('repository')+'/blob/main/.github/workflows/'+data.get('workflow_filename');link.textContent=data.get('repository');details.append(link, document.createElement('br'), 'Workflow: '+data.get('workflow_filename'), document.createElement('br'),'Environment name: '+(data.get('environment')||'(Any)'));row.append(details);document.querySelector('#publishers').append(row);
+};
+</script></html>

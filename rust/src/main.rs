@@ -33,7 +33,7 @@ fn browser_channel_help() -> String {
 
 fn browser_import_help() -> String {
     format!(
-        "Copy data from an installed profile (<browser>[:<profile>]): {}. default takes the system default browser, auto the first browser signed in to the registry.",
+        "Copy data from an installed profile (<browser>[:<profile>]): {}. default takes the system default browser, auto discovers registry cookies or usable saved logins.",
         import_sources().join(", ")
     )
 }
@@ -167,7 +167,8 @@ enum Commands {
         browser_executable: Option<PathBuf>,
 
         /// Open sign-in and approval pages in your default browser, or in the
-        /// automated profile. Forms are always filled in the automated profile.
+        /// automated profile. npm approvals reuse the automated profile unless
+        /// --open-with is set. Forms use the automated profile.
         #[arg(long, value_enum, default_value_t = BrowserMode::Default)]
         browser: BrowserMode,
 

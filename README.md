@@ -58,10 +58,9 @@ See the [bootstrap, wrapper and credential guide](docs/registry-setup.md) for br
 - Uses each ecosystem's official CLI for local validation, with exact argument
   arrays through
   [command-stream](https://github.com/link-foundation/command-stream).
-- Opens sign-in and approval URLs in the maintainer's default browser, where
-  they are usually already signed in, so the maintainer authenticates directly
-  with the registry. Forms are filled in a real installed browser with a
-  dedicated profile through
+- Reuses one dedicated browser profile for npm sign-in, publish approvals
+  and publisher forms. Other web-auth links follow `--browser`; an explicit
+  `--open-with` selects a browser application. Forms are filled through
   [browser-commander](https://github.com/link-foundation/browser-commander),
   which launches it the way a maintainer would start it by hand: no
   automation switches and `navigator.webdriver === false`.
@@ -157,19 +156,13 @@ tool's own web login, so credentials, cookies, and tokens never pass through
 the CLI and are never logged. The session the CLI opened is signed out and the
 temporary worktree removed when the run ends, even after a failure.
 
-Web-auth URLs printed by the registry CLIs (`npm login --auth-type=web`, the
-`npm publish` 2FA link, and `npm trust`) need no automation, because the tool
-waits for completion. `--browser default`, the default, opens them in the
-user's default browser (`open` on macOS, `xdg-open` on Linux, the URL handler
-on Windows), where the maintainer is usually already signed in and only
-approves. `--browser automated` opens them in the automation profile instead.
-Before npm starts, the CLI names the default browser it found (`defaults
-read` of the LaunchServices handlers on macOS, `xdg-settings get
-default-web-browser` on Linux, the `https` URL association on Windows), and
-each link is printed as `Opening <url> in Firefox, your default browser`.
-`--open-with <app>` opens the links in another application instead (`open -a
-<app>` on macOS, `<app> <url>` elsewhere); it cannot be combined with
-`--no-browser`.
+Web-auth URLs printed by npm (`npm login --auth-type=web`, `npm publish`
+2FA and `npm trust`) open in the same dedicated automated profile as publisher
+forms, so browser sign-in carries over to every approval. Other web-auth links
+follow `--browser default|automated`. With `default`, the CLI detects and names
+the system browser and uses its URL handler. `--open-with <app>` explicitly
+opens links in another application (`open -a <app>` on macOS, `<app> <url>`
+elsewhere); it cannot be combined with `--no-browser`.
 
 npm's login and approval links stay valid for about 5 minutes, so every link
 is printed with its deadline, such as `Sign in within about 5 minutes (until
@@ -179,13 +172,12 @@ reports `Invalid response from web login endpoint`), the CLI asks npm for a
 fresh link, up to 3 links in total, and then stops with a message to re-run
 when you are ready to approve within 5 minutes.
 
-The npm session the CLI opened is signed out at the end of the run.
-`--keep-session` keeps it instead: the token stays in npm's user configuration
+The npm session the CLI opened is signed out at the end of the run. A naming
+refusal retains it for a renamed retry; `--keep-session` also keeps it: the token stays in npm's user configuration
 until `npm logout`, and the next run reuses it while `npm whoami` succeeds, so
 setting up several packages one after another needs one sign-in.
 
-The automation profile is only needed to fill a form, such as the npm
-trusted-publisher fallback. Do not pass a normal browser profile to
+The automation profile holds npm approvals and publisher forms. Do not pass a normal browser profile to
 `--browser-profile`; Chrome 136 and newer intentionally restrict automation of
 the default profile. The default is an isolated, reusable profile in the
 per-user state directory, outside any repository:
@@ -222,7 +214,7 @@ no extra switches. Every change to that is opt-in:
   cookies, history, and other data from one of your browser profiles into the
   dedicated profile before it starts, so registry sessions carry over without
   automating your real profile. `default` takes the system default browser
-  and `auto` the first installed browser signed in to the registry.
+  and `auto` first discovers registry cookies, then usable saved logins.
   Both CLIs accept every id in Browser Commander's public catalogue, including
   Safari, Safari Technology Preview, Opera, Vivaldi, Arc, and Firefox forks.
   The import list, default-browser identification, and display names come from
@@ -232,6 +224,12 @@ no extra switches. Every change to that is opt-in:
   sign-in domains (`crates.io` and `github.com` for crates.io, `npmjs.com`
   for npm, `pypi.org` and `github.com` for PyPI) instead of the whole profile;
   it is the default for `default`, `auto`, and all Firefox-target imports.
+  When `auto` finds no cookies, it imports only usable saved passwords/passkeys
+  for those domains. Password autofill requires a Chromium target; Safari
+  passwords need an export and native passkeys are currently non-exportable.
+  If no usable login exists, the CLI names the installed browsers before
+  opening the form. Safari access denial opens Full Disk Access settings and
+  explains that the terminal app must be restarted after granting access.
 - Without `--browser-import`, the profile stays fresh. When a sign-in step
   finds no session and an installed browser holds cookies for the registry's
   sign-in domains, the CLI asks once whether to import only those cookies.
@@ -318,8 +316,8 @@ A bootstrap run:
    fails or prints nothing stops the run before anything is published.
 3. Signs in with `npm login --auth-type=web` only when needed, right before
    publishing, so the approval links do not expire while packing. The CLI
-   opens the printed login URL in the default browser, where the maintainer
-   is usually already signed in and approves, completing 2FA if asked. It
+   opens the printed login URL in the dedicated profile reused for subsequent
+   approvals; the maintainer completes sign-in and 2FA if asked. It
    then checks that the account has 2FA turned on.
 4. After confirmation, publishes that tarball once with
    `npm publish --auth-type=web`. npm asks for 2FA in the browser.
@@ -471,18 +469,18 @@ The CLIs intentionally use the same options and JSON schema:
 | `--verify-release` | Also dispatch and watch the release workflow and confirm provenance |
 | `--yes` | Pre-confirm publishing, secret changes, and form submission; requires `--execute` |
 | `--no-browser` | Print the setup URL after validation; requires `--execute` |
-| `--browser <default\|automated>` | Open sign-in and approval URLs in the default browser (default) or the automation profile |
+| `--browser <default\|automated>` | Select the browser for web-auth links; npm always reuses the automation profile unless `--open-with` is set |
 | `--browser-channel <name>` | Choose an installed launchable browser or alias from Browser Commander's catalogue; `--help` lists launchable channels (default: `chrome`) |
 | `--browser-executable <path>` | Launch this browser executable instead of the channel's |
 | `--browser-profile <path>` | Choose the dedicated automation profile used to fill forms (default: per-user state directory) |
 | `--browser-import <browser>[:<profile>]\|default\|auto` | Import from any browser id in Browser Commander's catalogue; `default` selects the system default browser and `auto` discovers a registry sign-in |
-| `--browser-import-scope <full\|domains>` | Import the whole profile, or only the registry's sign-in cookies (default: `full` for a named browser, `domains` otherwise) |
+| `--browser-import-scope <full\|domains>` | Import the whole profile, or only registry-domain data; `auto` falls back from cookies to supported saved logins (default: `full` for a named browser, `domains` otherwise) |
 | `--browser-attach snapshot[:<profile>]\|extension` | Fill forms in a temporary copy of your profile, or in your running browser through the Browser Commander extension |
 | `--browser-pref <key=value>` | Set a preference in the automated profile; may be repeated |
 | `--browser-restriction <name>` | Add a launch restriction or preset, such as `no-extensions`; may be repeated |
 | `--open-with <app>` | Open sign-in and approval URLs with this browser application instead of the default browser |
 | `--manual` | crates.io: create, use, and revoke the first-publish token by hand instead of through the crates.io API |
-| `--keep-session` | Keep the npm sign-in after a first publish, and the crates.io browser session of the automated profile, so the next package needs no new sign-in |
+| `--keep-session` | Keep npm authentication and the shared automated browser session across registry packages and steps |
 | `--workflow <file>` | Trusted-publisher workflow in `.github/workflows`, when detection finds several or the wrong one |
 | `--environment <name>` | GitHub environment of the trusted publisher |
 
@@ -569,8 +567,8 @@ repository files
     -> public registry lookup (exists? trusted publishing?)
     -> bootstrap / attach / complete setup plans
     -> exact-argv commands (opt in)
-    -> web login in the default browser (opt in)
-    -> form filling in a dedicated browser profile (fallback)
+    -> web login and npm approvals in a shared dedicated profile (opt in)
+    -> publisher form polling, filling and submission
     -> confirmed first publish, trust attachment, and secret changes
     -> sign-out and temporary worktree cleanup
 ```
@@ -604,8 +602,8 @@ compares it with a browser started by hand through browser-commander's
 must carry no extra switches. It needs a display, so it only runs on request:
 
 ```bash
-PRM_BROWSER_SMOKE=1 xvfb-run -a node --test js/test/browser-parity.test.mjs
-PRM_BROWSER_SMOKE=1 xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration browser_parity
+PRM_BROWSER_SMOKE=1 xvfb-run -a node --test js/test/browser-parity.test.mjs js/test/publisher-dom.test.mjs
+PRM_BROWSER_SMOKE=1 xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration browser_
 ```
 
 `node scripts/check-upstream-dependencies.mjs` fails when `js/package.json` or

@@ -1,4 +1,5 @@
 import { npmName, registryEndpoint, USER_AGENT } from "./registry-state.mjs";
+import { checkSimilarity, namingError } from "./npm-similarity.mjs";
 
 /** Bounded punctuation variants, including npm's punctuation-free moniker. */
 export function nameVariants(name) {
@@ -52,18 +53,17 @@ export async function checkNamePolicy(name, options = {}) {
       );
     }
     if (variant !== name) {
-      throw new Error(
-        `npm name '${name}' is similar to existing '${variant}'; use @owner/${name} or a longer descriptive name`,
-      );
+      throw await namingError(name, variant, options);
     }
     return;
   }
+  await checkSimilarity(name, options);
 }
 
 /** Report npm policy refusal once, without entering authentication retry logic. */
 export function policyRefusal(output) {
   return (
     /\bE403\b|403 Forbidden/i.test(output) &&
-    /too similar|forbidden|blocked|not allowed/i.test(output)
+    /too similar|package name.*(?:forbidden|blocked|not allowed)/i.test(output)
   );
 }

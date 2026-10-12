@@ -176,7 +176,7 @@ pub fn apply_python(plan: &mut SetupPlan, tools: &[PythonInterpreter]) {
             |tool| format!("{} ({})", tool.program, tool.version),
         ),
         required: format!(
-            "Install Python satisfying {} and its build module (python -m pip install build)",
+            "Install Python satisfying {} with venv support; the tool installs build in a temporary environment",
             if requirement.is_empty() {
                 "the project requirements"
             } else {

@@ -67,11 +67,11 @@ Setup options:
                                   through the crates.io API
   --keep-session                  Stay signed in after setup: npm keeps its
                                   session token in npm's user configuration
-                                  until npm logout; crates.io keeps only the
-                                  automated profile's browser session
+                                  until npm logout; the shared browser profile
+                                  keeps registry sessions across packages
   --browser <default|automated>   Open sign-in and approval pages in your
-                                  default browser, or in the automated
-                                  profile too (default: default)
+                                  default browser, or in the automated profile;
+                                  npm reuses the automated profile
   --browser-channel <channel>     Installed browser channel (default: chrome):
                                   ${launchChannels().join(", ")}
   --browser-executable <path>     Installed browser executable to launch
@@ -83,7 +83,7 @@ Setup options:
                                   ${importSources().join(", ")}
                                   into the automated profile; default takes the
                                   system default browser, auto the first
-                                  browser signed in to the registry
+                                  browser with registry cookies or saved logins
   --browser-import-scope <full|domains>
                                   Import the whole profile, or only the
                                   registry's sign-in cookies (default: full

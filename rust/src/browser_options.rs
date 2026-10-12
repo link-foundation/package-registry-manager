@@ -37,6 +37,8 @@ pub enum ImportScope {
     /// Only the cookies of the registry's sign-in domains.
     #[default]
     Domains,
+    /// Internal automatic fallback: registry cookies, saved passwords and supported passkeys.
+    SavedLogins,
     /// The whole profile.
     Full,
 }

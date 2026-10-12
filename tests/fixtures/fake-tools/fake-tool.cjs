@@ -90,7 +90,7 @@ if (tool === "npm") {
   }
   if (args[0] === "login") {
     console.log("Login at:");
-    console.log("https://www.npmjs.com/login?next=/login/cli/fake");
+    console.log(process.env.FAKE_NPM_LOGIN_URL || "https://www.npmjs.com/login?next=/login/cli/fake");
     if (failsAgain("FAKE_LEGACY_LOGIN")) {
       // npm's fallback when the web login fails: a prompt without a newline.
       process.stdout.write("Username: ");
@@ -139,7 +139,11 @@ if (tool === "npm") {
   }
   if (args[0] === "publish") {
     console.log("Authenticate your account at:");
-    console.log("https://www.npmjs.com/auth/cli/fake");
+    console.log(process.env.FAKE_NPM_APPROVAL_URL || "https://www.npmjs.com/auth/cli/fake");
+    if (process.env.FAKE_NPM_NAMING_REFUSAL) {
+      console.error("npm error 403 403 Forbidden - Package name too similar to existing package rc-upload; try renaming your package to '@acme/pipeline-app'");
+      process.exit(1);
+    }
     if (failsAgain("FAKE_EXPIRED_PUBLISH")) {
       console.error("npm error Invalid response from web login endpoint");
       process.exit(1);
@@ -191,7 +195,7 @@ if (tool === "npx" && args.includes("trust")) {
     process.exit(1);
   }
   console.log("Authenticate your account at:");
-  console.log("https://www.npmjs.com/auth/cli/fake-trust");
+  console.log(process.env.FAKE_NPM_APPROVAL_URL || "https://www.npmjs.com/auth/cli/fake-trust");
   if (command.includes("trust github")) {
     if (process.env.FAKE_TRUST_GITHUB === "fail") process.exit(1);
     set("trusted", true);

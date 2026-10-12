@@ -85,7 +85,13 @@ pub fn npm_prefill_script(prefill: &TrustedPublisherPrefill, submit: bool) -> Re
   const config = {config};
   const shouldSubmit = {submit};
   const normalized = value => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  const controls = Array.from(document.querySelectorAll('input, select, textarea'));
+  const provider = Array.from(document.querySelectorAll('button, label, [role="radio"]'))
+    .find(element => normalized(element.textContent) === 'github');
+  if (provider) provider.click();
+  const githubForm = document.querySelector('#pending-github-publisher-form, #github-publisher-form');
+  const controls = Array.from((githubForm || document).querySelectorAll('input, select, textarea'))
+    .filter(control => !control.disabled && control.type !== 'hidden'
+      && (githubForm || control.getClientRects().length > 0));
   const setValue = (control, value) => {{
     const prototype = control instanceof HTMLSelectElement
       ? HTMLSelectElement.prototype
@@ -99,7 +105,7 @@ pub fn npm_prefill_script(prefill: &TrustedPublisherPrefill, submit: bool) -> Re
   }};
   const textFor = control => {{
     const explicit = control.id
-      ? document.querySelector(`label[for="${{CSS.escape(control.id)}}"]`)?.textContent
+      ? (control.closest('form') || document).querySelector(`label[for="${{CSS.escape(control.id)}}"]`)?.textContent
       : '';
     return normalized([explicit, control.getAttribute('aria-label'), control.name,
       control.placeholder, control.closest('label')?.textContent].filter(Boolean).join(' '));
@@ -114,19 +120,18 @@ pub fn npm_prefill_script(prefill: &TrustedPublisherPrefill, submit: bool) -> Re
   const filled = [];
   const used = new Set();
   for (const [labels, value] of values) {{
-    if (!value) continue;
+    if (!value && labels[0] !== 'environment') continue;
     const control = controls.find(candidate => !used.has(candidate)
       && labels.some(label => textFor(candidate).includes(label)));
     if (control) {{ setValue(control, value); used.add(control); filled.push(labels[0]); }}
   }}
-  const provider = Array.from(document.querySelectorAll('button, label, [role="radio"]'))
-    .find(element => normalized(element.textContent).includes('github'));
-  if (provider && filled.length === 0) provider.click();
   let submitted = false;
-  if (shouldSubmit && filled.length >= 3) {{
-    const button = Array.from(document.querySelectorAll('button, input[type="submit"]'))
+  const required = ['organization', 'repository', 'workflow', ...(githubForm?.id.startsWith('pending-') ? ['project'] : [])];
+  const form = githubForm || controls.find(control => /repository|repo/.test(textFor(control)))?.closest('form');
+  if (shouldSubmit && required.every(field => filled.includes(field))) {{
+    const button = Array.from((form || document).querySelectorAll('button, input[type="submit"]'))
       .find(candidate => /add|save|configure|submit/.test(normalized(candidate.textContent || candidate.value))
-        && !candidate.disabled);
+        && !candidate.disabled && !candidate.classList.contains('button--disabled'));
     if (button) {{ button.click(); submitted = true; }}
   }}
   return {{ filled, providerSelected: Boolean(provider), submitted }};

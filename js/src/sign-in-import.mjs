@@ -1,9 +1,13 @@
 // Reusing a registry sign-in from an installed browser (#26): the automated
 // profile stays fresh and clean by default; when a step needs a sign-in it
-// does not hold, the tool offers to import only the cookies of the registry's
-// sign-in domains from a browser that has them. Cookie values are never
-// printed, logged, or cached: they are only counted.
+// does not hold, the tool offers registry-domain cookies, then supported
+// saved logins when no cookies exist. Credential values are never logged;
+// discovery counts them through Browser Commander.
 import * as commander from "browser-commander";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { detachedRunner } from "./browser.mjs";
 
 import { catalogueName } from "./browser-catalogue.mjs";
 import { detectDefaultBrowser } from "./default-browser.mjs";
@@ -50,7 +54,7 @@ export function sourceId(displayName) {
 
 /**
  * The migration Browser Commander runs: the whole profile for `full`, or
- * only the cookies of `domains`.
+ * registry-domain cookies, with usable saved logins for the automatic fallback.
  */
 export function migrationFor(source, scope, domains) {
   const migration = { browser: source.browser };
@@ -58,7 +62,9 @@ export function migrationFor(source, scope, domains) {
     migration.profile = source.profile;
   }
   if (scope === "domains" && domains.length > 0) {
-    migration.include = ["cookies"];
+    migration.include = source.savedLogins
+      ? ["cookies", "passwords", "passkeys"]
+      : ["cookies"];
     migration.domains = domains;
   }
   return migration;
@@ -77,14 +83,41 @@ export async function findSignInSources(domains, options = {}) {
     (left, right) => Number(right === preferred) - Number(left === preferred),
   );
   const found = [];
+  let accessReported = false;
+  const report = async (browser, error) => {
+    if (
+      browser === "safari" &&
+      (options.platform ?? process.platform) === "darwin" &&
+      /EPERM|EACCES|operation not permitted|permission denied/i.test(
+        `${error.code} ${error.message}`,
+      ) &&
+      !accessReported
+    ) {
+      accessReported = true;
+      (options.warn ?? console.error)(
+        "Safari sign-ins are unreadable: enable Full Disk Access for your terminal app in Privacy & Security, then restart the terminal app and retry.",
+      );
+      await (
+        options.openSettings ??
+        (() =>
+          detachedRunner()("open", [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+          ]))
+      )().catch(() => {});
+    } else if (options.verbose) {
+      console.error(`could not read ${browser} sign-in data: ${error.message}`);
+    }
+  };
   for (const browser of browsers) {
-    const profiles = await list({ browser }).catch((error) => {
-      if (options.verbose) {
-        console.error(`could not list ${browser} profiles: ${error.message}`);
-      }
+    const profiles = await list({ browser }).catch(async (error) => {
+      await report(browser, error);
       return [];
     });
     for (const profile of profiles) {
+      if (profile.error) {
+        await report(browser, new Error(profile.error));
+        continue;
+      }
       const matched = [];
       for (const domain of domains) {
         const cookies = await read({
@@ -93,12 +126,8 @@ export async function findSignInSources(domains, options = {}) {
           domainFilter: domain,
           ignoreDecryptionErrors: true,
           cache: false,
-        }).catch((error) => {
-          if (options.verbose) {
-            console.error(
-              `could not read ${browser} cookies for ${domain}: ${error.message}`,
-            );
-          }
+        }).catch(async (error) => {
+          await report(browser, error);
           return [];
         });
         if (cookies.length > 0) {
@@ -118,6 +147,70 @@ export async function findSignInSources(domains, options = {}) {
         });
       }
     }
+  }
+  return found;
+}
+
+/** Count usable saved logins through upstream migration into a disposable profile. */
+export async function findSavedLoginSources(domains, options = {}) {
+  if (
+    commander.findBrowserSource(options.targetBrowser ?? "chrome")
+      ?.controlProtocol === "bidi"
+  ) {
+    (options.warn ?? console.error)(
+      "Saved-password migration into Firefox is unavailable in Browser Commander; use --browser-channel chrome for saved-login autofill, or sign in in Firefox.",
+    );
+    return [];
+  }
+  const list = options.listProfiles ?? commander.listBrowserProfiles;
+  const migrate = options.migrateProfile ?? commander.migrateProfile;
+  const browsers = (options.sources ?? importSources()).toSorted(
+    (a, b) =>
+      Number(b === options.defaultSource) - Number(a === options.defaultSource),
+  );
+  const found = [];
+  const installed = [];
+  for (const browser of browsers) {
+    const profiles = await list({ browser }).catch(() => []);
+    if (profiles.length) {
+      installed.push(sourceName(browser));
+    }
+    for (const profile of profiles) {
+      const directory = await mkdtemp(
+        path.join(os.tmpdir(), "prm-login-probe-"),
+      );
+      try {
+        const report = await migrate({
+          from: { browser, profile: profile.name },
+          to: directory,
+          include: ["passwords", "passkeys"],
+          domains,
+          targetBrowser: options.targetBrowser ?? "chrome",
+        });
+        if (report.migrated.passwords > 0 || report.migrated.passkeys > 0) {
+          found.push({
+            browser,
+            profile: profile.name,
+            label: sourceName(browser),
+            domains,
+            savedLogins: true,
+          });
+        }
+      } catch {
+        if (options.verbose) {
+          console.error(
+            `saved-login import unavailable from ${sourceName(browser)}`,
+          );
+        }
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  }
+  if (!found.length) {
+    (options.warn ?? console.error)(
+      `No usable saved password for ${domains.join(", ")} in ${installed.join(", ") || "installed browsers"}. Safari saved passwords require an export; passkeys cannot be exported by the installed Browser Commander. Sign in in the browser.`,
+    );
   }
   return found;
 }
@@ -180,11 +273,21 @@ export async function resolveImportChoice(choice, domains, options = {}) {
     }
     return { browser: preferred, profile: null };
   }
-  const [found] = await findSignInSources(domains, {
+  const discovery = {
     ...options,
     defaultSource: preferred,
-  });
-  return found ? { browser: found.browser, profile: found.profile } : null;
+  };
+  const sources = await findSignInSources(domains, discovery);
+  const [found] = sources.length
+    ? sources
+    : await findSavedLoginSources(domains, discovery);
+  return found
+    ? {
+        browser: found.browser,
+        profile: found.profile,
+        ...(found.savedLogins ? { savedLogins: true } : {}),
+      }
+    : null;
 }
 
 /**
@@ -193,6 +296,7 @@ export async function resolveImportChoice(choice, domains, options = {}) {
  * once it knows the sign-in is missing (`deferred`).
  */
 export async function launchBrowser(browser, domains, options = {}) {
+  options = { targetBrowser: browser?.channel ?? "chrome", ...options };
   const choice = browser?.import?.browser;
   if (!IMPORT_CHOICES.includes(choice)) {
     return browser;
@@ -226,11 +330,12 @@ export async function offerSignInImport(session, domains) {
     return false;
   }
   const options = {
+    targetBrowser: browser.channel,
     verbose: session.options.verbose,
     ...session.options.importDiscovery,
   };
   const preferred = await defaultSource(options);
-  const sources =
+  let sources =
     choice === "default"
       ? [preferred].filter(Boolean).map((id) => ({
           browser: id,
@@ -242,6 +347,12 @@ export async function offerSignInImport(session, domains) {
           ...options,
           defaultSource: preferred,
         });
+  if (!sources.length) {
+    sources = await findSavedLoginSources(domains, {
+      ...options,
+      defaultSource: preferred,
+    });
+  }
   const source = await chooseSignInSource(
     sources,
     domains,
@@ -253,7 +364,11 @@ export async function offerSignInImport(session, domains) {
   }
   await session.reconnect({
     ...browser,
-    import: { browser: source.browser, profile: source.profile },
+    import: {
+      browser: source.browser,
+      profile: source.profile,
+      ...(source.savedLogins ? { savedLogins: true } : {}),
+    },
   });
   console.log(
     `  Imported the ${domains.join(" / ")} sign-in from ${source.label}.`,

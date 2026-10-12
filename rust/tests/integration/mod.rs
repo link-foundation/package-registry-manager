@@ -9,3 +9,5 @@ mod organization_scan;
 mod repository_transfer;
 #[cfg(unix)]
 mod repository_transfer_e2e;
+
+mod publisher_forms;

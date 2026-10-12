@@ -33,6 +33,15 @@ pub fn name_variants(name: &str) -> Vec<String> {
 
 /// Check exact/normalized variants; dry-run cannot guarantee server acceptance.
 pub async fn check_name_policy(name: &str, base: &str) -> Result<()> {
+    check_name_policy_with_scope(name, base, None).await
+}
+
+/// Check naming policy with the repository owner's proposed npm scope.
+pub async fn check_name_policy_with_scope(
+    name: &str,
+    base: &str,
+    scope: Option<&str>,
+) -> Result<()> {
     let valid = regex::Regex::new(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
         .expect("static pattern");
     if name.len() > 214 || !valid.is_match(name) || ["node_modules", "favicon.ico"].contains(&name)
@@ -63,11 +72,14 @@ pub async fn check_name_policy(name: &str, base: &str) -> Result<()> {
             );
         }
         if variant != name {
-            bail!("npm name '{name}' is similar to existing '{variant}'; use @owner/{name} or a longer descriptive name");
+            bail!(
+                "{}",
+                crate::npm_similarity::naming_error(name, &variant, base, scope, &[]).await
+            );
         }
         return Ok(());
     }
-    Ok(())
+    crate::npm_similarity::check_similarity(name, base, scope).await
 }
 
 /// Stop server-side name policy refusals instead of retrying authentication.
@@ -76,7 +88,7 @@ pub fn policy_refusal(output: &str) -> bool {
     regex::Regex::new(r"(?i)\bE403\b|403 Forbidden")
         .expect("static pattern")
         .is_match(output)
-        && regex::Regex::new(r"(?i)too similar|forbidden|blocked|not allowed")
+        && regex::Regex::new(r"(?i)too similar|package name.*(?:forbidden|blocked|not allowed)")
             .expect("static pattern")
             .is_match(output)
 }

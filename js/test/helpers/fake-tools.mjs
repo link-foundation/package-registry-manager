@@ -53,7 +53,9 @@ export async function runMockSetup(plan, registry, repository, overrides = {}) {
       // Acknowledge simulated OIDC verification; browser steps wait for Enter.
       prompt: async (message) => (message.endsWith("[y/N] ") ? "y" : ""),
       fetch: async (url) => {
-        const found = registry(url);
+        const found = url.includes("/-/v1/search?")
+          ? { objects: [] }
+          : registry(url);
         return {
           status: found ? 200 : 404,
           ok: Boolean(found),

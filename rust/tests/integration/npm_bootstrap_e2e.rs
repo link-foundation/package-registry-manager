@@ -462,46 +462,6 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
 }
 
 #[test]
-fn opens_npm_web_authentication_urls_in_the_default_browser() {
-    let temporary = TempDir::new().expect("create temporary directory");
-    let Some((repository, state)) = prepare(&temporary) else {
-        return;
-    };
-    let registry = published_registry();
-    let profile = temporary.path().join("unused-profile");
-    let profile_argument = profile.to_str().expect("UTF-8 path");
-    let run = run_setup_with(
-        &repository,
-        &state,
-        &registry,
-        &[
-            "--browser",
-            "default",
-            "--browser-profile",
-            profile_argument,
-        ],
-    );
-    let url = "https://www.npmjs.com/login?next=/login/cli/fake";
-    assert!(
-        run.stdout
-            .lines()
-            .any(|line| line == format!("Opening {url} in Firefox, your default browser")),
-        "{}",
-        run.stdout
-    );
-    // The opener is detached, so wait for it to record its arguments.
-    let is_opener = |entry: &&Value| matches!(entry["argv"][0].as_str(), Some("open" | "xdg-open"));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut opened = run.log.iter().find(is_opener).cloned();
-    while opened.is_none() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(25));
-        opened = read_log(&state).iter().find(is_opener).cloned();
-    }
-    assert_eq!(opened.expect("opener ran")["argv"][1], url);
-    assert!(!profile.exists(), "the automation profile is not used");
-}
-
-#[test]
 fn requests_a_fresh_login_link_when_npm_falls_back_to_its_username_prompt() {
     let temporary = TempDir::new().expect("create temporary directory");
     let Some((repository, state)) = prepare(&temporary) else {
@@ -943,4 +903,73 @@ fn enables_github_pages_for_a_workflow_that_deploys_there() {
         ),
         "{stdout}"
     );
+}
+
+#[test]
+fn naming_refusal_on_stderr_retains_npm_session_for_renamed_retry() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let registry = MockRegistry::start(|_| None);
+    let output = setup_command(
+        &repository,
+        &state,
+        &registry,
+        &["--no-browser"],
+        &[("FAKE_NPM_NAMING_REFUSAL", "1")],
+    );
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        diagnostic.contains("may be refused as too similar to existing 'rc-upload'"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("currently free alternatives: @acme/pipeline-app"),
+        "{diagnostic}"
+    );
+    assert!(!step_commands(&read_log(&state)).contains(&"npm logout".to_owned()));
+}
+
+#[test]
+fn browser_npm_login_and_approval_reuse_the_dedicated_profile() {
+    if std::env::var("PRM_BROWSER_SMOKE").as_deref() != Ok("1") {
+        return;
+    }
+    let temporary = TempDir::new().expect("temporary browser fixture");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let registry = published_registry();
+    let profile = temporary.path().join("dedicated-profile");
+    let login = format!("{}/browser-login", registry.base);
+    let approval = format!("{}/browser-approval", registry.base);
+    let output = setup_command(
+        &repository,
+        &state,
+        &registry,
+        &[
+            "--browser",
+            "default",
+            "--browser-profile",
+            profile.to_str().unwrap(),
+        ],
+        &[
+            ("FAKE_NPM_LOGIN_URL", &login),
+            ("FAKE_NPM_APPROVAL_URL", &approval),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(profile.exists());
+    let requests = registry.requests();
+    assert!(requests.iter().any(|path| path == "/browser-login"));
+    assert!(requests.iter().any(|path| path == "/browser-approval"));
+    assert!(!read_log(&state)
+        .iter()
+        .any(|entry| { matches!(entry["argv"][0].as_str(), Some("open" | "xdg-open")) }));
 }
