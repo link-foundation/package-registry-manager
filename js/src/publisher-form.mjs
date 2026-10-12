@@ -1,24 +1,28 @@
 import { npmPrefillScript } from "./browser.mjs";
 
 /** Verify the server-rendered publisher row, and surface form validation errors. */
-export function publisherConfirmationScript(config) {
+export function publisherConfirmationScript(config, pending = true) {
   return `(() => {
     const config = ${JSON.stringify(config)};
-    const errors = Array.from(document.querySelectorAll('#pending-github-publisher-form .form-errors, #pending-github-publisher-form .form-group__error, .error-message, .notification-bar--danger')).map(node => node.textContent.trim()).filter(Boolean);
+    const pending = ${JSON.stringify(pending)};
+    const errors = Array.from(document.querySelectorAll('#pending-github-publisher-form .form-errors, #pending-github-publisher-form .form-group__error, #github-publisher-form .form-errors, #github-publisher-form .form-group__error, .error-message, .notification-bar--danger')).map(node => node.textContent.trim()).filter(Boolean);
     const rows = Array.from(document.querySelectorAll('tr, .publisher, .card'));
     const confirmed = rows.some(row => {
       const repository = Array.from(row.querySelectorAll('a[href]')).some(link => {
         try { const url = new URL(link.href); return url.hostname === 'github.com' && (url.pathname === '/' + config.organization + '/' + config.repository || url.pathname.startsWith('/' + config.organization + '/' + config.repository + '/')); } catch { return false; }
       });
-      return repository && row.querySelector('td')?.textContent.trim() === config.project
+      return repository && row.querySelector('td')?.textContent.trim() === (pending ? config.project : 'GitHub')
         && [config.workflow, config.environment].filter(Boolean).every(value => row.innerText.split(/\\s+/).includes(value));
     });
     return { confirmed, error: errors.join('; ') };
   })()`;
 }
 
-/** Wait through sign-in, fill and verify the pending-publisher form. */
-export async function fillPublisherForm(session) {
+/** Wait through sign-in, fill and verify a trusted-publisher form. */
+export async function fillPublisherForm(
+  session,
+  pending = session.plan.mode !== "attach",
+) {
   const page = session.automation;
   const script = npmPrefillScript(session.plan.trusted_publisher, false);
   const deadline = Date.now() + (session.options.waitTimeoutMs ?? 10 * 60_000);
@@ -31,7 +35,7 @@ export async function fillPublisherForm(session) {
       "organization",
       "repository",
       "workflow",
-      ...(session.plan.registry === "pypi" ? ["project"] : []),
+      ...(session.plan.registry === "pypi" && pending ? ["project"] : []),
     ];
     if (required.every((field) => result.filled?.includes(field))) {
       break;
@@ -70,7 +74,12 @@ export async function fillPublisherForm(session) {
     if (session.plan.registry === "pypi") {
       for (;;) {
         const state = await page
-          .evaluate(publisherConfirmationScript(session.plan.trusted_publisher))
+          .evaluate(
+            publisherConfirmationScript(
+              session.plan.trusted_publisher,
+              pending,
+            ),
+          )
           .catch(() => ({}));
         if (state.error) {
           throw new Error(`PyPI refused the pending publisher: ${state.error}`);

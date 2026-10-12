@@ -14,10 +14,10 @@
 </form>
 <div class="is-hidden"><form id="pending-google-publisher-form"><label for="google_project">PyPI Project Name</label><input id="google_project" name="project_name"><input type="submit" value="Add"></form></div>
 <script>
-document.querySelector('#pending-github-publisher-form').onsubmit = event => {
+document.querySelector('#pending-github-publisher-form, #github-publisher-form').onsubmit = event => {
  event.preventDefault(); const data = new FormData(event.target);
  const row = document.createElement('tr');
- for (const value of [data.get('project_name'), 'GitHub']) { const cell=document.createElement('td');cell.textContent=value;row.append(cell); }
+ for (const value of [...(data.has('project_name') ? [data.get('project_name')] : []), 'GitHub']) { const cell=document.createElement('td');cell.textContent=value;row.append(cell); }
  const details=document.createElement('td');const link=document.createElement('a');link.href='https://github.com/'+data.get('owner')+'/'+data.get('repository')+'/blob/main/.github/workflows/'+data.get('workflow_filename');link.textContent=data.get('repository');details.append(link, document.createElement('br'), 'Workflow: '+data.get('workflow_filename'), document.createElement('br'),'Environment name: '+(data.get('environment')||'(Any)'));row.append(details);document.querySelector('#publishers').append(row);
 };
 </script></html>

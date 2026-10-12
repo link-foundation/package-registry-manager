@@ -39,6 +39,7 @@ async fn browser_publisher_forms_fill_submit_and_verify_github_identity() -> Res
             &page,
             &config,
             true,
+            true,
             Duration::from_millis(10),
             Duration::from_secs(5),
         )
@@ -50,9 +51,19 @@ async fn browser_publisher_forms_fill_submit_and_verify_github_identity() -> Res
         );
         config.organization = "wrong-owner".into();
         assert_eq!(
-            page.evaluate(&confirmation_script(&config)?).await?["confirmed"],
+            page.evaluate(&confirmation_script(&config, true)?).await?["confirmed"],
             false
         );
+        // Existing projects have no project_name field and no project column.
+        let existing = html
+            .replace("pending-github-publisher-form", "github-publisher-form")
+            .replace("<label for=\"project_name\">PyPI Project Name</label><input id=\"project_name\" name=\"project_name\" required>", "");
+        page.goto(&format!("data:text/html,{}", encode_uri_component(&existing)))
+            .await?;
+        config.organization = "acme".into();
+        wait_for_form(&page, &config, false, Duration::from_millis(10), Duration::from_secs(5)).await?;
+        submit_form(&page, &config, true, false, Duration::from_millis(10), Duration::from_secs(5)).await?;
+        assert_eq!(page.evaluate("document.querySelector('#publishers td').textContent").await?, "GitHub");
         anyhow::Ok(())
     }
     .await;

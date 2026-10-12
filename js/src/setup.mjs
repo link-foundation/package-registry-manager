@@ -645,7 +645,7 @@ export class SetupSession {
     const fill = PREFILLED_FORMS.has(step.id) && this.plan.trusted_publisher;
     await this.open(step.url, Boolean(fill));
     if (fill && this.automation) {
-      await this.prefill();
+      await this.prefill(step.id === "create-pending-publisher");
       return;
     }
     await this.prompt("Finish this step in the browser, then press Enter...");
@@ -654,9 +654,9 @@ export class SetupSession {
     }
   }
 
-  async prefill() {
+  async prefill(pending = this.plan.mode !== "attach") {
     const { fillPublisherForm } = await import("./publisher-form.mjs");
-    await fillPublisherForm(this);
+    await fillPublisherForm(this, pending);
   }
 
   async open(url, automate = false) {

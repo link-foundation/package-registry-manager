@@ -151,6 +151,7 @@ async fn pypi_waits_for_sign_in_and_verifies_submission_without_stdin() {
         &page,
         &publisher(),
         true,
+        true,
         Duration::from_millis(1),
         Duration::from_secs(1),
     )
@@ -166,6 +167,7 @@ async fn pypi_server_rejection_stops_the_release() {
     let error = submit_form(
         &page,
         &publisher(),
+        true,
         true,
         Duration::from_millis(1),
         Duration::from_secs(1),

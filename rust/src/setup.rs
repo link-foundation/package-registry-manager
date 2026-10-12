@@ -720,7 +720,7 @@ impl<'a> Session<'a> {
         self.open(step.url.as_deref().unwrap_or_default(), fill)
             .await?;
         if fill && self.browser.is_some() {
-            self.prefill().await?;
+            self.prefill(step.id == "create-pending-publisher").await?;
             return Ok(());
         }
         prompt("Finish this step in the browser, then press Enter...")?;

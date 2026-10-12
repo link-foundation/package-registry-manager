@@ -209,6 +209,28 @@ test("PyPI timeout does not mistake a login form for a publisher form (#50)", as
   await assert.rejects(session.prefill(), /timed out waiting for sign-in/);
 });
 
+test("existing PyPI projects do not require a pending-project field (#50)", async () => {
+  const session = new SetupSession(
+    { ...plan, mode: "attach" },
+    {
+      yes: true,
+      waitTimeoutMs: 5,
+      pollIntervalMs: 1,
+      automation: {
+        evaluate: async (script) =>
+          script.includes("shouldSubmit")
+            ? {
+                filled: ["organization", "repository", "workflow"],
+                submitted: true,
+              }
+            : { confirmed: true },
+      },
+    },
+  );
+  await session.prefill();
+  assert.ok(!session.conditions.has("trust-missing"));
+});
+
 test("no saved-login diagnostic names browsers before the form opens (#52)", async () => {
   const warnings = [];
   assert.deepEqual(

@@ -18,18 +18,19 @@ impl PublisherPage for crate::automation::Automation {
 }
 
 /// Script that checks the saved publisher row and server-side validation errors.
-pub fn confirmation_script(config: &TrustedPublisherPrefill) -> Result<String> {
+pub fn confirmation_script(config: &TrustedPublisherPrefill, pending: bool) -> Result<String> {
     let config = serde_json::to_string(config)?;
     Ok(format!(
         r"(() => {{
       const config = {config};
-      const errors = Array.from(document.querySelectorAll('#pending-github-publisher-form .form-errors, #pending-github-publisher-form .form-group__error, .error-message, .notification-bar--danger')).map(node => node.textContent.trim()).filter(Boolean);
+      const pending = {pending};
+      const errors = Array.from(document.querySelectorAll('#pending-github-publisher-form .form-errors, #pending-github-publisher-form .form-group__error, #github-publisher-form .form-errors, #github-publisher-form .form-group__error, .error-message, .notification-bar--danger')).map(node => node.textContent.trim()).filter(Boolean);
       const rows = Array.from(document.querySelectorAll('tr, .publisher, .card'));
       const confirmed = rows.some(row => {{
       const repository = Array.from(row.querySelectorAll('a[href]')).some(link => {{
         try {{ const url = new URL(link.href); return url.hostname === 'github.com' && (url.pathname === '/' + config.organization + '/' + config.repository || url.pathname.startsWith('/' + config.organization + '/' + config.repository + '/')); }} catch {{ return false; }}
       }});
-      return repository && row.querySelector('td')?.textContent.trim() === config.project
+      return repository && row.querySelector('td')?.textContent.trim() === (pending ? config.project : 'GitHub')
         && [config.workflow, config.environment].filter(Boolean).every(value => row.innerText.split(/\s+/).includes(value));
     }});
       return {{ confirmed, error: errors.join('; ') }};
@@ -78,6 +79,7 @@ pub async fn wait_for_form(
 pub async fn submit_form(
     page: &impl PublisherPage,
     config: &TrustedPublisherPrefill,
+    pypi: bool,
     pending: bool,
     interval: Duration,
     timeout: Duration,
@@ -85,11 +87,11 @@ pub async fn submit_form(
     if page.evaluate(&npm_prefill_script(config, true)?).await?["submitted"] != true {
         bail!("the form was not submitted; review the visible browser");
     }
-    if !pending {
+    if !pypi {
         return Ok(());
     }
     let deadline = Instant::now() + timeout;
-    let script = confirmation_script(config)?;
+    let script = confirmation_script(config, pending)?;
     loop {
         if let Ok(state) = page.evaluate(&script).await {
             if let Some(error) = state["error"].as_str().filter(|error| !error.is_empty()) {

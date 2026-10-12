@@ -55,22 +55,23 @@ impl Session<'_> {
         Ok(())
     }
 
-    pub(super) async fn prefill(&mut self) -> Result<()> {
+    pub(super) async fn prefill(&mut self, pending: bool) -> Result<()> {
         let (Some(browser), Some(config)) = (&self.browser, &self.plan.oidc_publisher) else {
             return Ok(());
         };
-        let pending = self.plan.registry == Registry::PyPi;
+        let pypi = self.plan.registry == Registry::PyPi;
         let interval = self.options.poll_interval;
         let timeout = self.options.wait_timeout;
         crate::publisher_form::wait_for_form(browser, config, pending, interval, timeout).await?;
-        if pending
+        if pypi
             || self.options.yes
             || is_yes(&prompt(
                 "Submit this trusted-publisher configuration? [y/N] ",
             )?)
         {
-            crate::publisher_form::submit_form(browser, config, pending, interval, timeout).await?;
-            if pending {
+            crate::publisher_form::submit_form(browser, config, pypi, pending, interval, timeout)
+                .await?;
+            if pypi {
                 self.conditions.remove("trust-missing");
             }
         } else {
