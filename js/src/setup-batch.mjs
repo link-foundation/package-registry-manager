@@ -140,6 +140,7 @@ export async function executePlans(plans, options, summary = true) {
   const deferred = new Map();
   const outcomes = [];
   let failure;
+  let preserveNpmSession = false;
   try {
     for (const plan of plans) {
       const session = new SetupSession(plan, {
@@ -170,6 +171,7 @@ export async function executePlans(plans, options, summary = true) {
         });
         failure ??= error;
       } finally {
+        preserveNpmSession ||= session.conditions.has("npm-name-refused");
         const steps = await session.cleanup({
           deferAuth: plans.length > 1,
           closeBrowser: false,
@@ -185,6 +187,12 @@ export async function executePlans(plans, options, summary = true) {
     }
   } finally {
     for (const { session, step } of deferred.values()) {
+      if (preserveNpmSession && step.id === "sign-out") {
+        console.log(
+          "Keeping the npm session after a naming refusal; rename the package and retry.",
+        );
+        continue;
+      }
       session.automation = automation;
       try {
         await session.runStep(step);

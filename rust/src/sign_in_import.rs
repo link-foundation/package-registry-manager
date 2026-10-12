@@ -1,9 +1,9 @@
 //! Reusing a registry sign-in from an installed browser (#26).
 //!
 //! The automated profile stays fresh and clean by default; when a step needs
-//! a sign-in it does not hold, the tool offers to import only the cookies of
-//! the registry's sign-in domains from a browser that has them. Cookie values are never
-//! printed, logged, or cached: they are only counted.
+//! a sign-in it does not hold, the tool offers registry-domain cookies, then
+//! supported saved logins when no cookies exist. Credential values are never
+//! logged; discovery counts them through Browser Commander.
 
 use anyhow::Result;
 use browser_commander::{
@@ -74,6 +74,10 @@ pub trait CookieStores {
     fn profiles(&self, browser: &str) -> Result<Vec<BrowserProfile>>;
     /// How many cookies a profile holds for `domain`; the values are dropped.
     fn count(&self, browser: &str, profile: &str, domain: &str) -> Result<usize>;
+    /// Count usable saved passwords through a disposable, domain-scoped migration.
+    fn saved_logins(&self, _browser: &str, _profile: &str, _domains: &[&str]) -> Result<usize> {
+        Ok(0)
+    }
 }
 
 /// The installed browsers, read through Browser Commander without its cache.
@@ -92,6 +96,57 @@ impl CookieStores for InstalledBrowsers {
         options.ignore_decryption_errors = true;
         Ok(read_browser_cookies(options)?.len())
     }
+
+    fn saved_logins(&self, browser: &str, profile: &str, domains: &[&str]) -> Result<usize> {
+        use browser_commander::browser::migration::{
+            migrate_profile, MigrateProfileOptions, MigrationSource,
+        };
+        let temporary = tempfile::Builder::new()
+            .prefix("prm-login-probe-")
+            .tempdir()?;
+        let options = MigrateProfileOptions::new(
+            MigrationSource::new(browser).profile(profile),
+            temporary.path(),
+        )
+        .include(["passwords", "passkeys"])
+        .domains(domains.iter().copied());
+        let report = migrate_profile(options)?;
+        Ok(usize::try_from(
+            report.migrated.passwords + report.migrated.passkeys,
+        )?)
+    }
+}
+
+/// Recognize denied Safari storage separately from an absent sign-in.
+#[must_use]
+pub fn safari_access_denied(browser: &str, message: &str) -> bool {
+    browser == "safari"
+        && [
+            "eperm",
+            "eacces",
+            "operation not permitted",
+            "permission denied",
+        ]
+        .iter()
+        .any(|value| message.to_ascii_lowercase().contains(value))
+}
+
+fn report_store_error(browser: &str, error: &anyhow::Error, verbose: bool, reported: &mut bool) {
+    if cfg!(target_os = "macos")
+        && safari_access_denied(browser, &format!("{error:#}"))
+        && !*reported
+    {
+        *reported = true;
+        eprintln!("Safari sign-ins are unreadable: enable Full Disk Access for your terminal app in Privacy & Security, then restart the terminal app and retry.");
+        if let Ok(mut child) = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+            .spawn()
+        {
+            let _ = child.wait();
+        }
+    } else if verbose {
+        eprintln!("could not read {browser} sign-in data: {error:#}");
+    }
 }
 
 /// Lists the installed browser profiles that hold cookies for any of
@@ -106,25 +161,29 @@ pub fn find_sign_in_sources(
     let mut browsers = import_sources();
     browsers.sort_by_key(|browser| Some(*browser) != preferred);
     let mut found = Vec::new();
+    let mut access_reported = false;
     for browser in browsers {
         let profiles = stores.profiles(browser).unwrap_or_else(|error| {
-            if verbose {
-                eprintln!("could not list {browser} profiles: {error:#}");
-            }
+            report_store_error(browser, &error, verbose, &mut access_reported);
             Vec::new()
         });
         for profile in &profiles {
+            if let Some(error) = &profile.error {
+                report_store_error(
+                    browser,
+                    &anyhow::anyhow!(error.clone()),
+                    verbose,
+                    &mut access_reported,
+                );
+                continue;
+            }
             let matched: Vec<String> = domains
                 .iter()
                 .filter(
                     |domain| match stores.count(browser, &profile.name, domain) {
                         Ok(count) => count > 0,
                         Err(error) => {
-                            if verbose {
-                                eprintln!(
-                                    "could not read {browser} cookies for {domain}: {error:#}"
-                                );
-                            }
+                            report_store_error(browser, &error, verbose, &mut access_reported);
                             false
                         }
                     },
@@ -151,6 +210,44 @@ pub fn find_sign_in_sources(
                 domains: matched,
             });
         }
+    }
+    found
+}
+
+/// Discover domain-scoped saved logins when no cookie source was found.
+pub fn find_saved_login_sources(
+    stores: &impl CookieStores,
+    domains: &[&str],
+    preferred: Option<&str>,
+    verbose: bool,
+) -> Vec<SignInSource> {
+    let mut browsers = import_sources();
+    browsers.sort_by_key(|browser| Some(*browser) != preferred);
+    let mut found = Vec::new();
+    let mut installed = Vec::new();
+    for browser in browsers {
+        let profiles = stores.profiles(browser).unwrap_or_default();
+        if !profiles.is_empty() {
+            installed.push(source_name(browser));
+        }
+        for profile in profiles {
+            match stores.saved_logins(browser, &profile.name, domains) {
+                Ok(count) if count > 0 => found.push(SignInSource {
+                    browser: browser.to_owned(),
+                    profile: Some(profile.name),
+                    label: source_name(browser).to_owned(),
+                    domains: domains.iter().map(|domain| (*domain).to_owned()).collect(),
+                }),
+                Err(_) if verbose => eprintln!(
+                    "saved-login import unavailable from {}",
+                    source_name(browser)
+                ),
+                _ => {}
+            }
+        }
+    }
+    if found.is_empty() {
+        eprintln!("No usable saved password for {} in {}. Safari saved passwords require an export; passkeys cannot be exported by the installed Browser Commander. Sign in in the browser.", domains.join(", "), if installed.is_empty() { "installed browsers".to_owned() } else { installed.join(", ") });
     }
     found
 }

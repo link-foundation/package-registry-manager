@@ -111,6 +111,7 @@ export function runInteractive(command, options) {
       shell: false,
     });
     let legacyLogin = false;
+    let openings = Promise.resolve();
     const stop = options.stopOnLegacyLogin
       ? () => {
           legacyLogin = true;
@@ -119,7 +120,11 @@ export function runInteractive(command, options) {
       : undefined;
     const scan =
       options.onUrl || stop
-        ? authUrlScanner(options.onUrl ?? (() => {}), stop)
+        ? authUrlScanner((url, kind) => {
+            openings = openings.then(() => options.onUrl?.(url, kind));
+            // Observe rejection until the command closes and propagates it.
+            openings.catch(() => {});
+          }, stop)
         : null;
     let stdout = "";
     child.stdout.setEncoding("utf8");
@@ -141,9 +146,20 @@ export function runInteractive(command, options) {
       });
     }
     child.on("error", reject);
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
       scan?.("\n");
-      resolve({ code: code ?? 1, stdout, legacyLogin, approvalExpired });
+      try {
+        await openings;
+        resolve({
+          code: code ?? 1,
+          stdout,
+          stderr: errors,
+          legacyLogin,
+          approvalExpired,
+        });
+      } catch (error) {
+        reject(error);
+      }
     });
   });
 }

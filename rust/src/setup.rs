@@ -16,9 +16,7 @@ use crate::auth_urls::{
     node_options_with_shim, resolve_program, run_interactive, write_tty_shim, CommandOutput,
 };
 use crate::automation::Automation;
-use crate::browser::{npm_prefill_script, open_in_user_browser};
 use crate::browser_options::BrowserOptions;
-use crate::default_browser::{detect_default_browser, open_with_command};
 use crate::flows::CLEANUP_CONDITIONS;
 use crate::model::Registry;
 use crate::model::{CommandSpec, SetupPlan, SetupStep, StepKind};
@@ -35,8 +33,10 @@ use crate::tokens::{
 };
 
 mod batch;
+mod browser_session;
 mod crates_session;
 mod credential_session;
+mod publisher_session;
 mod release_session;
 mod repository_session;
 pub use batch::{execute_plan, execute_plans, execute_plans_with};
@@ -189,15 +189,13 @@ impl<'a> Session<'a> {
                 && step.when.as_deref().is_some_and(|when| self.holds(when))
             {
                 if step.id == "sign-out" && self.keeps_session(step) {
-                    println!(
-                        "Keeping the npm session (--keep-session); run npm logout to revoke it."
-                    );
+                    println!("Keeping the npm session for reuse; run npm logout to revoke it.");
                 } else {
                     deferred.push(step.clone());
                 }
             } else if step.id == "sign-out" && self.keeps_session(step) {
                 println!(
-                    "Keeping the npm session (--keep-session): its token stays in npm's user \
+                    "Keeping the npm session for reuse: its token stays in npm's user \
                      configuration until you run npm logout, and the next run reuses it while \
                      npm whoami succeeds."
                 );
@@ -227,7 +225,7 @@ impl<'a> Session<'a> {
     }
 
     fn keeps_session(&self, step: &SetupStep) -> bool {
-        self.options.keep_session
+        (self.options.keep_session || self.holds("npm-name-refused"))
             && step.when.as_deref().is_some_and(|when| self.holds(when))
             && program(step) == "npm"
     }
@@ -247,15 +245,21 @@ impl<'a> Session<'a> {
         }
         match step.kind {
             StepKind::Check if step.id == "check-name-policy" => {
-                crate::npm_policy::check_name_policy(
+                crate::npm_policy::check_name_policy_with_scope(
                     &self.plan.package.name,
                     &self
                         .options
                         .endpoints
                         .base(Registry::Npm)
                         .unwrap_or_default(),
+                    self.plan.repository.github_owner.as_deref(),
                 )
                 .await
+            }
+            StepKind::Check
+                if step.id == "build-package" && self.plan.registry == Registry::PyPi =>
+            {
+                self.build_python(step).await
             }
             StepKind::Check if step.command.is_some() => self.check(step).await,
             StepKind::Check if step.id == "verify-bins" => self.verify_bins().await,
@@ -565,7 +569,32 @@ impl<'a> Session<'a> {
             if step.id == "first-publish"
                 && crate::npm_policy::policy_refusal(&format!("{}{}", result.stderr, result.stdout))
             {
-                bail!("npm refused this name under its policy; no retry. Choose @owner/name or a longer descriptive name.");
+                self.conditions.insert("npm-name-refused");
+                let output = format!("{}{}", result.stderr, result.stdout);
+                let names = Regex::new(r"@[a-z0-9._-]+/[a-z0-9._-]+")
+                    .expect("static pattern")
+                    .find_iter(&output)
+                    .map(|item| item.as_str().to_owned())
+                    .collect::<Vec<_>>();
+                let conflict = Regex::new(r"(?i)similar to existing package\s+([^\s;]+)")
+                    .expect("static pattern")
+                    .captures(&output)
+                    .map_or_else(|| "another package".to_owned(), |caps| caps[1].to_owned());
+                bail!(
+                    "{}",
+                    crate::npm_similarity::naming_error(
+                        &self.plan.package.name,
+                        &conflict,
+                        &self
+                            .options
+                            .endpoints
+                            .base(Registry::Npm)
+                            .unwrap_or_default(),
+                        self.plan.repository.github_owner.as_deref(),
+                        &names
+                    )
+                    .await
+                );
             }
             match step.id.as_str() {
                 "attach-trusted-publisher" => {
@@ -691,109 +720,14 @@ impl<'a> Session<'a> {
         self.open(step.url.as_deref().unwrap_or_default(), fill)
             .await?;
         if fill && self.browser.is_some() {
-            self.prefill().await?;
+            self.prefill(step.id == "create-pending-publisher").await?;
+            return Ok(());
         }
         prompt("Finish this step in the browser, then press Enter...")?;
         if step.id == "create-pending-publisher" {
             self.conditions.remove("trust-missing");
         }
         Ok(())
-    }
-
-    async fn prefill(&self) -> Result<()> {
-        let (Some(browser), Some(prefill)) = (&self.browser, &self.plan.oidc_publisher) else {
-            return Ok(());
-        };
-        prompt("Press Enter when the form is visible...")?;
-        let script = npm_prefill_script(prefill, false)?;
-        let mut result = browser.evaluate(&script).await?;
-        if result["filled"].as_array().is_some_and(Vec::is_empty) {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            result = browser.evaluate(&script).await?;
-        }
-        println!("Prefill result: {result}");
-        let submit = self.options.yes
-            || is_yes(&prompt(
-                "Submit this trusted-publisher configuration? [y/N] ",
-            )?);
-        if submit {
-            let submission = browser
-                .evaluate(&npm_prefill_script(prefill, true)?)
-                .await?;
-            if submission["submitted"] != Value::Bool(true) {
-                bail!("the form was not submitted; review the visible browser and submit manually");
-            }
-        }
-        Ok(())
-    }
-
-    /// Open a URL in the default browser, or in the automation profile when
-    /// `automate` is set (form filling) or `--browser automated` was chosen.
-    async fn open(&mut self, url: &str, automate: bool) -> Result<()> {
-        if self.options.no_browser {
-            println!("Open {url}");
-            return Ok(());
-        }
-        if !automate && self.options.browser == BrowserMode::Default {
-            let app = self.options.open_with;
-            let label = self.default_browser_label();
-            println!("Opening {url} in {}", app.unwrap_or(&label));
-            let opened = match app {
-                Some(app) => self.open_with(url, app).await,
-                None => open_in_user_browser(url).await,
-            };
-            if let Err(error) = opened {
-                eprintln!(
-                    "warning: could not open {} ({error:#}); open the URL yourself",
-                    app.unwrap_or("your default browser")
-                );
-            }
-            return Ok(());
-        }
-        self.automated().await?.goto(url).await
-    }
-
-    async fn open_with(&self, url: &str, app: &str) -> Result<()> {
-        let command = open_with_command(url, app, std::env::consts::OS)?;
-        if self.options.verbose {
-            eprintln!("+ {}", render(&command));
-        }
-        // Like the default browser's opener, a slow application keeps running.
-        let opener = tokio::spawn(async move {
-            StreamingRunner::from_argv(resolve_program(&command.program), &command.args)
-                .collect()
-                .await
-        });
-        match tokio::time::timeout(Duration::from_secs(5), opener).await {
-            Err(_) => Ok(()),
-            Ok(joined) => match joined?? {
-                result if result.code == 0 => Ok(()),
-                result => bail!("{app} exited with code {}", result.code),
-            },
-        }
-    }
-
-    /// Names the default browser once per run, so maintainers know where to
-    /// look. Runs before npm starts, while no link is waiting to be opened.
-    async fn detect_default_browser(&mut self) {
-        let options = self.options;
-        if options.no_browser
-            || options.open_with.is_some()
-            || options.browser != BrowserMode::Default
-        {
-            return;
-        }
-        if !self.browser_detected {
-            self.browser_name = detect_default_browser(options.verbose).await;
-            self.browser_detected = true;
-        }
-    }
-
-    fn default_browser_label(&self) -> String {
-        self.browser_name.map_or_else(
-            || "your default browser".to_owned(),
-            |name| format!("{name}, your default browser"),
-        )
     }
 
     fn cwd(&self, step: &SetupStep) -> PathBuf {
@@ -899,7 +833,10 @@ impl<'a> Session<'a> {
                     if kind == LinkKind::Approve {
                         println!("{TWO_FACTOR_HINT}");
                     }
-                    if let Err(error) = self.open(&url, false).await {
+                    if let Err(error) = self
+                        .open(&url, npm && self.options.open_with.is_none())
+                        .await
+                    {
                         eprintln!("warning: could not open {url}: {error:#}");
                     }
                 }

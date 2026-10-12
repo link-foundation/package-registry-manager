@@ -45,7 +45,7 @@ test("npm punctuation policy stops before approval and reports server refusals (
     }),
     /similar to existing 'ghupload'/,
   );
-  assert.equal(visited.length, 2);
+  assert.equal(visited.filter((url) => /\/gh-?upload\?/.test(url)).length, 2);
   await assert.rejects(
     checkNamePolicy("BAD", {
       fetch: () => {

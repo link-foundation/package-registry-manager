@@ -392,7 +392,7 @@ test(
 );
 
 test(
-  "opens npm web-authentication URLs in the default browser",
+  "opens npm web-authentication URLs in the shared automated browser (#50)",
   { skip: process.platform === "win32" && "fake tools are POSIX scripts" },
   async () => {
     const state = await mkdtemp(path.join(temporary, "state-"));
@@ -405,30 +405,21 @@ test(
     plan.steps = plan.steps.filter((step) =>
       ["check-sign-in", "sign-in"].includes(step.id),
     );
-    const profile = path.join(state, "unused-profile");
-    const { lines, log } = await runWithFakeTools(plan, () => ({}), {
+    const urls = [];
+    const { log } = await runWithFakeTools(plan, () => ({}), {
       noBrowser: false,
       browser: "default",
-      browserProfile: profile,
+      automation: {
+        goto: async (url) => urls.push(url),
+        close: async () => {},
+      },
     });
-    assert.ok(
-      lines.includes(
-        "Opening https://www.npmjs.com/login?next=/login/cli/fake in Firefox, your default browser",
-      ),
-    );
-    // The opener is detached, so wait for it to record its arguments.
-    const opener = (entry) => ["open", "xdg-open"].includes(entry.argv[0]);
-    let opened = log.find(opener);
-    for (let attempt = 0; attempt < 200 && !opened; attempt += 1) {
-      opened = (await readLog(state)).find(opener);
-      if (!opened) {
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-    }
-    assert.deepEqual(opened.argv.slice(1), [
+    assert.deepEqual(urls, [
       "https://www.npmjs.com/login?next=/login/cli/fake",
     ]);
-    await assert.rejects(stat(profile), "the automation profile is not used");
+    assert.ok(
+      !log.some((entry) => ["open", "xdg-open"].includes(entry.argv[0])),
+    );
   },
 );
 
@@ -964,3 +955,23 @@ test("trims trailing slashes from endpoint overrides in linear time", () => {
   assert.equal(registryEndpoint("npm", { [variable]: hostile }), hostile);
   assert.ok(performance.now() - started < 1000);
 });
+
+test(
+  "npm's stderr naming refusal retains the CLI session for a renamed retry (#51)",
+  POSIX_ONLY,
+  async () => {
+    const state = await freshState();
+    const plan = await npmPlan(missing);
+    await withEnv({ FAKE_NPM_NAMING_REFUSAL: "1" }, async () => {
+      await assert.rejects(
+        runWithFakeTools(plan, () => null),
+        /may be refused as too similar to existing 'rc-upload'.*currently free alternatives: @acme\/pipeline-app/,
+      );
+    });
+    const commands = (await readLog(state)).map((entry) =>
+      entry.argv.join(" "),
+    );
+    assert.ok(commands.some((command) => command.startsWith("npm login")));
+    assert.ok(!commands.includes("npm logout"));
+  },
+);

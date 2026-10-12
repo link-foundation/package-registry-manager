@@ -305,10 +305,19 @@ pub async fn execute_plans_with(
     }
     // One logout per registry/tool, including on failure. Short-lived crates.io
     // tokens and temporary release worktrees are already cleaned per package.
+    let preserve_npm_session = sessions
+        .iter()
+        .any(|(session, _)| session.holds("npm-name-refused"));
     let mut signed_out = std::collections::BTreeSet::new();
     for (mut session, deferred) in sessions {
         session.browser = browser.take();
         for step in deferred {
+            if preserve_npm_session && step.id == "sign-out" {
+                println!(
+                    "Keeping the npm session after a naming refusal; rename the package and retry."
+                );
+                continue;
+            }
             if signed_out.insert((session.plan.registry, step.id.clone())) {
                 if let Err(error) = session.run_step(&step).await {
                     eprintln!("warning: {} failed: {error:#}", step.id);

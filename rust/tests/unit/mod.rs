@@ -24,3 +24,5 @@ mod ci_cd;
 
 mod ci_credential_cycle;
 mod organization_scan;
+
+mod first_publish;

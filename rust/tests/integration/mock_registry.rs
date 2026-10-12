@@ -39,7 +39,12 @@ impl MockRegistry {
                         .nth(1)
                         .unwrap_or_default()
                         .to_owned();
-                    let body = handler(&path);
+                    let body = if path.contains("/-/v1/search?") {
+                        // Bootstrap fixtures have no similar public package names.
+                        Some(r#"{"objects":[]}"#.to_owned())
+                    } else {
+                        handler(&path)
+                    };
                     recorded.lock().expect("requests lock").push(path);
                     let (status, body) = body.map_or_else(
                         || ("404 Not Found", "{}".to_owned()),

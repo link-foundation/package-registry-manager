@@ -1,4 +1,5 @@
-import { readdir } from "node:fs/promises";
+import { readdir, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { exec } from "command-stream";
 
@@ -136,7 +137,7 @@ export function applyPython(plan, tools) {
     detected: selected
       ? `${selected.program} (${selected.version})`
       : "no compatible interpreter found",
-    required: `Install Python satisfying ${requirement || "the project requirements"} and its build module (python -m pip install build)`,
+    required: `Install Python satisfying ${requirement || "the project requirements"} with venv support; the tool installs build in a temporary environment`,
     ok: Boolean(selected),
   };
   plan.prerequisites = [
@@ -145,5 +146,40 @@ export function applyPython(plan, tools) {
   ];
   if (selected) {
     build.command = { program: selected.program, args: ["-m", "build"] };
+  }
+}
+
+/** Provision the build frontend without modifying the selected interpreter. */
+export async function buildPythonDistribution(program, cwd, options = {}) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "prm-python-build-"));
+  const executable = path.join(
+    directory,
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+  );
+  const run =
+    options.run ??
+    ((file, args) =>
+      exec(file, args, { cwd, capture: true, mirror: true, stdin: "ignore" }));
+  try {
+    for (const [file, args] of [
+      [program, ["-m", "venv", directory]],
+      [
+        executable,
+        ["-m", "pip", "install", "--disable-pip-version-check", "build"],
+      ],
+      [executable, ["-m", "build"]],
+    ]) {
+      if (options.verbose) {
+        console.error(`+ ${file} ${args.join(" ")}`);
+      }
+      const result = await run(file, args);
+      if (result.code !== 0) {
+        throw new Error(
+          `Python build preparation or build failed (${file}, status ${result.code}); ensure the selected Python supports venv and pip`,
+        );
+      }
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 }

@@ -81,9 +81,14 @@ pub fn launch_options(
             migration = migration.profile(name);
         }
         options = options.migrate_from(migration);
-        if browser.import_scope == ImportScope::Domains && !domains.is_empty() {
+        if browser.import_scope != ImportScope::Full && !domains.is_empty() {
+            let include = if browser.import_scope == ImportScope::SavedLogins {
+                vec!["cookies", "passwords", "passkeys"]
+            } else {
+                vec!["cookies"]
+            };
             options = options
-                .migrate_include(["cookies"])
+                .migrate_include(include)
                 .migrate_domains(domains.iter().copied());
         }
     }
