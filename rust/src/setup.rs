@@ -21,8 +21,8 @@ use crate::flows::CLEANUP_CONDITIONS;
 use crate::model::Registry;
 use crate::model::{CommandSpec, SetupPlan, SetupStep, StepKind};
 use crate::npm_package::{
-    lists_trusted_publisher, packed_entry, report_pack_warnings, trust_created, verify_bins,
-    PUBLISH_REJECTED,
+    development_directories, lists_trusted_publisher, packed_entry, report_pack_warnings,
+    trust_created, verify_bins, PUBLISH_REJECTED,
 };
 use crate::pages::{pages_change_warning, report_pages, PagesState, PAGES_CHANGES};
 use crate::plan::package_directory;
@@ -682,6 +682,15 @@ impl<'a> Session<'a> {
             json_text(&packed["unpackedSize"]),
             json_text(&packed["entryCount"])
         );
+        let development = development_directories(&packed);
+        if !development.is_empty() {
+            bail!(
+                "the package would publish repository development files ({}); add a \"files\" \
+                 allowlist to package.json, commit it to the published ref, and re-run. Nothing \
+                 was published.",
+                development.join(", ")
+            );
+        }
         let destination = self
             .values
             .get("pack_destination")

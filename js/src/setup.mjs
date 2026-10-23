@@ -608,6 +608,12 @@ export class SetupSession {
     console.log(
       `  ${packed.filename}: ${packed.size} bytes packed, ${packed.unpackedSize} bytes unpacked, ${packed.entryCount} files`,
     );
+    const development = developmentDirectories(packed);
+    if (development.length > 0) {
+      throw new Error(
+        `the package would publish repository development files (${development.join(", ")}); add a "files" allowlist to package.json, commit it to the published ref, and re-run. Nothing was published.`,
+      );
+    }
     this.values.tarball = path.join(
       this.values.pack_destination,
       packed.filename,
@@ -880,6 +886,39 @@ export function packedEntry(output) {
     throw new Error("npm pack printed no package");
   }
   return packed;
+}
+
+/**
+ * Top-level repository directories of development files: CI, tests, and
+ * editor and build state, which belong in no published package.
+ */
+const DEVELOPMENT_DIRECTORIES = new Set([
+  ".changeset",
+  ".github",
+  ".husky",
+  ".idea",
+  ".vscode",
+  "__tests__",
+  "coverage",
+  "experiments",
+  "target",
+  "test",
+  "tests",
+]);
+
+/**
+ * The development directories a packed tarball contains, as `name/`, which
+ * a package.json without a `files` allowlist lets in.
+ */
+export function developmentDirectories(packed) {
+  const found = new Set();
+  for (const file of packed.files ?? []) {
+    const [top, ...rest] = String(file.path).split("/");
+    if (rest.length > 0 && DEVELOPMENT_DIRECTORIES.has(top)) {
+      found.add(`${top}/`);
+    }
+  }
+  return [...found].sort();
 }
 
 function reportPackWarnings(stderr) {

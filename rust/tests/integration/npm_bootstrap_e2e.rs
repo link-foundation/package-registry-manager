@@ -810,6 +810,30 @@ fn signs_out_with_sign_out_and_removes_the_worktree_when_a_middle_step_fails() {
 }
 
 #[test]
+fn stops_before_signing_in_when_the_tarball_has_development_files() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let (_, stderr, commands) = failing_setup(
+        &repository,
+        &state,
+        &missing_registry(),
+        &[(
+            "FAKE_PACK_FILES",
+            "src/index.js,.github/workflows/ci.yml,tests/a.test.js",
+        )],
+    );
+    assert!(
+        stderr.contains("would publish repository development files (.github/, tests/)"),
+        "{stderr}"
+    );
+    assert!(!commands
+        .iter()
+        .any(|command| command.starts_with("npm login") || command.starts_with("npm publish")));
+}
+
+#[test]
 fn stops_when_an_installed_bin_fails_to_run_with_version() {
     let temporary = TempDir::new().expect("create temporary directory");
     let Some((repository, state)) = prepare(&temporary) else {

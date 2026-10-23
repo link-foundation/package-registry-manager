@@ -73,6 +73,40 @@ pub fn report_pack_warnings(stderr: &str) {
     }
 }
 
+/// Top-level repository directories of development files: CI, tests, and
+/// editor and build state, which belong in no published package.
+const DEVELOPMENT_DIRECTORIES: [&str; 11] = [
+    ".changeset",
+    ".github",
+    ".husky",
+    ".idea",
+    ".vscode",
+    "__tests__",
+    "coverage",
+    "experiments",
+    "target",
+    "test",
+    "tests",
+];
+
+/// The development directories a packed tarball contains, as `name/`, which
+/// a package.json without a `files` allowlist lets in.
+#[must_use]
+pub fn development_directories(packed: &Value) -> Vec<String> {
+    let mut found: Vec<String> = packed["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|file| file["path"].as_str()?.split_once('/'))
+        .map(|(top, _)| top)
+        .filter(|top| DEVELOPMENT_DIRECTORIES.contains(top))
+        .map(|top| format!("{top}/"))
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
 /// The first package in `npm pack --json` output: an array before npm 12, an
 /// object keyed by package name since.
 ///

@@ -824,6 +824,48 @@ test(
   },
 );
 
+test(
+  "stops before signing in when the tarball has development files",
+  POSIX_ONLY,
+  async () => {
+    const state = await freshState();
+    const plan = await npmPlan({
+      exists_on_registry: false,
+      trusted_publishing: false,
+    });
+    await withEnv(
+      { FAKE_PACK_FILES: "src/index.js,.github/workflows/ci.yml,tests/a.js" },
+      () =>
+        assert.rejects(
+          runWithFakeTools(plan, () => null),
+          /would publish repository development files \(\.github\/, tests\/\)/,
+        ),
+    );
+    assert.ok(
+      !(await readLog(state)).some((entry) =>
+        ["login", "publish"].includes(entry.argv[1]),
+      ),
+    );
+  },
+);
+
+test("names the development directories a tarball would publish", async () => {
+  const { developmentDirectories } = await import("../src/setup.mjs");
+  const files = [
+    "package.json",
+    "js/src/index.js",
+    "tests/cli.test.js",
+    ".github/workflows/release.yml",
+    "tests/unit/a.test.js",
+    "test.js",
+  ].map((path) => ({ path }));
+  assert.deepEqual(developmentDirectories({ files }), [".github/", "tests/"]);
+  assert.deepEqual(
+    developmentDirectories({ files: [{ path: "lib/test/a.js" }] }),
+    [],
+  );
+});
+
 test("reads npm pack output before and since npm 12 (#22)", async () => {
   const { packedEntry } = await import("../src/setup.mjs");
   const packed = { filename: "a-1.0.0.tgz", version: "1.0.0" };

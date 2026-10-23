@@ -24,6 +24,9 @@ currently shares its release version with the Rust implementation.
   variables and secret, `packages: write`, and package linking (#5).
 - `setup --browser default|automated` chooses where sign-in and approval URLs
   open; `default`, the default, uses the user's default browser (#9).
+- An npm first publish stops before the sign-in when the packed tarball
+  contains repository development directories such as `.github/` or `tests/`,
+  which a package.json without a `files` allowlist lets in.
 
 ### Changed
 

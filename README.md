@@ -315,7 +315,11 @@ A bootstrap run:
    `npm pack --ignore-scripts`, lists every file with the packed and
    unpacked size, installs the tarball into a scratch directory, and runs
    each bin through its `node_modules/.bin` link with `--version`. A bin that
-   fails or prints nothing stops the run before anything is published.
+   fails or prints nothing stops the run before anything is published, and
+   so does a tarball with repository development directories (`.github/`,
+   `tests/`, `test/`, `__tests__/`, `coverage/`, `experiments/`, `target/`,
+   `.changeset/`, `.husky/`, `.idea/`, `.vscode/`), which a package.json
+   without a `files` allowlist lets in.
 3. Signs in with `npm login --auth-type=web` only when needed, right before
    publishing, so the approval links do not expire while packing. The CLI
    opens the printed login URL in the dedicated profile reused for subsequent
