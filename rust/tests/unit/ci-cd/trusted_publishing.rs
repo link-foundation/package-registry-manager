@@ -280,7 +280,7 @@ fn docker_configuration_honours_the_docker_verdict() {
     }
 }
 
-/// npm publishes with OIDC first and NPM_TOKEN as the publish step's
+/// npm publishes with OIDC first and `NPM_TOKEN` as the publish step's
 /// fallback, and only when the package already exists.
 #[test]
 fn javascript_release_uses_npm_trusted_publishing_with_token_fallback() {

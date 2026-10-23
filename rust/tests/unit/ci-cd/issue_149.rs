@@ -10,7 +10,7 @@
 //! Only two steps need the credentials, and both declare them at step level.
 //! Since issue #16 that credential is first the short-lived token
 //! rust-lang/crates-io-auth-action mints with trusted publishing; since issue
-//! #62 the CARGO_REGISTRY_TOKEN / CARGO_TOKEN secret is its fallback, in the
+//! #62 the `CARGO_REGISTRY_TOKEN` / `CARGO_TOKEN` secret is its fallback, in the
 //! same step-level expression. These tests pin the invariant in both
 //! directions: no workflow-level `env:` value anywhere under
 //! `.github/workflows` may reference `secrets.`, and the two publish steps
