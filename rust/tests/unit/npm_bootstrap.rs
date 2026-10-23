@@ -289,8 +289,8 @@ fn names_the_development_directories_a_tarball_would_publish() {
         {"path": "test.js"},
     ]});
     assert_eq!(development_directories(&packed), [".github/", "tests/"]);
-    assert!(
-        development_directories(&serde_json::json!({"files": [{"path": "lib/test/a.js"}]}))
-            .is_empty()
+    assert_eq!(
+        development_directories(&serde_json::json!({"files": [{"path": "lib/test/a.js"}]})),
+        Vec::<String>::new()
     );
 }

@@ -42,7 +42,7 @@ currently shares its release version with the Rust implementation.
   outside any repository (`~/Library/Application Support` on macOS,
   `$XDG_STATE_HOME` or `~/.local/state` on Linux, `%LOCALAPPDATA%` on Windows,
   each followed by `package-registry-manager/browser-profile`) (#8).
-- `browser-commander` is required at `^0.33.2`, its latest release (#28). A
+- `browser-commander` is required at `^0.34.0`, its latest release (#28). A
   launch still names its channel (`chrome` by default), so the upstream switch
   of channel-less launches to Chrome for Testing does not change which browser
   opens.
