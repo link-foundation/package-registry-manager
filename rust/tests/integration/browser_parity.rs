@@ -1,6 +1,6 @@
 use browser_commander::browser::real_browser::launch_real_browser;
 use browser_commander::{
-    connect_browser, measure_session_parity, ConnectOptions, MeasureParityOptions,
+    connect_browser, measure_session_parity, ConnectOptions, LaunchOptions, MeasureParityOptions,
 };
 use package_registry_manager::automation::launch_options;
 use package_registry_manager::browser_options::BrowserOptions;
@@ -36,6 +36,10 @@ async fn launches_the_automated_profile_like_a_browser_started_by_hand() -> anyh
                 &session,
                 MeasureParityOptions {
                     attached: true,
+                    // The hand-started reference must be the same binary. A
+                    // launch that names neither a channel nor an executable
+                    // means Chrome for Testing since browser-commander 0.21.
+                    launch: LaunchOptions::default().executable_path(&launched.executable_path),
                     ..MeasureParityOptions::default()
                 },
             ))
