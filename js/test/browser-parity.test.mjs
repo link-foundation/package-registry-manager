@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { launchRealBrowser, measureParity } from "browser-commander";
+import {
+  KEEP_SESSION_COOKIES_SWITCH,
+  launchRealBrowser,
+  measureParity,
+} from "browser-commander";
 
 import { launchOptions } from "../src/automation.mjs";
 import { parseBrowserOptions } from "../src/browser-options.mjs";
@@ -27,10 +31,16 @@ test(
     try {
       await session.page.goto("about:blank");
       assert.equal(await session.page.evaluate("navigator.webdriver"), false);
-      const report = await measureParity({ session });
+      // browser-commander adds the one extra switch for a persistent
+      // profile so its session cookies, and with them sign-ins, survive a
+      // restart. PRM wants that, so it counts as requested.
+      const report = await measureParity({
+        session,
+        args: [KEEP_SESSION_COOKIES_SWITCH],
+      });
       assert.deepEqual(
         report.commandLine.extra,
-        [],
+        [KEEP_SESSION_COOKIES_SWITCH],
         report.commandLine.launched,
       );
       assert.deepEqual(report.unlisted, []);
