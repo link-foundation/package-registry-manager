@@ -27,7 +27,7 @@ fn keeps_a_fresh_dedicated_profile_by_default() {
     assert_eq!(browser, BrowserOptions::default());
     assert_eq!(browser.preferences, json!({}));
     let options = launch_options(&browser, &profile(), false, &[]);
-    assert_eq!(options.channel, "chrome");
+    assert_eq!(options.channel.as_deref(), Some("chrome"));
     assert!(!options.headless);
     assert!(!options.verbose);
     assert_eq!(options.user_data_dir, Some(profile()));
@@ -54,7 +54,7 @@ fn passes_the_executable_preferences_and_restrictions_to_the_launch() {
     })
     .expect("valid options");
     let options = launch_options(&browser, &profile(), true, &[]);
-    assert_eq!(options.channel, "msedge");
+    assert_eq!(options.channel.as_deref(), Some("msedge"));
     assert!(options.verbose);
     assert_eq!(
         options.executable_path,

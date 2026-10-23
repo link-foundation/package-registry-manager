@@ -41,12 +41,12 @@ where
     let executable = if let Some(path) = &options.executable_path {
         path.clone()
     } else {
-        resolve_browser_executable(&options.channel, None)?
+        resolve_browser_executable(options.browser_channel(), None)?
     };
     if options.verbose {
         eprintln!(
             "launching {} with WebDriver BiDi ({})",
-            options.channel,
+            options.browser_channel(),
             executable.display()
         );
     }
@@ -133,7 +133,7 @@ mod tests {
     async fn bidi_channel_uses_stubbed_native_launcher() {
         let options = RealBrowserOptions {
             engine: EngineType::Fantoccini,
-            channel: "librewolf".to_owned(),
+            channel: Some("librewolf".to_owned()),
             executable_path: Some(PathBuf::from("stub-librewolf")),
             user_data_dir: Some(PathBuf::from("dedicated-profile")),
             ..RealBrowserOptions::default()
