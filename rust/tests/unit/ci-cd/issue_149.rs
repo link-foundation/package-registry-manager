@@ -8,11 +8,13 @@
 //! publish token out of its own environment.
 //!
 //! Only two steps need the credentials, and both declare them at step level.
-//! Since issue #16 that credential is no secret at all: it is the short-lived
-//! token rust-lang/crates-io-auth-action mints with trusted publishing. These
-//! tests pin the invariant in both directions: no workflow-level `env:` value
-//! anywhere under `.github/workflows` may reference `secrets.`, and the two
-//! publish steps must still receive the token.
+//! Since issue #16 that credential is first the short-lived token
+//! rust-lang/crates-io-auth-action mints with trusted publishing; since issue
+//! #62 the `CARGO_REGISTRY_TOKEN` / `CARGO_TOKEN` secret is its fallback, in the
+//! same step-level expression. These tests pin the invariant in both
+//! directions: no workflow-level `env:` value anywhere under
+//! `.github/workflows` may reference `secrets.`, and the two publish steps
+//! must still receive the token.
 
 use std::fs;
 
@@ -91,9 +93,13 @@ fn release_workflow_level_env_omits_the_crates_io_credentials() {
     }
 }
 
+/// The exact step-level crates.io credential: trusted publishing first, then
+/// the token secrets (issue #62).
+const CRATES_IO_CREDENTIALS: &str = "CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}";
+
 /// The other direction: removing the inherited env must not disarm publishing.
 /// Each publish step receives the trusted-publishing token from the auth step
-/// of its own job, and nothing long-lived.
+/// of its own job, falling back to the token secret, and no other secret.
 #[test]
 fn both_publish_steps_declare_the_crates_io_credentials() {
     let (_, release) = workflows()
@@ -118,17 +124,20 @@ fn both_publish_steps_declare_the_crates_io_credentials() {
             .next()
             .expect("a step body should be present");
         assert!(
-            step.contains("CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}"),
+            step.contains(CRATES_IO_CREDENTIALS),
             "the publish step must declare CARGO_REGISTRY_TOKEN itself, from the \
-             trusted-publishing auth step, since it is not inherited from the workflow-level env"
+             trusted-publishing auth step with the secret as fallback, since it is \
+             not inherited from the workflow-level env"
         );
-        assert!(
-            !step.contains("secrets."),
-            "the publish step must not read a long-lived crates.io secret (issue #16)"
+        assert_eq!(
+            step.matches("secrets.").count(),
+            2,
+            "the only secrets the publish step reads are the two fallbacks in \
+             {CRATES_IO_CREDENTIALS:?}"
         );
         assert!(
             !step.contains("CARGO_TOKEN:"),
-            "the publish step must not declare the legacy CARGO_TOKEN"
+            "the publish step hands Cargo one variable, CARGO_REGISTRY_TOKEN"
         );
     }
 }

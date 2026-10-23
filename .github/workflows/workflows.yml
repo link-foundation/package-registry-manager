@@ -71,9 +71,18 @@ jobs:
       # action, and documents exactly which analyser reproduces a finding
       # (issue #166):
       #   pipx run zizmor==1.29.0 --config .github/zizmor.yml \
-      #     --min-confidence medium --persona regular .github/workflows
+      #     --min-confidence medium --persona regular .github
+      #
+      # `inputs` is narrowed from the action's default `.` to `.github`: the
+      # workflows under tests/fixtures are test data GitHub never runs (the
+      # token-rotation fixture is a deliberately legacy, unhardened workflow
+      # the migration tests rewrite). zizmor's ignore rules match by file
+      # basename, so ignoring the fixtures would also silence the real
+      # workflow of the same name (tests/fixtures/pipeline-template has a
+      # release.yml too).
       - uses: zizmorcore/zizmor-action@v0.6.2
         with:
+          inputs: .github
           advanced-security: false
           annotations: true
           config: .github/zizmor.yml

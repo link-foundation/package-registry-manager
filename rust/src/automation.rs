@@ -131,6 +131,7 @@ pub fn snapshot_options(browser: &BrowserOptions) -> Option<SnapshotOptions> {
             browser: snapshot_browser(&browser.channel).to_owned(),
             profile: profile.clone().unwrap_or_else(|| "Default".to_owned()),
             user_data_dir: None,
+            ..SnapshotOptions::default()
         }),
         _ => None,
     }
