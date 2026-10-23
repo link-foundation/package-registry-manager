@@ -45,11 +45,13 @@ env:
   # flakes on GitHub-hosted runners, including curl HTTP/2 framing failures.
   CARGO_NET_RETRY: '10'
   CARGO_HTTP_MULTIPLEXING: 'false'
-  # There are no long-lived crates.io or npm tokens in this workflow (issue
-  # #16): both registries are published with trusted publishing (OIDC). The
-  # short-lived crates.io token is minted by rust-lang/crates-io-auth-action
-  # inside the two release jobs and handed only to their publish steps, so it is
-  # never visible to the `pull_request` jobs that compile and run branch code.
+  # crates.io and npm publish with trusted publishing (OIDC) first and fall
+  # back to a long-lived token secret only when the OIDC exchange fails (issue
+  # #62). The short-lived crates.io token is minted by
+  # rust-lang/crates-io-auth-action inside the two release jobs; it, and the
+  # optional CARGO_REGISTRY_TOKEN / CARGO_TOKEN / NPM_TOKEN fallback secrets,
+  # are handed only to the publish steps of the release jobs, so none of them
+  # is visible to the `pull_request` jobs that compile and run branch code.
   # Optional: set repository variable DOCKERHUB_IMAGE to namespace/image to publish Docker Hub releases.
   DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
 
@@ -903,7 +905,8 @@ jobs:
       contents: write
       # crates.io trusted publishing (issue #16): rust-lang/crates-io-auth-action
       # exchanges this job's OIDC token for a short-lived crates.io token that
-      # only the publish step receives. No long-lived crates.io secret exists.
+      # only the publish step receives. If the exchange fails, that step falls
+      # back to the CARGO_REGISTRY_TOKEN or CARGO_TOKEN secret (issue #62).
       id-token: write
     steps:
       # This job pushes the version bump commit and tag back to `main`, so the
@@ -994,6 +997,8 @@ jobs:
         id: publish-crate
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}
+          # Lets the script report which credential it publishes with.
+          CRATES_IO_AUTH_OUTCOME: ${{ steps.crates-io-auth.outcome }}
         run: rust-script rust/scripts/publish-crate.rs
 
       - name: Wait for Crate availability on Crates.io
@@ -1113,7 +1118,8 @@ jobs:
       contents: write
       # crates.io trusted publishing (issue #16): rust-lang/crates-io-auth-action
       # exchanges this job's OIDC token for a short-lived crates.io token that
-      # only the publish step receives. No long-lived crates.io secret exists.
+      # only the publish step receives. If the exchange fails, that step falls
+      # back to the CARGO_REGISTRY_TOKEN or CARGO_TOKEN secret (issue #62).
       id-token: write
     steps:
       # This job pushes the version bump commit and tag back to `main`, so the
@@ -1191,6 +1197,8 @@ jobs:
         id: publish-crate
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}
+          # Lets the script report which credential it publishes with.
+          CRATES_IO_AUTH_OUTCOME: ${{ steps.crates-io-auth.outcome }}
         run: rust-script rust/scripts/publish-crate.rs
 
       - name: Wait for Crate availability on Crates.io
@@ -1264,9 +1272,11 @@ jobs:
           rust-script rust/scripts/create-github-release.rs "${release_args[@]}"
 
   # Publish the colocated npm package after the shared release commit has
-  # synchronized both manifests. npm trusted publishing uses the workflow's
-  # OIDC identity only -- there is no NPM_TOKEN fallback (issue #16). Trusted
-  # publishing cannot create a package, so the job runs only when the release
+  # synchronized both manifests. npm publishes with the workflow's OIDC
+  # identity first (issue #16); the NPM_TOKEN secret, exposed to the publish
+  # step alone, is the credential only when the OIDC exchange fails (issue
+  # #62). Trusted publishing cannot create a package, so the job runs only
+  # when the release
   # preflight found the package on npm (`npm == 'ok'`); otherwise the
   # preflight annotates the run with the bootstrap command
   # (`package-registry-manager setup --registry npm --execute`).
@@ -1314,6 +1324,10 @@ jobs:
 
       - name: Publish and verify npm package
         id: publish
+        env:
+          # Fallback only: npm replaces it with the OIDC token when the
+          # trusted-publishing exchange succeeds.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: node js/scripts/publish-to-npm.mjs
 
   # Build each architecture on a native runner. Publishing by digest lets both

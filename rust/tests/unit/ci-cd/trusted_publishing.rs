@@ -1,15 +1,18 @@
-//! Regression tests for package-registry-manager issue #16 (CI half).
+//! Regression tests for package-registry-manager issues #16 and #62 (CI half).
 //!
 //! The release workflow published with long-lived registry tokens
 //! (`secrets.CARGO_TOKEN`, `secrets.CARGO_REGISTRY_TOKEN`, `secrets.NPM_TOKEN`).
-//! It now publishes crates.io and npm with trusted publishing (OIDC) only:
+//! Issue #16 moved crates.io and npm to trusted publishing (OIDC); issue #62
+//! keeps the token secrets as a fallback for when the OIDC exchange fails:
 //!
 //! * the two crate-publishing jobs hold `id-token: write`, mint a short-lived
-//!   crates.io token with a hash-pinned rust-lang/crates-io-auth-action, and
-//!   hand it to the publish step alone;
+//!   crates.io token with a hash-pinned rust-lang/crates-io-auth-action
+//!   (`continue-on-error`, so a failed exchange does not end the job), and
+//!   hand it -- or, failing that, the token secret -- to the publish step alone;
 //! * a crate that is not on crates.io yet (trusted publishing cannot create
 //!   one) skips crates.io only -- the GitHub release, npm and Docker go ahead;
-//! * npm publishes with no token, and only when the package exists.
+//! * npm publishes with OIDC first, `NODE_AUTH_TOKEN` from `NPM_TOKEN` as the
+//!   publish step's fallback, and only when the package exists.
 
 use std::fs;
 
@@ -71,22 +74,68 @@ fn step_block<'a>(job: &'a str, step_name: &str) -> &'a str {
 
 const RELEASE_JOBS: [&str; 2] = ["auto-release", "manual-release"];
 
-/// No long-lived registry token is read anywhere in the release workflow.
+/// The crates.io publish step's credential: trusted publishing first, then the
+/// token secrets (issue #62).
+const CRATES_IO_CREDENTIALS: &str = "CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}";
+
+/// The npm publish step's fallback credential (issue #62).
+const NPM_CREDENTIALS: &str = "NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}";
+
+/// The long-lived registry tokens are read only as fallbacks, and only by the
+/// three publish steps: the two crates.io publish steps and the npm one.
 #[test]
-fn release_workflow_reads_no_long_lived_registry_token() {
+fn release_workflow_reads_registry_tokens_only_as_publish_step_fallbacks() {
     let workflow = release_workflow();
 
-    for forbidden in [
-        "secrets.CARGO_TOKEN",
-        "secrets.CARGO_REGISTRY_TOKEN",
-        "secrets.NPM_TOKEN",
-        "NODE_AUTH_TOKEN",
-    ] {
+    assert_eq!(
+        workflow.matches(CRATES_IO_CREDENTIALS).count(),
+        2,
+        "both crates.io publish steps fall back to the token secret"
+    );
+    assert_eq!(
+        workflow.matches(NPM_CREDENTIALS).count(),
+        1,
+        "the npm publish step falls back to NPM_TOKEN"
+    );
+
+    for job_name in RELEASE_JOBS {
+        let publish = step_block(job_block(&workflow, job_name), "Publish to Crates.io");
         assert!(
-            !workflow.contains(forbidden),
-            "release.yml must publish with trusted publishing, not {forbidden} (issue #16)"
+            publish.contains(CRATES_IO_CREDENTIALS),
+            "{job_name}: {publish}"
         );
     }
+    let npm = step_block(
+        job_block(&workflow, "javascript-release"),
+        "Publish and verify npm package",
+    );
+    assert!(npm.contains(NPM_CREDENTIALS), "{npm}");
+
+    // Every other mention of a registry token is one of those declarations.
+    let readers: Vec<&str> = workflow
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .filter(|line| {
+            [
+                "secrets.CARGO_TOKEN",
+                "secrets.CARGO_REGISTRY_TOKEN",
+                "secrets.NPM_TOKEN",
+                "NODE_AUTH_TOKEN",
+            ]
+            .iter()
+            .any(|token| line.contains(token))
+        })
+        .collect();
+    assert_eq!(
+        readers,
+        [
+            CRATES_IO_CREDENTIALS,
+            CRATES_IO_CREDENTIALS,
+            NPM_CREDENTIALS
+        ],
+        "release.yml reads the registry tokens only as publish-step fallbacks (issue #62)"
+    );
 }
 
 /// Both crate-publishing jobs mint the crates.io token with the official,
@@ -126,11 +175,20 @@ fn release_jobs_use_crates_io_trusted_publishing() {
             auth.contains("steps.crates-io.outputs.publish == 'true'"),
             "{job_name}: only mint a token when the crate can be published"
         );
+        assert!(
+            auth.contains("        continue-on-error: true\n"),
+            "{job_name}: a failed OIDC exchange must fall through to the token secret"
+        );
 
         let publish = step_block(job, "Publish to Crates.io");
         assert!(
-            publish.contains("CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}"),
-            "{job_name}: the publish step must receive the trusted-publishing token"
+            publish.contains(CRATES_IO_CREDENTIALS),
+            "{job_name}: the publish step must receive the trusted-publishing token, \
+             falling back to the token secret"
+        );
+        assert!(
+            publish.contains("CRATES_IO_AUTH_OUTCOME: ${{ steps.crates-io-auth.outcome }}"),
+            "{job_name}: the publish script reports which credential it used"
         );
         assert!(
             publish.contains("steps.crates-io.outputs.publish == 'true'"),
@@ -222,16 +280,22 @@ fn docker_configuration_honours_the_docker_verdict() {
     }
 }
 
-/// npm publishes with OIDC only, and only when the package already exists.
+/// npm publishes with OIDC first and NPM_TOKEN as the publish step's
+/// fallback, and only when the package already exists.
 #[test]
-fn javascript_release_uses_npm_trusted_publishing_only() {
+fn javascript_release_uses_npm_trusted_publishing_with_token_fallback() {
     let workflow = release_workflow();
     let job = job_block(&workflow, "javascript-release");
 
     assert!(job.contains("      id-token: write\n"));
     assert!(job.contains("needs.release-preflight.outputs.npm == 'ok'"));
-    assert!(!job.contains("NODE_AUTH_TOKEN"));
-    assert!(!job.contains("secrets."));
+    let publish = step_block(job, "Publish and verify npm package");
+    assert!(publish.contains(NPM_CREDENTIALS), "{publish}");
+    assert_eq!(
+        job.matches("secrets.").count(),
+        1,
+        "NPM_TOKEN on the publish step is the job's only secret"
+    );
 
     // The comment above the job and the preflight's bootstrap warning both
     // name the command that publishes the first version.
@@ -249,7 +313,8 @@ fn javascript_release_uses_npm_trusted_publishing_only() {
 }
 
 /// The publish script reads the token from Cargo's own variable and never
-/// puts it on the command line or falls back to the legacy secret name.
+/// puts it on the command line; the workflow maps the fallback secrets into
+/// that variable, so the script never reads the legacy name itself.
 #[test]
 fn publish_script_keeps_the_token_off_argv() {
     let script = read("scripts/publish-crate.rs");
@@ -265,8 +330,9 @@ fn publish_script_keeps_the_token_off_argv() {
     );
     assert!(
         !code.contains("env::var(\"CARGO_TOKEN\")"),
-        "there is no long-lived CARGO_TOKEN fallback any more"
+        "the workflow maps CARGO_TOKEN into CARGO_REGISTRY_TOKEN"
     );
     assert!(code.contains("env::var(\"CARGO_REGISTRY_TOKEN\")"));
+    assert!(code.contains("env::var(\"CRATES_IO_AUTH_OUTCOME\")"));
     assert!(code.contains("package-registry-manager setup --registry crates-io --execute"));
 }

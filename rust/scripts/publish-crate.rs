@@ -10,18 +10,22 @@
 //!
 //! Usage: rust-script scripts/publish-crate.rs [--rust-root <path>]
 //!
-//! Authentication (issue #16): crates.io trusted publishing. In CI,
+//! Authentication: crates.io trusted publishing first (issue #16), a
+//! long-lived token secret as the fallback (issue #62). In CI,
 //! rust-lang/crates-io-auth-action exchanges the job's OIDC token for a
-//! short-lived crates.io token, which the publish step receives as
-//! CARGO_REGISTRY_TOKEN -- Cargo's native variable, read by `cargo publish`
-//! itself. The token is never put on the command line (where it would be
-//! visible in the process list) and there is no long-lived CARGO_TOKEN
-//! fallback. Trusted publishing only publishes new versions of an existing
-//! crate; the first version is published once from a maintainer's machine:
+//! short-lived crates.io token; when that exchange fails, the workflow passes
+//! the CARGO_REGISTRY_TOKEN or CARGO_TOKEN secret instead. Either way the
+//! publish step receives it as CARGO_REGISTRY_TOKEN -- Cargo's native
+//! variable, read by `cargo publish` itself. The token is never put on the
+//! command line (where it would be visible in the process list). Trusted
+//! publishing only publishes new versions of an existing crate; the first
+//! version is published once from a maintainer's machine:
 //!   package-registry-manager setup --registry crates-io --execute
 //!
 //! Environment variables:
-//!   - CARGO_REGISTRY_TOKEN: the short-lived trusted-publishing token
+//!   - CARGO_REGISTRY_TOKEN: the trusted-publishing token, or the fallback secret
+//!   - CRATES_IO_AUTH_OUTCOME: outcome of the `crates-io-auth` step
+//!     (`success` when trusted publishing minted the token)
 //!
 //! Outputs (written to GITHUB_OUTPUT):
 //!   - publish_result: one of
@@ -61,6 +65,32 @@ fn set_output(key: &str, value: &str) {
         }
     }
     println!("Output: {}={}", key, value);
+}
+
+/// Where the CARGO_REGISTRY_TOKEN handed to `cargo publish` came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CredentialSource {
+    /// Minted by crates.io trusted publishing (OIDC).
+    TrustedPublishing,
+    /// The CARGO_REGISTRY_TOKEN / CARGO_TOKEN secret, used because the
+    /// trusted-publishing exchange did not succeed.
+    FallbackSecret,
+    /// A token was set but no auth-step outcome was passed (a local run).
+    Unattributed,
+    /// No token at all: Cargo's own credentials are the only option.
+    Missing,
+}
+
+/// Attribute the token from the `crates-io-auth` step outcome. The workflow
+/// prefers the auth action's output, so a successful exchange means the token
+/// is the trusted-publishing one; any other outcome means the fallback secret.
+fn credential_source(auth_outcome: Option<&str>, has_token: bool) -> CredentialSource {
+    match (has_token, auth_outcome.map(str::trim)) {
+        (false, _) => CredentialSource::Missing,
+        (true, Some("success")) => CredentialSource::TrustedPublishing,
+        (true, None | Some("")) => CredentialSource::Unattributed,
+        (true, Some(_)) => CredentialSource::FallbackSecret,
+    }
 }
 
 /// Classification of a failed `cargo publish` attempt.
@@ -145,6 +175,8 @@ fn main() {
     // `cargo publish` reads CARGO_REGISTRY_TOKEN from the environment itself;
     // only its presence is checked here, never its value.
     let has_token = env::var("CARGO_REGISTRY_TOKEN").is_ok_and(|s| !s.is_empty());
+    let auth_outcome = env::var("CRATES_IO_AUTH_OUTCOME").ok();
+    let source = credential_source(auth_outcome.as_deref(), has_token);
 
     let package_info = match rust_paths::read_package_info(&package_manifest) {
         Ok(info) => info,
@@ -168,20 +200,35 @@ fn main() {
     println!();
     println!("=== Attempting to publish to crates.io ===");
 
-    if has_token {
-        println!("Using the crates.io token from CARGO_REGISTRY_TOKEN (trusted publishing)");
-    } else {
-        println!("::warning::CARGO_REGISTRY_TOKEN is not set; attempting publish with Cargo's own credentials");
-        println!();
-        println!("In CI the token comes from crates.io trusted publishing: the release job runs");
-        println!("rust-lang/crates-io-auth-action (step id `crates-io-auth`, job permission");
-        println!("`id-token: write`) and passes its output to this step:");
-        println!("  env:");
-        println!("    CARGO_REGISTRY_TOKEN: ${{{{ steps.crates-io-auth.outputs.token }}}}");
-        println!();
-        println!("If {} is not on crates.io yet, publish the first version once with:", name);
-        println!("  {}", BOOTSTRAP_COMMAND);
-        println!();
+    match source {
+        CredentialSource::TrustedPublishing => {
+            println!("Using the crates.io token from CARGO_REGISTRY_TOKEN (trusted publishing)");
+        }
+        CredentialSource::FallbackSecret => {
+            println!(
+                "::warning::crates.io trusted publishing did not mint a token (auth step outcome: {}); publishing with the CARGO_REGISTRY_TOKEN / CARGO_TOKEN fallback secret",
+                auth_outcome.as_deref().unwrap_or_default().trim()
+            );
+            println!("Configure the crate's trusted publisher (crates.io -> crate settings -> Trusted");
+            println!("Publishing) for this repository and .github/workflows/release.yml so the");
+            println!("fallback secret is no longer needed.");
+        }
+        CredentialSource::Unattributed => {
+            println!("Using the crates.io token from CARGO_REGISTRY_TOKEN");
+        }
+        CredentialSource::Missing => {
+            println!("::warning::CARGO_REGISTRY_TOKEN is not set; attempting publish with Cargo's own credentials");
+            println!();
+            println!("In CI the token comes from crates.io trusted publishing, with a token secret as");
+            println!("the fallback: the release job runs rust-lang/crates-io-auth-action (step id");
+            println!("`crates-io-auth`, job permission `id-token: write`) and passes this step:");
+            println!("  env:");
+            println!("    CARGO_REGISTRY_TOKEN: ${{{{ steps.crates-io-auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}}}");
+            println!();
+            println!("If {} is not on crates.io yet, publish the first version once with:", name);
+            println!("  {}", BOOTSTRAP_COMMAND);
+            println!();
+        }
     }
 
     // Build the cargo publish command. The token stays in the environment,
@@ -237,7 +284,13 @@ fn main() {
                 eprintln!();
                 eprintln!("=== AUTHENTICATION FAILURE ===");
                 eprintln!();
-                eprintln!("crates.io refused the trusted-publishing token for {}.", name);
+                match source {
+                    CredentialSource::FallbackSecret => eprintln!(
+                        "crates.io refused the fallback token secret for {}; trusted publishing had already failed.",
+                        name
+                    ),
+                    _ => eprintln!("crates.io refused the crates.io token for {}.", name),
+                }
                 eprintln!();
                 eprintln!("Check, in this order:");
                 eprintln!("  1. The crate exists on crates.io. Trusted publishing cannot create a crate;");
@@ -246,9 +299,12 @@ fn main() {
                 eprintln!("  2. The crate's trusted publisher (crates.io -> crate settings -> Trusted");
                 eprintln!("     Publishing) names this repository and the workflow file");
                 eprintln!("     .github/workflows/release.yml, with no environment unless the job uses one.");
-                eprintln!("  3. The publish step receives the token from the auth action:");
-                eprintln!("       CARGO_REGISTRY_TOKEN: ${{{{ steps.crates-io-auth.outputs.token }}}}");
+                eprintln!("  3. The publish step receives the token from the auth action, falling back");
+                eprintln!("     to the secret:");
+                eprintln!("       CARGO_REGISTRY_TOKEN: ${{{{ steps.crates-io-auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}}}");
                 eprintln!("     and the job grants `id-token: write`.");
+                eprintln!("  4. If the fallback secret was used, it has not expired and is scoped to");
+                eprintln!("     publish-update for this crate.");
                 eprintln!();
                 eprintln!("Original cargo publish error:");
                 eprintln!("{}", combined.trim());
@@ -347,6 +403,41 @@ this token does not have the required permissions to perform this action
         // classified as rate-limited, since the throttle is the actionable cause.
         let body = "status 429 Too Many Requests: authentication retry later";
         assert_eq!(classify_failure(body), FailureKind::RateLimited);
+    }
+
+    #[test]
+    fn a_successful_exchange_means_trusted_publishing() {
+        assert_eq!(
+            credential_source(Some("success"), true),
+            CredentialSource::TrustedPublishing
+        );
+    }
+
+    #[test]
+    fn a_failed_exchange_with_a_token_means_the_fallback_secret() {
+        // `continue-on-error: true` reports a failed exchange as `failure`
+        // in `outcome` (the `conclusion` would read `success`).
+        assert_eq!(
+            credential_source(Some("failure"), true),
+            CredentialSource::FallbackSecret
+        );
+        assert_eq!(
+            credential_source(Some("skipped"), true),
+            CredentialSource::FallbackSecret
+        );
+    }
+
+    #[test]
+    fn no_token_is_missing_whatever_the_exchange_did() {
+        for outcome in [None, Some(""), Some("success"), Some("failure")] {
+            assert_eq!(credential_source(outcome, false), CredentialSource::Missing);
+        }
+    }
+
+    #[test]
+    fn a_token_without_an_outcome_is_not_attributed() {
+        assert_eq!(credential_source(None, true), CredentialSource::Unattributed);
+        assert_eq!(credential_source(Some(" "), true), CredentialSource::Unattributed);
     }
 
     #[test]
