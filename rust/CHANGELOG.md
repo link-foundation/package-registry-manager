@@ -80,6 +80,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.23.1] - 2026-10-23
+
+CI/CD: crates.io and npm publishing try trusted publishing (OIDC) first and fall back to a token secret when the OIDC exchange fails: `CARGO_REGISTRY_TOKEN` / `CARGO_TOKEN` for crates.io, `NPM_TOKEN` for npm (issue #62). Only the publish steps read the secrets, and `publish-crate.rs` warns when it publishes with the fallback secret.
+
+### Changed
+- `browser-commander` is required at `0.21.1`, its latest release. A launch still names its browser channel (`chrome` by default), so the upstream switch of channel-less launches to Chrome for Testing does not change which browser opens
+
+### Security
+- `rustls` 0.23.46, `rustls-webpki` 0.103.16 and `webpki-root-certs` 1.0.10 in `Cargo.lock` fix RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348, RUSTSEC-2026-0349, RUSTSEC-2026-0382 and RUSTSEC-2026-0383
+
 ## [0.23.0] - 2026-10-12
 
 ### Added
