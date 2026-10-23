@@ -81,6 +81,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.24.0] - 2026-10-23
+
+### Changed
+- `setup` stays signed in by default: the npm session token and the crates.io
+  sign-in in the automated profile are kept, so the next run (npm: within two
+  hours) skips the sign-in. `--sign-out` signs out at the end instead;
+  `--keep-session` is still accepted and is now the default.
+
+### Added
+- An npm first publish stops before the sign-in when the packed tarball
+  contains repository development directories such as `.github/` or `tests/`,
+  which a package.json without a `files` allowlist lets in.
+
+### Fixed
+- Require browser-commander 0.22.0 and command-stream 1.10.0, their latest
+  releases, and lock ctutils 0.4.5 and tokio 1.54.1 for RUSTSEC-2026-0385
+  and RUSTSEC-2026-0386.
+
 ## [0.23.1] - 2026-10-23
 
 CI/CD: crates.io and npm publishing try trusted publishing (OIDC) first and fall back to a token secret when the OIDC exchange fails: `CARGO_REGISTRY_TOKEN` / `CARGO_TOKEN` for crates.io, `NPM_TOKEN` for npm (issue #62). Only the publish steps read the secrets, and `publish-crate.rs` warns when it publishes with the fallback secret.
