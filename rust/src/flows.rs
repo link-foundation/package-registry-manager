@@ -418,7 +418,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
             "sign-out",
             "Sign out of npm",
             StepKind::Command,
-            "Revoke the session token created by the web login.",
+            "With --sign-out, revoke the session token created by the web login now; otherwise the next run reuses it and npm ends it after two hours.",
         )
         .command("npm", &["logout"])
         .when("tool-signed-in"),
@@ -516,7 +516,7 @@ fn api_crates_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupSte
             "crates-sign-out",
             "Sign the automated browser out of crates.io",
             StepKind::Api,
-            "Remove the sign-in this run brought into the automated profile; --keep-session keeps it. No token outlives the run either way.",
+            "With --sign-out, remove the sign-in this run brought into the automated profile; otherwise the next run reuses it. No token outlives the run either way.",
         )
         .when("crates-signed-in"),
         remove_worktree_step(),

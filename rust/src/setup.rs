@@ -192,15 +192,18 @@ impl<'a> Session<'a> {
                 && step.when.as_deref().is_some_and(|when| self.holds(when))
             {
                 if step.id == "sign-out" && self.keeps_session(step) {
-                    println!("Keeping the npm session for reuse; run npm logout to revoke it.");
+                    println!(
+                        "Keeping the npm session for reuse; npm ends it after two hours, npm logout \
+                         sooner."
+                    );
                 } else {
                     deferred.push(step.clone());
                 }
             } else if step.id == "sign-out" && self.keeps_session(step) {
                 println!(
-                    "Keeping the npm session for reuse: its token stays in npm's user \
-                     configuration until you run npm logout, and the next run reuses it while \
-                     npm whoami succeeds."
+                    "Keeping the npm session for reuse: the next run within two hours skips the \
+                     sign-in while npm whoami succeeds. npm ends the session token after two \
+                     hours; npm logout ends it now."
                 );
             } else if step.when.as_deref().is_some_and(|when| self.holds(when)) {
                 println!("==> {}", step.title);

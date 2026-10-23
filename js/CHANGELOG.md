@@ -27,6 +27,10 @@ currently shares its release version with the Rust implementation.
 
 ### Changed
 
+- `setup` stays signed in by default: the npm session token and the crates.io
+  sign-in in the automated profile are kept, so the next run (npm: within two
+  hours) skips the sign-in. `--sign-out` signs out at the end instead;
+  `--keep-session` is still accepted and is now the default.
 - npm web-auth URLs (`npm login`, `npm publish` 2FA, `npm trust`) open in the
   user's default browser (`open`, `xdg-open`, or the Windows URL handler),
   where they are usually already signed in. The automated browser profile is

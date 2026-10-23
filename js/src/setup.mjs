@@ -107,14 +107,14 @@ export class SetupSession {
       ) {
         if (step.id === "sign-out" && this.keepsSession(step)) {
           console.log(
-            "Keeping the npm session for reuse; run npm logout to revoke it.",
+            "Keeping the npm session for reuse; npm ends it after two hours, npm logout sooner.",
           );
         } else {
           deferred.push(step);
         }
       } else if (step.id === "sign-out" && this.keepsSession(step)) {
         console.log(
-          "Keeping the npm session for reuse: its token stays in npm's user configuration until you run npm logout, and the next run reuses it while npm whoami succeeds.",
+          "Keeping the npm session for reuse: the next run within two hours skips the sign-in while npm whoami succeeds. npm ends the session token after two hours; npm logout ends it now.",
         );
       } else if (this.conditions.has(step.when) && step.kind === "api") {
         this.log(`==> ${step.title}`);

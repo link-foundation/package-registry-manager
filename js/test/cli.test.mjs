@@ -226,6 +226,34 @@ test("rejects --open-with together with --no-browser", async () => {
   );
 });
 
+test("setup rejects --sign-out together with --keep-session", async () => {
+  await assert.rejects(
+    execute(
+      process.execPath,
+      [
+        cli,
+        "--repository",
+        fixture,
+        "--sign-out",
+        "--keep-session",
+        "--no-browser",
+        "--execute",
+        "--registry",
+        "npm",
+        "setup",
+      ],
+      { env: registryEnv },
+    ),
+    (error) => {
+      assert.match(
+        error.stderr,
+        /--sign-out and --keep-session are mutually exclusive/,
+      );
+      return true;
+    },
+  );
+});
+
 test("setup --all selects all publishable manifests and accepts a registry filter (#33)", async () => {
   const all = await execute(process.execPath, [
     cli,

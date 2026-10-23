@@ -632,7 +632,7 @@ test(
 );
 
 test(
-  "keeps the npm session with --keep-session (#17)",
+  "keeps the npm session unless --sign-out is given (#17)",
   POSIX_ONLY,
   async () => {
     const state = await freshState();

@@ -118,8 +118,8 @@ exact validation commands and their output. Tracing is off by default.
 
 Set up every publishable package together with `setup --all --execute` in
 either CLI. An optional `--registry` limits the batch. The run reuses one
-automated browser and existing registry sign-ins, signs out at the end, and
-prints a per-package summary. If a package fails, cleanup still runs and the
+automated browser and existing registry sign-ins, keeps them for the next run
+(`--sign-out` ends them at the end), and prints a per-package summary. If a package fails, cleanup still runs and the
 summary identifies the remaining packages as `not-run`.
 
 For npm, crates.io and PyPI, inspection follows repository scripts invoked by
@@ -172,10 +172,12 @@ reports `Invalid response from web login endpoint`), the CLI asks npm for a
 fresh link, up to 3 links in total, and then stops with a message to re-run
 when you are ready to approve within 5 minutes.
 
-The npm session the CLI opened is signed out at the end of the run. A naming
-refusal retains it for a renamed retry; `--keep-session` also keeps it: the token stays in npm's user configuration
-until `npm logout`, and the next run reuses it while `npm whoami` succeeds, so
-setting up several packages one after another needs one sign-in.
+The npm session the CLI opened stays signed in after the run: the token stays
+in npm's user configuration, and the next run reuses it while `npm whoami`
+succeeds, so setting up several packages one after another needs one sign-in.
+npm ends the session token after two hours. `--sign-out` runs `npm logout` at
+the end instead, except after a naming refusal, which keeps the session for a
+renamed retry.
 
 The automation profile holds npm approvals and publisher forms. Do not pass a normal browser profile to
 `--browser-profile`; Chrome 136 and newer intentionally restrict automation of
@@ -332,7 +334,7 @@ A bootstrap run:
    the others. It then lists the repository secrets and deletes each
    leftover `NPM_TOKEN`/`NPM_AUTH_TOKEN` that no workflow reads any more,
    one confirmation each.
-8. Signs npm out (unless `--keep-session`) and removes the temporary
+8. Signs npm out (only with `--sign-out`) and removes the temporary
    worktree, even when an earlier step failed, then explains that every
    later version is published by the trusted workflow.
 
@@ -382,7 +384,7 @@ already has it) and one confirmation (#26):
 
 Leftover `CARGO_TOKEN`/`CARGO_REGISTRY_TOKEN` repository secrets are deleted
 after confirmation, and the crates.io sign-in the run brought into the
-automated profile is removed unless `--keep-session` is given. An existing
+automated profile is kept for the next run; `--sign-out` removes it. An existing
 crate only gets the trusted publisher. `--manual` keeps the previous
 checklist: create the token in the form, let `cargo login` read it, revoke it
 by hand, and fill the trusted publisher form. See the Cargo
@@ -543,7 +545,7 @@ The CLIs intentionally use the same options and JSON schema:
 | `--browser-restriction <name>` | Add a launch restriction or preset, such as `no-extensions`; may be repeated |
 | `--open-with <app>` | Open sign-in and approval URLs with this browser application instead of the default browser |
 | `--manual` | crates.io: create, use, and revoke the first-publish token by hand instead of through the crates.io API |
-| `--keep-session` | Keep npm authentication and the shared automated browser session across registry packages and steps |
+| `--sign-out` | At the end of setup, run `npm logout` for the npm session the run signed in and remove the crates.io sign-in it brought into the automated profile; without it the next run reuses both sessions |
 | `--workflow <file>` | Trusted-publisher workflow in `.github/workflows`, when detection finds several or the wrong one |
 | `--environment <name>` | GitHub environment of the trusted publisher |
 

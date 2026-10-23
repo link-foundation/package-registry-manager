@@ -282,7 +282,7 @@ fn repository_transfer_failed_attach_preserves_old_publisher() {
 }
 
 #[test]
-fn setup_all_reuses_the_npm_session_and_logs_out_after_the_last_package() {
+fn setup_all_reuses_the_npm_session_and_signs_out_after_the_last_package_with_sign_out() {
     let temporary = TempDir::new().unwrap();
     let Some((repository, state)) = prepare(&temporary) else {
         return;
@@ -305,7 +305,12 @@ fn setup_all_reuses_the_npm_session_and_logs_out_after_the_last_package() {
         path.starts_with("/npm/")
             .then(|| r#"{"version":"0.1.0"}"#.to_owned())
     });
-    let run = run_setup_with(&repository, &state, &registry, &["--no-browser", "--all"]);
+    let run = run_setup_with(
+        &repository,
+        &state,
+        &registry,
+        &["--no-browser", "--all", "--sign-out"],
+    );
     let npm: Vec<_> = run
         .log
         .iter()
@@ -382,7 +387,6 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
             "npx -y npm@^11.10 trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false".to_owned(),
             "gh secret list --repo acme/pipeline-app --json name".to_owned(),
             "gh secret delete NPM_TOKEN --repo acme/pipeline-app".to_owned(),
-            "npm logout".to_owned(),
             format!("git worktree remove --force {worktree}"),
         ]
     );
@@ -449,7 +453,13 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
         "temporary files are removed"
     );
 
+    assert!(state.join("session").exists(), "still signed in");
+
+    // The kept session spares the resumed run a sign-in.
     let resumed = run_setup(&repository, &state, &registry).commands();
+    assert!(!resumed
+        .iter()
+        .any(|command| command.starts_with("npm login")));
     assert!(!resumed
         .iter()
         .any(|command| command.starts_with("npm publish")));
@@ -473,7 +483,7 @@ fn requests_a_fresh_login_link_when_npm_falls_back_to_its_username_prompt() {
         &repository,
         &state,
         &registry,
-        &["--no-browser"],
+        &["--no-browser", "--sign-out"],
         &[("FAKE_LEGACY_LOGIN", "2")],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -556,18 +566,13 @@ fn reruns_npm_publish_with_a_fresh_approval_link_once_one_expired() {
 }
 
 #[test]
-fn keeps_the_npm_session_with_keep_session() {
+fn keeps_the_npm_session_unless_sign_out_is_given() {
     let temporary = TempDir::new().expect("create temporary directory");
     let Some((repository, state)) = prepare(&temporary) else {
         return;
     };
     let registry = published_registry();
-    let run = run_setup_with(
-        &repository,
-        &state,
-        &registry,
-        &["--no-browser", "--keep-session"],
-    );
+    let run = run_setup(&repository, &state, &registry);
     assert!(!run.commands().iter().any(|command| command == "npm logout"));
     assert!(
         run.stdout
@@ -577,6 +582,51 @@ fn keeps_the_npm_session_with_keep_session() {
         run.stdout
     );
     assert!(state.join("session").exists(), "still signed in");
+
+    // The hidden --keep-session still parses, for scripts that pass it.
+    let kept = run_setup_with(
+        &repository,
+        &state,
+        &registry,
+        &["--no-browser", "--keep-session"],
+    );
+    assert!(!kept
+        .commands()
+        .iter()
+        .any(|command| command == "npm logout"));
+
+    // --sign-out ends the session the run signed in, here after it expired.
+    fs::remove_file(state.join("session")).expect("expire the session");
+    let signed_out = run_setup_with(
+        &repository,
+        &state,
+        &registry,
+        &["--no-browser", "--sign-out"],
+    );
+    assert!(signed_out
+        .commands()
+        .iter()
+        .any(|command| command == "npm logout"));
+    assert!(!state.join("session").exists(), "signed out");
+}
+
+#[test]
+fn rejects_sign_out_together_with_keep_session() {
+    let temporary = TempDir::new().expect("create temporary directory");
+    let Some((repository, state)) = prepare(&temporary) else {
+        return;
+    };
+    let output = setup_command(
+        &repository,
+        &state,
+        &missing_registry(),
+        &["--no-browser", "--sign-out", "--keep-session"],
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--sign-out"), "{stderr}");
+    assert!(read_log(&state).is_empty(), "nothing runs");
 }
 
 #[test]
@@ -646,7 +696,17 @@ fn failing_setup(
     registry: &MockRegistry,
     env: &[(&str, &str)],
 ) -> (String, String, Vec<String>) {
-    let output = setup_command(repository, state, registry, &["--no-browser"], env);
+    failing_setup_with(repository, state, registry, &["--no-browser"], env)
+}
+
+fn failing_setup_with(
+    repository: &Path,
+    state: &Path,
+    registry: &MockRegistry,
+    options: &[&str],
+    env: &[(&str, &str)],
+) -> (String, String, Vec<String>) {
+    let output = setup_command(repository, state, registry, options, env);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(!output.status.success(), "{stdout}\n{stderr}");
@@ -721,16 +781,17 @@ fn reports_npm_pack_corrections_and_stops_when_a_bin_was_removed() {
 }
 
 #[test]
-fn signs_out_and_removes_the_worktree_when_a_middle_step_fails() {
+fn signs_out_with_sign_out_and_removes_the_worktree_when_a_middle_step_fails() {
     let temporary = TempDir::new().expect("create temporary directory");
     let Some((repository, state)) = prepare(&temporary) else {
         return;
     };
     // npm trust github fails, so verify-trusted-publisher fails (#24).
-    let (_, stderr, commands) = failing_setup(
+    let (_, stderr, commands) = failing_setup_with(
         &repository,
         &state,
         &bootstrap_registry(),
+        &["--no-browser", "--sign-out"],
         &[("FAKE_TRUST_GITHUB", "fail")],
     );
     assert!(
