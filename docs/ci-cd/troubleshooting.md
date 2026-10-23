@@ -187,27 +187,42 @@ The "Publish to Crates.io" step fails, or it is skipped with a
 "crates.io publication skipped" warning.
 
 ### How publishing authenticates
-The release workflow stores no crates.io token. `auto-release` and
-`manual-release` hold `id-token: write`. The hash-pinned
+Trusted publishing comes first, and a token secret is the fallback.
+`auto-release` and `manual-release` hold `id-token: write`. The hash-pinned
 `rust-lang/crates-io-auth-action` exchanges the workflow's OIDC identity for a
-short-lived token. Only the "Publish to Crates.io" step receives that token:
+short-lived token. If that exchange fails, the job carries on
+(`continue-on-error: true`) and the publish step uses the `CARGO_REGISTRY_TOKEN`
+or `CARGO_TOKEN` secret instead. Only the "Publish to Crates.io" step receives
+either credential:
 
 ```yaml
 - name: Authenticate to crates.io with trusted publishing
   id: crates-io-auth
   uses: rust-lang/crates-io-auth-action@<full commit SHA> # v1.0.5
+  continue-on-error: true
 
 - name: Publish to Crates.io
   env:
-    CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
-  run: rust-script rust/scripts/publish-crate.rs --rust-root rust
+    CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}
+    CRATES_IO_AUTH_OUTCOME: ${{ steps.crates-io-auth.outcome }}
+  run: rust-script rust/scripts/publish-crate.rs
 ```
 
-The action's post step revokes the token when the job ends. `publish-crate.rs`
-reads the token from Cargo's own `CARGO_REGISTRY_TOKEN` variable and never puts
-it on the command line.
+The action's post step revokes the short-lived token when the job ends.
+`publish-crate.rs` reads the token from Cargo's own `CARGO_REGISTRY_TOKEN`
+variable and never puts it on the command line. When the exchange failed, the
+script logs a warning that it is publishing with the fallback secret.
 
 ### Common Errors
+
+#### "crates.io trusted publishing did not mint a token ... publishing with the CARGO_REGISTRY_TOKEN / CARGO_TOKEN fallback secret"
+**Cause:** The OIDC exchange failed, so the release fell back to the token
+secret. Usually the crate's trusted publisher is missing or names another
+repository or workflow file.
+
+**Solution:** On crates.io, open the crate's **Settings → Trusted Publishing**
+and add `link-foundation/package-registry-manager` with workflow `release.yml`.
+The next release then publishes without the secret.
 
 #### "crates.io publication skipped: the crate is not on crates.io yet"
 **Cause:** Trusted publishing cannot create a crate. Someone has to publish the
@@ -396,8 +411,9 @@ verdict skips that registry.
 
 Trusted publishing mints its crates.io and npm tokens inside the publishing
 jobs. The preflight therefore checks only that the crate and package exist; it
-cannot test the OIDC exchange in advance. A missing or mismatched trusted
-publisher still fails at the publish step. See
+cannot test the OIDC exchange in advance. With a missing or mismatched trusted
+publisher, the publish step falls back to the registry's token secret, or fails
+if there is none. See
 [Crates.io Publishing Fails](#cratesio-publishing-fails).
 
 ### Reproducing locally
@@ -414,8 +430,9 @@ PREFLIGHT_MODE=report bash rust/scripts/preflight-credentials.sh
 not on npm yet".
 
 ### Cause
-npm publishes with trusted publishing (OIDC) only; the workflow has no
-`NPM_TOKEN` fallback. Trusted publishing cannot create a package, so the job
+npm publishes with trusted publishing (OIDC) first. Only the publish step
+receives the `NPM_TOKEN` secret, as `NODE_AUTH_TOKEN`, and npm uses it only when
+the OIDC exchange fails. Trusted publishing cannot create a package, so the job
 runs only when the preflight reports `npm=ok`.
 
 ### Solution
@@ -476,18 +493,23 @@ Pages API fails the check step loudly rather than being silently skipped.
 | `DOCKERHUB_TOKEN` | Publish to Docker Hub when `DOCKERHUB_IMAGE` is configured | https://docs.docker.com/security/access-tokens/ |
 | `GITHUB_TOKEN` | Create GitHub releases | Automatic (provided by GitHub) |
 
-crates.io and npm need no secret, because both publish with trusted publishing
-(OIDC). Delete any leftover `CARGO_TOKEN`, `CARGO_REGISTRY_TOKEN` or `NPM_TOKEN`
-repository or organization secrets:
-```bash
-gh secret delete CARGO_TOKEN --repo link-foundation/package-registry-manager
-gh secret delete CARGO_REGISTRY_TOKEN --repo link-foundation/package-registry-manager
-gh secret delete NPM_TOKEN --repo link-foundation/package-registry-manager
-```
-A long-lived publish token in the repository is a standing credential that any
-compromised workflow step could exfiltrate. The release workflow never reads
-one, and `rust/tests/unit/ci-cd/trusted_publishing.rs` fails if one is
-reintroduced.
+### Optional fallback secrets
+
+| Secret Name | Purpose | Where to Get |
+|------------|---------|--------------|
+| `CARGO_REGISTRY_TOKEN` or `CARGO_TOKEN` | crates.io publication when the trusted-publishing exchange fails | https://crates.io/settings/tokens (scope: `publish-update`, this crate) |
+| `NPM_TOKEN` | npm publication when the trusted-publishing exchange fails | https://docs.npmjs.com/creating-and-viewing-access-tokens |
+
+crates.io and npm publish with trusted publishing (OIDC) first and need no
+secret while it works. The fallback secrets keep a release going when the OIDC
+exchange fails (issue #62). Keep them if you rely on that. If you delete them, a
+failed exchange fails the publish step instead of falling back.
+
+Only the three publish steps read these secrets: the two "Publish to Crates.io"
+steps and "Publish and verify npm package". Those steps run in release jobs that
+never run for `pull_request` events.
+`rust/tests/unit/ci-cd/trusted_publishing.rs` fails if any other step or job
+reads one.
 
 ### Mapping a secret that is still needed
 
