@@ -18,6 +18,9 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(controller.normalized_version("01.02.003.0+build.45"), "1.2.3")
         self.assertEqual(controller.normalized_version("1.0"), "1.0.0")
         self.assertEqual(controller.normalized_version("1.2.3.4-Preview.2"), "1.2.3.4-preview.2")
+        for invalid in ["1.2.3-", "1.2.3-?", "1.2.3-a..b", "1.2.3+"]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                controller.normalized_version(invalid)
 
     def test_oidc_then_unchanged_fallback(self):
         with tempfile.TemporaryDirectory() as directory:

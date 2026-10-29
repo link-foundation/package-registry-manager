@@ -3,10 +3,23 @@ use crate::model::{Package, Registry};
 use crate::registry_state::{encode_uri_component as encode, Lookup, PackageState, RegistryClient};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
+
+static NUGET_VERSION: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)^[0-9]+(?:\.[0-9]+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$")
+        .expect("static NuGet version regex")
+});
+static GO_VERSION: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$")
+        .expect("static Go version regex")
+});
 
 /// Normalize the `NuGet` release identity used by the public flat-container API.
 #[must_use]
 pub fn normalized_nuget_version(version: &str) -> Option<String> {
+    if !NUGET_VERSION.is_match(version) {
+        return None;
+    }
     let public = version.split('+').next()?.to_ascii_lowercase();
     let (release, prerelease) = public
         .split_once('-')
@@ -310,7 +323,10 @@ impl RegistryClient {
             let list = self.publication_text(&url).await;
             let latest = self.get_json(&format!("{base}/{module}/@latest")).await;
             if let Lookup::Found(doc) = latest {
-                if doc["Version"].is_string() {
+                if doc["Version"]
+                    .as_str()
+                    .is_some_and(|version| GO_VERSION.is_match(version))
+                {
                     state.exists = Some(true);
                     state
                         .audit

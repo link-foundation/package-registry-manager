@@ -130,10 +130,32 @@ test("NuGet exact evidence uses normalized versions and rejects malformed indexe
     },
   );
   assert.equal(state.manifest_version_exists, true);
-  for (const body of [{}, { versions: [null] }, { versions: ["invalid"] }]) {
+  for (const body of [
+    {},
+    { versions: [null] },
+    ...["invalid", "1.2.3-", "1.2.3-?", "1.2.3-a..b", "1.2.3+"].map(
+      (version) => ({ versions: [version] }),
+    ),
+  ]) {
     const state = await probePackage(pkg("nuget", "Org.Lib"), {
       fetch: fetchWith(() => ({ body })),
     });
     assert.equal(state.exists, undefined);
+  }
+});
+
+test("malformed Go latest versions remain unknown rather than proving publication", async () => {
+  for (const Version of [null, 42, {}, "", "invalid", "v1.2.3-?"]) {
+    const state = await probePackage(
+      pkg("go-modules", "example.com/module", null),
+      {
+        fetch: fetchWith((url) => ({
+          body: url.endsWith("/list") ? "" : { Version },
+        })),
+      },
+    );
+    assert.equal(state.exists, undefined, JSON.stringify(Version));
+    assert.equal(state.version_state, undefined);
+    assert.match(state.registry_state_reason, /invalid/);
   }
 });

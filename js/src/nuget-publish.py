@@ -21,6 +21,8 @@ import zipfile
 
 def normalized_version(version):
     """NuGet's flat-container URLs omit build metadata and a zero revision."""
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?", version, re.I):
+        raise ValueError("invalid NuGet version")
     public = version.split("+", 1)[0].lower()
     release, separator, prerelease = public.partition("-")
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,3}", release):

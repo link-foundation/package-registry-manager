@@ -178,5 +178,7 @@ fn public_nuget_identity_ignores_build_metadata_and_zero_revision() {
         normalized_nuget_version("1.2.3.4-Preview.2").as_deref(),
         Some("1.2.3.4-preview.2")
     );
-    assert_eq!(normalized_nuget_version("unknown"), None);
+    for invalid in ["unknown", "1.2.3-", "1.2.3-?", "1.2.3-a..b", "1.2.3+"] {
+        assert_eq!(normalized_nuget_version(invalid), None, "{invalid}");
+    }
 }

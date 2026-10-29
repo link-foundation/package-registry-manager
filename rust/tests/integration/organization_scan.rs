@@ -271,6 +271,8 @@ async fn nuget_registry_normalizes_exact_versions_and_rejects_invalid_metadata()
         (r#"{"versions":["1.2.3"]}"#, Some(true)),
         (r#"{"versions":[]}"#, Some(false)),
         (r#"{"versions":["invalid"]}"#, None),
+        (r#"{"versions":["1.2.3-?"]}"#, None),
+        (r#"{"versions":["1.2.3+"]}"#, None),
         (r#"{"versions":[null]}"#, None),
         ("{}", None),
     ] {
@@ -291,6 +293,46 @@ async fn nuget_registry_normalizes_exact_versions_and_rejects_invalid_metadata()
         if exists == Some(true) {
             assert_eq!(state.audit["manifest_version_exists"], true);
         }
+    }
+}
+
+#[tokio::test]
+async fn malformed_go_latest_versions_remain_unknown() {
+    use package_registry_manager::{Package, Registry};
+    for version in [
+        json!(null),
+        json!(42),
+        json!({}),
+        json!(""),
+        json!("invalid"),
+        json!("v1.2.3-?"),
+    ] {
+        let body = json!({"Version": version}).to_string();
+        let registry = super::mock_registry::MockRegistry::start(move |path| {
+            Some(if path.ends_with("/list") {
+                String::new()
+            } else {
+                body.clone()
+            })
+        });
+        let client = RegistryClient::new(
+            Endpoints::default().with("PACKAGE_REGISTRY_MANAGER_GO_PROXY", &registry.base),
+            false,
+        );
+        let state = client
+            .probe_package(&Package::new(
+                Registry::GoModules,
+                "example.com/module".into(),
+                None,
+                "go.mod".into(),
+            ))
+            .await;
+        assert_eq!(state.exists, None, "{version}");
+        assert!(!state.audit.contains_key("version_state"));
+        assert!(state.audit["registry_state_reason"]
+            .as_str()
+            .unwrap()
+            .contains("invalid"));
     }
 }
 

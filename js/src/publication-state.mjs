@@ -1,7 +1,7 @@
 /** Normalize NuGet identity versions for flat-container comparisons. */
 export function normalizedNugetVersion(version) {
   const release =
-    /^([0-9]+(?:\.[0-9]+){0,3})(-[0-9a-z.-]+)?(?:\+[0-9a-z.-]+)?$/i.exec(
+    /^([0-9]+(?:\.[0-9]+){0,3})(-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i.exec(
       version ?? "",
     );
   if (!release) {
@@ -211,7 +211,15 @@ export async function distributionState(item, options, base) {
     const latest = await read(`${base}/${module}/@latest`);
     let version;
     try {
-      version = JSON.parse(latest)?.Version;
+      const candidate = JSON.parse(latest)?.Version;
+      if (
+        typeof candidate === "string" &&
+        /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i.test(
+          candidate,
+        )
+      ) {
+        version = candidate;
+      }
     } catch {
       /* Non-JSON is unknown. */
     }
