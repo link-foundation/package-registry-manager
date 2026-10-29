@@ -40,9 +40,9 @@
     "audit": "node scripts/npm-audit.mjs"
   },
   "dependencies": {
-    "@link-foundation/gh-manager": "https://codeload.github.com/link-foundation/gh-manager/tar.gz/29808e088ac8fd8374361920bbebab07a4d63ac6",
+    "@link-foundation/gh-manager": "https://codeload.github.com/link-foundation/gh-manager/tar.gz/293e9a8ab9d6d91a08e95f4e09c2a0dcad9bc809",
     "browser-commander": "^0.34.0",
-    "command-stream": "^2.4.0",
+    "command-stream": "^2.6.0",
     "playwright": "^1.63.0",
     "selenium-webdriver": "^4.50.0"
   },
