@@ -95,6 +95,17 @@ pub fn launch_options(
     options
 }
 
+/// Launch options for crates.io API work using the saved dedicated profile.
+#[must_use]
+pub fn quiet_launch_options(
+    browser: &BrowserOptions,
+    profile: &Path,
+    verbose: bool,
+    domains: &[&str],
+) -> RealBrowserOptions {
+    launch_options(browser, profile, verbose, domains).headless(true)
+}
+
 /// The storage state that deletes every cookie of `domains` or their
 /// subdomains: the same cookies, empty and expired long ago.
 #[must_use]
@@ -169,10 +180,25 @@ impl Automation {
         verbose: bool,
         domains: &[&str],
     ) -> Result<Self> {
+        Self::connect_with_visibility(browser, profile, verbose, domains, false).await
+    }
+
+    /// Start quietly for API work; the setup session escalates when interaction is needed.
+    pub async fn connect_with_visibility(
+        browser: &BrowserOptions,
+        profile: &Path,
+        verbose: bool,
+        domains: &[&str],
+        headless: bool,
+    ) -> Result<Self> {
         if browser.attach == Some(AttachMode::Extension) {
             return connect_extension().await;
         }
-        let options = launch_options(browser, profile, verbose, domains);
+        let options = if headless {
+            quiet_launch_options(browser, profile, verbose, domains)
+        } else {
+            launch_options(browser, profile, verbose, domains)
+        };
         if let Some(source) = snapshot_options(browser) {
             // Boxed: the launch future is large, and every step awaits it.
             let launched = Box::pin(launch_snapshot(source, options))

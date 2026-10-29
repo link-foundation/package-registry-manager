@@ -695,29 +695,45 @@ export class SetupSession {
       }
       return;
     }
-    await (await this.automatedPage()).goto(url);
+    await (await this.visiblePage()).goto(url);
   }
 
   /**
    * The automated page, launched once. The crates.io sign-in step offers
    * `--browser-import default|auto` itself, once it knows a sign-in is missing.
    */
-  async automatedPage(browser = this.options.browserOptions, quiet = false) {
+  async automatedPage(
+    browser = this.options.browserOptions,
+    quiet = false,
+    headless = false,
+  ) {
     quiet ||= this.options.quietBrowser;
     if (!this.automation) {
       const domains = this.options.domains ?? signInDomains(this.plan.registry);
-      this.automation = await connectAutomation({
+      this.automation = await (
+        this.options.connectAutomation ?? connectAutomation
+      )({
         browser: await launchBrowser(browser, domains, {
           deferred: this.plan.registry === "crates-io",
           verbose: quiet ? false : this.options.verbose,
           ...this.options.importDiscovery,
         }),
+        headless,
         profile: this.options.browserProfile,
         verbose: quiet ? false : this.options.verbose,
         domains,
       });
     }
     return this.automation;
+  }
+
+  /** Bring authentication and approval work into a visible browser. */
+  async visiblePage() {
+    if (this.automation?.headless) {
+      await this.automation.close();
+      this.automation = null;
+    }
+    return this.automatedPage();
   }
 
   /** Relaunches the automated browser with other options, such as an import. */

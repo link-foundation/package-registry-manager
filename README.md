@@ -335,9 +335,9 @@ A bootstrap run:
 7. Takes npm's `Trust configuration created successfully` as the
    confirmation; after the browser fallback it confirms the trust with
    `npm trust list --browser=false`, whose 2FA approval link it opens like
-   the others. It then lists the repository secrets and deletes each
-   leftover `NPM_TOKEN`/`NPM_AUTH_TOKEN` that no workflow reads any more,
-   one confirmation each.
+   the others. Token secrets are retained as fallback. Explicit
+   `--delete-token-secrets` offers deletion only for unused credentials after
+   release verification.
 8. Signs npm out (only with `--sign-out`) and removes the temporary
    worktree, even when an earlier step failed, then explains that every
    later version is published by the trusted workflow.
@@ -494,31 +494,44 @@ package-registry-manager setup --org link-foundation --registry crates-io --migr
 package-registry-manager setup --org link-foundation --registry crates-io --migrate --execute --browser-import auto
 ```
 
-The first execution proposes a draft PR converting the existing publishing jobs
-and their local reusable callers. It preserves release commands, job dependencies,
-conditions, environments and mapping permissions, grants `id-token: write` on
-each caller and publishing job, removes legacy token inputs, and adds fragments
-to existing `changelog.d` directories. crates.io authentication uses an immutable
-action commit and passes its token output to Cargo. npm gets Node 22, npm 11 and
-provenance; simple PyPI Twine uploads become trusted-publishing actions.
-`--add-publish-job` also offers this conversion when existing jobs use tokens.
-Inline mappings, inherited/dynamic secret wiring, complex Twine commands,
-different Cargo publishing conditions within one job and existing mixed crates.io
-authentication require workflow review before conversion. Multiline publishing
-conditions are preserved in the authentication step.
+The first execution proposes a draft PR converting existing publishing jobs and
+local reusable callers. Each pipeline tries OIDC first and retains token fallback.
+crates.io uses the pinned auth action with `continue-on-error: true`; consumers
+read its token output, then `CARGO_REGISTRY_TOKEN` or `CARGO_TOKEN`. npm first
+publishes with npm 11 and empty token variables, and retries with token credentials
+only if that attempt fails. PyPI uses the publishing action first with OIDC,
+then with a token password if needed. Inspection reports
+`oidc-with-token-fallback` as the desired policy and flags missing OIDC/fallback.
 
-Review and merge the generated PR, then run the same `--migrate --execute` command
-to attach the trusted publishers. Registration uses the top-level caller filename
-and the actual publishing callee's environment, including nested local calls.
-The CLI retains secrets until a successful default-branch run at the current
-commit shows an actual OIDC upload. Trigger a normal release through your workflow
-and rerun the command after it succeeds; the CLI never uploads package artifacts.
-It then deletes verified repository secrets and expiry companions. Organization
-cleanup reads fresh default-branch workflows in every repository, including forks
-and archived repositories, lists remaining consumers, and retains shared secrets
-until none remain. Missing evidence, inaccessible repositories, dynamic secret
-references and branch changes block deletion. Repository-only setup retains
-organization secrets; use account scope for the complete consumer check.
+Conversion preserves release commands, conditions, environments, caller secret
+mappings and `secrets: inherit`, and makes reusable fallback inputs optional.
+Inline Cargo token arguments, command substitutions, referenced scripts that
+build publish commands, token preflights and mixed authentication are supported.
+Authentication precedes the first consumer, with a separate auth step for each
+condition. Existing variable gates on the old auth action are replaced by an
+OIDC attempt on every publishing path. `--migrate` selects every matching crate
+without requiring `--package`, converts shared jobs once and registers each crate.
+Inline environment mappings and complex Twine commands still require expansion.
+
+Preview uses the inspected working tree. Execution explains that it recomputes
+from the latest default branch; changed proposals are displayed before approval.
+Review and merge the draft PR, then rerun `--migrate --execute` to register trust
+using the top-level caller filename and the publishing callee's environment.
+After a real OIDC release at the default-branch head, the command reports retained
+fallback tokens and expiry metadata. Existing token rotation remains available.
+
+Deletion requires `--delete-token-secrets` and proof that no workflow consumes
+the secret, plus verified OIDC publication. Organization deletion additionally
+checks every repository, including archived repositories and forks. Incomplete
+scans, dynamic secret references and branch changes retain the credentials.
+Normal migration continues for clean repositories and lists skipped failures.
+
+Public crates.io scans use one shared request queue (at most one start per second)
+and retry HTTP 403/429 with backoff and `Retry-After`. Failed existence checks stay
+unknown with HTTP evidence. Owner-only publisher settings are verified in the
+signed-in setup session, independently of public existence and provenance.
+Saved crates.io sessions run API tasks headlessly in one shared batch browser;
+sign-in or approval escalates to a visible window when needed.
 
 The CLIs intentionally use the same options and JSON schema:
 
@@ -529,7 +542,8 @@ The CLIs intentionally use the same options and JSON schema:
 | `--verbose` | Enable command and browser tracing |
 | `--registry <name>` | Restrict `plan`, or select exactly one registry for `setup` |
 | `--rotate-token <secret>` | Explicitly replace an existing crates.io token during `setup --registry crates-io` |
-| `--migrate` | Convert existing crates.io/npm/PyPI jobs in a reviewed PR, register trust, and verify publication before secret cleanup |
+| `--migrate` | Convert to OIDC first with token fallback, register trust, and verify publication |
+| `--delete-token-secrets` | Opt in to deletion of unused tokens after verified OIDC publication |
 | `--token-expiry-days <N>` | Read private crates.io token expiry during an online account scan (0–365 days) |
 | `--package <name>` | Plan only this package, or select it for `setup` when a registry has several |
 | `--offline` | Skip the public registry lookups; unknown state keeps every conditional step |

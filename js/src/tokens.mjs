@@ -81,11 +81,13 @@ export function reportTokenSecrets(output, packageInfo) {
   const { inUse, leftover } = auditRegistryTokens(output, packageInfo);
   for (const name of inUse) {
     console.log(
-      `  ${name} is still read by a workflow; switch that workflow to trusted publishing before deleting it.`,
+      `  ${name} is still read by a workflow; retained for authentication fallback.`,
     );
   }
   for (const name of leftover) {
-    console.log(`  ${name} is no longer needed with trusted publishing.`);
+    console.log(
+      `  ${name} is unused by workflows; retained unless cleanup is explicitly requested.`,
+    );
   }
   return leftover;
 }

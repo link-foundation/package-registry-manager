@@ -29,14 +29,20 @@ export function relayExtensionDirectory() {
  * the `domains` import scope only the cookies of `domains`, the registry's
  * sign-in domains, are imported.
  */
-export function launchOptions(browser, profile, verbose = false, domains = []) {
+export function launchOptions(
+  browser,
+  profile,
+  verbose = false,
+  domains = [],
+  headless = false,
+) {
   const options = {
     engine:
       findBrowserSource(browser.channel)?.controlProtocol === "cdp"
         ? "playwright"
         : "selenium",
     channel: browser.channel,
-    headless: false,
+    headless,
     verbose,
   };
   if (browser.executable) {
@@ -82,7 +88,7 @@ export function extensionInstructions(directory) {
  * `evaluate`, `close`, and, for a launched profile, `clearCookies(domains)`.
  */
 export async function connectAutomation(
-  { browser, profile, verbose = false, domains = [] },
+  { browser, profile, verbose = false, domains = [], headless = false },
   dependencies = {},
 ) {
   if (browser.attach?.mode === "extension") {
@@ -90,7 +96,7 @@ export async function connectAutomation(
   }
   if (findBrowserSource(browser.channel)?.controlProtocol === "bidi") {
     return connectWebDriverAutomation(
-      { browser, profile, verbose, domains },
+      { browser, profile, verbose, domains, headless },
       dependencies,
     );
   }
@@ -99,8 +105,9 @@ export async function connectAutomation(
   }
   const connection = await (
     dependencies.launchRealBrowser ?? launchRealBrowser
-  )(launchOptions(browser, profile, verbose, domains));
+  )(launchOptions(browser, profile, verbose, domains, headless));
   return {
+    headless,
     goto: (url) => connection.page.goto(url),
     evaluate: (script) => connection.page.evaluate(script),
     close: () => connection.close(),

@@ -141,6 +141,8 @@ test("PyPI provenance names its publisher; unavailable configuration never means
 test("crates.io uses latest-version provenance and reads configured publishers independently", async () => {
   const pkg = { registry: "crates-io", name: "tool" };
   const state = await probePackage(pkg, {
+    cratesPublisherSettings: true,
+    requestLimiter: async () => {},
     fetch: async (url) =>
       response(
         url.includes("github_configs?")

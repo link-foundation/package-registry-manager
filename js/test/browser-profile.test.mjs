@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -199,24 +200,41 @@ test("treats explorer exit code one as handed over", () => {
   assert.equal(openerSucceeded("xdg-open", 0), true);
 });
 
-test("waits for an opener only for a grace period", async () => {
-  const node = (script) => ["-e", script];
-  const runner = detachedRunner(300);
-  assert.deepEqual(await runner(process.execPath, node("")), { code: 0 });
-  await assert.rejects(
-    runner(process.execPath, node("process.exit(3)")),
-    /exited with code 3/,
-  );
-  await assert.rejects(
-    runner(path.join(temporary, "missing-opener"), []),
-    /Could not start/,
-  );
-  const started = Date.now();
-  assert.deepEqual(
-    await runner(process.execPath, node("setTimeout(() => {}, 1500)")),
-    { code: null },
-  );
-  assert.ok(Date.now() - started < 1_400, "a running opener is not awaited");
+test("waits for an opener only for a grace period", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const url = "https://www.npmjs.com/login?next=/login/cli/1&a=b";
+  let child;
+  const runner = detachedRunner(300, (file, args, options) => {
+    assert.equal(file, "opener");
+    assert.deepEqual(args, [url]);
+    assert.deepEqual(options, {
+      detached: process.platform !== "win32",
+      stdio: "ignore",
+      shell: false,
+    });
+    child = new EventEmitter();
+    child.unref = context.mock.fn();
+    return child;
+  });
+  const success = runner("opener", [url]);
+  child.emit("exit", 0);
+  assert.deepEqual(await success, { code: 0 });
+
+  const failure = runner("opener", [url]);
+  child.emit("exit", 3);
+  await assert.rejects(failure, /exited with code 3/);
+
+  const unavailable = runner("opener", [url]);
+  child.emit("error", new Error("not found"));
+  await assert.rejects(unavailable, /Could not start/);
+
+  const running = runner("opener", [url]);
+  context.mock.timers.tick(299);
+  assert.equal(child.unref.mock.callCount(), 0);
+  context.mock.timers.tick(1);
+  assert.deepEqual(await running, { code: null });
+  assert.equal(child.unref.mock.callCount(), 1);
+  child.emit("exit", 0);
 });
 
 test("stops npm at its legacy username prompt", async () => {

@@ -36,11 +36,22 @@ export function publishedThroughOidc(job, log, registry) {
       ) && /Published\s+\S+\s+v\d/.test(log)
     );
   }
+  if (steps.some((step) => /token fallback/i.test(step.name))) {
+    return false;
+  }
   if (registry === "npm") {
-    return /^.*\+\s+(?:@[^/\s]+\/)?[^@\s]+@\d/m.test(log);
+    return (
+      steps.some((step) => /OIDC/i.test(step.name)) &&
+      /^.*\+\s+(?:@[^/\s]+\/)?[^@\s]+@\d/m.test(log)
+    );
   }
   if (registry === "pypi") {
-    return /Successfully uploaded|View at:\s*https:\/\/pypi\.org/.test(log);
+    return (
+      steps.some(
+        (step) =>
+          /prm_oidc|OIDC/i.test(step.name) && !/fallback/.test(step.name),
+      ) && /Successfully uploaded|View at:\s*https:\/\/pypi\.org/.test(log)
+    );
   }
   return false;
 }
@@ -80,13 +91,6 @@ export async function cleanupMigratedSecrets(session) {
   ];
   const current = await defaultWorkflows(github, slug);
   const stillRead = names.filter((name) => readsSecret(current.files, name));
-  if (stillRead.length) {
-    session.outcome = { status: "migration-required" };
-    console.log(
-      `${slug} still reads ${stillRead.join(", ")}; merge the conversion PR before cleanup.`,
-    );
-    return;
-  }
   const workflow = plan.trusted_publisher?.workflow ?? plan.package.workflow;
   const runs = await github.runs.list(slug, {
     workflow,
@@ -121,6 +125,24 @@ export async function cleanupMigratedSecrets(session) {
     session.outcome = { status: "awaiting-oidc-release" };
     console.log(
       `${slug}: legacy secrets retained until ${workflow} publishes through OIDC at default-branch commit ${current.sha}. Re-run setup --migrate after the release succeeds.`,
+    );
+    return;
+  }
+  if (!options.deleteTokenSecrets) {
+    session.outcome = {
+      status: "fallback-retained",
+      oidc_verified: true,
+      fallback_secrets: stillRead,
+    };
+    console.log(
+      `${slug}: OIDC publication verified; token secrets (${stillRead.join(", ") || "none referenced"}) and expiry metadata retained for fallback. Use --delete-token-secrets only after removing every consumer.`,
+    );
+    return;
+  }
+  if (stillRead.length) {
+    session.outcome = { status: "migration-required" };
+    console.log(
+      `${slug} still reads ${stillRead.join(", ")}; merge the conversion PR before cleanup.`,
     );
     return;
   }

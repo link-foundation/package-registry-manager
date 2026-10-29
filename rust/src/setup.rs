@@ -78,6 +78,8 @@ pub struct ExecuteOptions<'a> {
     pub open_with: Option<&'a str>,
     /// Keep the npm session after setup instead of signing out (`--keep-session`).
     pub keep_session: bool,
+    /// Opt in to verified unused token secret cleanup.
+    pub delete_token_secrets: bool,
     pub verbose: bool,
     /// Caller-selected registry secret naming template.
     pub secret_name: Option<&'a str>,
@@ -104,6 +106,7 @@ struct Session<'a> {
     token_secrets: Vec<String>,
     release_selection: Option<release_session::ReleaseSelection>,
     browser: Option<Automation>,
+    browser_headless: bool,
     domains: Vec<&'static str>,
     temporary: Option<tempfile::TempDir>,
     shim: Option<(tempfile::TempDir, PathBuf)>,
@@ -134,6 +137,7 @@ impl<'a> Session<'a> {
             token_secrets: Vec::new(),
             release_selection: None,
             browser: None,
+            browser_headless: false,
             domains: crate::sign_in_import::sign_in_domains(plan.registry).to_vec(),
             temporary: None,
             shim: None,

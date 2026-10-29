@@ -1,7 +1,10 @@
+import { publishingPolicy } from "./publishing-state.mjs";
+import { fallbackSteps } from "./workflow-fallback.mjs";
 import {
   parseWorkflow,
   jobPublishes,
   registryTokenSecrets,
+  executableLines,
 } from "./publishers.mjs";
 
 // Reviewed v1.0.5 commit. Keep both implementations on the same immutable action.
@@ -33,7 +36,7 @@ function endOf(lines, start) {
   return end;
 }
 
-function removeCredentials(lines, names) {
+export function removeCredentials(lines, names) {
   const result = [...lines];
   for (let index = result.length - 1; index >= 0; index--) {
     const key = /^\s*([\w-]+):/.exec(result[index])?.[1];
@@ -127,8 +130,14 @@ function grantJob(lines, level, parsed) {
 }
 
 async function convertJob(root, parsed, lines, registry) {
+  if (
+    publishingPolicy([...parsed.header, ...lines], registry) ===
+    "oidc-with-token-fallback"
+  ) {
+    return lines;
+  }
   const names = new Set(keys(registry));
-  if (lines.some((line) => /^\s*(?:env|secrets):\s*[^\s#]/.test(line))) {
+  if (lines.some((line) => /^\s*env:\s*[^\s#]/.test(line))) {
     throw new Error(
       "expand inline environment and secret mappings before migration",
     );
@@ -139,7 +148,7 @@ async function convertJob(root, parsed, lines, registry) {
       .map(indent),
   );
   if (lines.some((line) => LOCAL.test(line))) {
-    return grantJob(removeCredentials(lines, names), level, parsed);
+    return grantJob(lines, level, parsed);
   }
   const start = lines.findIndex(
     (line) => indent(line) === level && /^\s*steps:\s*$/.test(line),
@@ -162,7 +171,7 @@ async function convertJob(root, parsed, lines, registry) {
     lines.slice(position, positions[index + 1] ?? end),
   );
   const edits = [];
-  const guards = [];
+  const auths = new Map();
   let first = -1;
   for (const [index, step] of steps.entries()) {
     const publishes = await jobPublishes(
@@ -171,11 +180,24 @@ async function convertJob(root, parsed, lines, registry) {
       { lines: [`${" ".repeat(level)}steps:`, ...step] },
       registry,
     );
+    if (
+      registry === "crates-io" &&
+      step.some((line) => /rust-lang\/crates-io-auth-action@/.test(line))
+    ) {
+      continue;
+    }
     const credential = step.some((line) =>
       [...names].some((name) => new RegExp(`^\\s*${name}:`).test(line)),
     );
-    let updated = removeCredentials(step, names);
-    if (publishes || credential) {
+    const consumer =
+      credential ||
+      executableLines(step).some(
+        (line) =>
+          [...names].some((name) => line.includes(name)) ||
+          /preflight.*(?:crates|cargo)|(?:crates|cargo).*preflight/.test(line),
+      );
+    let updated = [...step];
+    if (publishes || consumer) {
       if (first < 0) {
         first = index;
       }
@@ -183,13 +205,45 @@ async function convertJob(root, parsed, lines, registry) {
         const guard = step.findIndex(
           (line) => indent(line) === stepLevel + 2 && /^\s*if:/.test(line),
         );
-        guards.push(guard < 0 ? [] : step.slice(guard, endOf(step, guard)));
-        updated = withEnv(
-          updated,
-          "CARGO_REGISTRY_TOKEN",
-          "${{ steps.prm_auth.outputs.token }}",
-          stepLevel,
+        const condition =
+          guard < 0
+            ? []
+            : step
+                .slice(guard, endOf(step, guard))
+                .filter((line) => line.trim());
+        const identity = JSON.stringify(condition);
+        let auth = auths.get(identity);
+        if (!auth) {
+          const id = auths.size ? `prm_auth_${auths.size + 1}` : "prm_auth";
+          auth = { id, condition };
+          auths.set(identity, auth);
+          edits.push([
+            "",
+            `${" ".repeat(stepLevel)}- name: Authenticate with crates.io (trusted publishing)`,
+            `${" ".repeat(stepLevel + 2)}uses: ${CRATES_AUTH_ACTION} # v1.0.5`,
+            `${" ".repeat(stepLevel + 2)}id: ${id}`,
+            `${" ".repeat(stepLevel + 2)}continue-on-error: true`,
+            ...condition,
+            "",
+          ]);
+        }
+        const fallback = `\${{ steps.${
+          auth.id
+        }.outputs.token || secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}`;
+        const usedKeys = [...names].filter((name) =>
+          [...parsed.header, ...lines.slice(0, start), ...step].some((line) =>
+            new RegExp(`\\b(?:env\\.)?${name}\\b`).test(line),
+          ),
         );
+        updated = removeCredentials(updated, names).map((line) =>
+          line.replace(
+            /\s+--token(?:=|\s+)(?:["']?\$\{\{\s*secrets\.[\w]+\s*\}\}["']?|["']?\$\{?(?:CARGO_TOKEN|CARGO_REGISTRY_TOKEN)\}?["']?)/g,
+            "",
+          ),
+        );
+        for (const key of new Set(["CARGO_REGISTRY_TOKEN", ...usedKeys])) {
+          updated = withEnv(updated, key, fallback, stepLevel);
+        }
       }
       if (registry === "npm" && publishes) {
         updated = withEnv(
@@ -197,16 +251,6 @@ async function convertJob(root, parsed, lines, registry) {
           "NPM_CONFIG_PROVENANCE",
           "'true'",
           stepLevel,
-        );
-      }
-      if (
-        registry === "pypi" &&
-        publishes &&
-        step.some((line) => /pypa\/gh-action-pypi-publish@/.test(line))
-      ) {
-        updated = removeCredentials(
-          updated,
-          new Set([...names, "password", "user"]),
         );
       }
       if (
@@ -244,38 +288,26 @@ async function convertJob(root, parsed, lines, registry) {
         );
       }
     }
-    edits.push(updated);
+    if (publishes && ["npm", "pypi"].includes(registry)) {
+      edits.push(
+        ...fallbackSteps(
+          updated,
+          registry,
+          names,
+          stepLevel,
+          index,
+          removeCredentials,
+        ),
+      );
+    } else {
+      edits.push(updated);
+    }
   }
   if (first < 0) {
     throw new Error("cannot locate publishing step for migration");
   }
   const prefix = " ".repeat(stepLevel);
-  if (registry === "crates-io") {
-    if (
-      guards.some(
-        (guard) => JSON.stringify(guard) !== JSON.stringify(guards[0]),
-      )
-    ) {
-      throw new Error(
-        "different publishing conditions require separate authentication steps; review this job before migration",
-      );
-    }
-    if (
-      lines.some((line) =>
-        /\bid:\s*prm_auth\b|rust-lang\/crates-io-auth-action@/.test(line),
-      )
-    ) {
-      throw new Error(
-        "existing crates.io auth step needs review before converting token wiring",
-      );
-    }
-    edits.splice(first, 0, [
-      `${prefix}- name: Authenticate with crates.io (trusted publishing)`,
-      `${prefix}  uses: ${CRATES_AUTH_ACTION}`,
-      `${prefix}  id: prm_auth`,
-      ...guards[0],
-    ]);
-  } else if (registry === "npm") {
+  if (registry === "npm") {
     edits.splice(first, 0, [
       `${prefix}- uses: actions/setup-node@v6`,
       `${prefix}  with:`,
@@ -285,10 +317,10 @@ async function convertJob(root, parsed, lines, registry) {
   }
   return grantJob(
     [
-      ...removeCredentials(lines.slice(0, start), names),
+      ...lines.slice(0, start),
       lines[start],
       ...edits.flat(),
-      ...removeCredentials(lines.slice(end), names),
+      ...lines.slice(end),
     ],
     level,
     parsed,
@@ -322,7 +354,13 @@ export async function workflowMigrationProposal(root, packages, workflows) {
       const publishes = called
         ? await visit(LOCAL.exec(called)[1], registry, new Set([...seen, name]))
         : await jobPublishes(root, workflow, job, registry);
-      if (publishes) {
+      const tokenCheck =
+        registry === "crates-io" &&
+        executableLines(job.lines).some((line) =>
+          /preflight|CARGO_(?:REGISTRY_)?TOKEN/.test(line),
+        ) &&
+        job.lines.some((line) => /CARGO_(?:REGISTRY_)?TOKEN|crates/.test(line));
+      if (publishes || tokenCheck) {
         found = true;
         mark(name, job.name, registry);
       }
@@ -379,39 +417,60 @@ export async function workflowMigrationProposal(root, packages, workflows) {
     const names = new Set(
       [...jobs.values()].flatMap((registries) => [...registries].flatMap(keys)),
     );
-    for (const job of parsed
-      .get(workflow.name)
-      .jobs.filter((job) => !jobs.has(job.name))) {
-      if (
-        job.lines.some((line) =>
-          [...names].some((name) =>
-            new RegExp(`\\b(?:secrets|env)\\.${name}\\b`).test(line),
-          ),
-        )
-      ) {
-        throw new Error(
-          "token is also read by a non-publishing job; preserve that consumer before migration",
+    // Reusable credentials remain optional fallback inputs; preserve caller mappings/inherit.
+    const header = [...lines.slice(0, start)];
+    for (let i = 0; i < header.length; i++) {
+      const key = /^\s*([\w-]+):\s*$/.exec(header[i])?.[1];
+      if (!names.has(key)) {
+        continue;
+      }
+      const end = endOf(header, i);
+      for (let j = i + 1; j < end; j++) {
+        header[j] = header[j].replace(/required:\s*true/, "required: false");
+      }
+    }
+    const inlineCall = header.findIndex((line) =>
+      /^["']?on["']?:\s*(?:workflow_call|\[workflow_call\])\s*$/.test(line),
+    );
+    if (inlineCall >= 0) {
+      header.splice(inlineCall, 1, "on:", "  workflow_call:");
+    }
+    const call = header.findIndex((line) =>
+      /^\s+workflow_call:\s*$/.test(line),
+    );
+    if (call >= 0) {
+      const callEnd = endOf(header, call);
+      const callLevel = indent(header[call]);
+      let secrets = header.findIndex(
+        (line, index) =>
+          index > call &&
+          index < callEnd &&
+          indent(line) === callLevel + 2 &&
+          /^\s*secrets:/.test(line),
+      );
+      if (secrets < 0) {
+        secrets = call + 1;
+        header.splice(secrets, 0, `${" ".repeat(callLevel + 2)}secrets:`);
+      }
+      const existing = header.slice(secrets + 1, endOf(header, secrets));
+      for (const name of names) {
+        if (existing.some((line) => new RegExp(`^\\s*${name}:`).test(line))) {
+          continue;
+        }
+        header.splice(
+          secrets + 1,
+          0,
+          `${" ".repeat(callLevel + 4)}${name}:`,
+          `${" ".repeat(callLevel + 6)}required: false`,
         );
       }
     }
-    // Remove workflow_call declarations after converting every affected publishing job.
-    const header = removeCredentials(lines.slice(0, start), names);
     const converted = [
       ...header,
       lines[start],
       ...body,
       ...lines.slice(end),
     ].join("\n");
-    if (
-      [...names].some((name) =>
-        new RegExp(`\\bsecrets\\.${name}\\b`).test(converted),
-      ) ||
-      /\bsecrets\s*\[|\bsecrets:\s*inherit\b/.test(converted)
-    ) {
-      throw new Error(
-        "remaining legacy or inherited secret references require review before migration",
-      );
-    }
     files[workflow.name] = `${converted.trimEnd()}\n`;
   }
   if (!Object.keys(files).length) {

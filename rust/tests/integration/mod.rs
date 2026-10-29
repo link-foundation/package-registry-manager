@@ -14,3 +14,5 @@ mod repository_transfer_e2e;
 
 mod npm_similarity;
 mod publisher_forms;
+
+mod scan_reliability;

@@ -167,6 +167,10 @@ pub enum Lookup {
 /// Registry state of one package; `None` means unknown.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PackageState {
+    /// HTTP status when existence could not be determined.
+    pub registry_http_status: Option<u16>,
+    /// Why owner-only publisher settings were not checked.
+    pub publisher_settings_reason: Option<String>,
     /// Whether the package exists.
     pub exists: Option<bool>,
     /// Whether the latest release used trusted publishing.
@@ -211,38 +215,63 @@ impl RegistryClient {
 
     /// Fetch a JSON document; 404 is `Missing`, anything else unexpected is `Unknown`.
     pub async fn get_json(&self, url: &str) -> Lookup {
-        let response = self
-            .client
-            .get(url)
-            .header("accept", "application/json")
-            .send()
-            .await;
-        match response {
-            Ok(response) => {
-                let status = response.status();
-                if self.verbose {
-                    eprintln!("GET {url} -> {}", status.as_u16());
-                }
-                if status == reqwest::StatusCode::NOT_FOUND {
-                    Lookup::Missing
-                } else if status.is_success() {
-                    response
-                        .bytes()
-                        .await
-                        .ok()
-                        .and_then(|body| serde_json::from_slice(&body).ok())
-                        .map_or(Lookup::Unknown, Lookup::Found)
-                } else {
-                    Lookup::Unknown
-                }
+        self.get_json_status(url).await.0
+    }
+
+    async fn get_json_status(&self, url: &str) -> (Lookup, Option<u16>) {
+        let crates = reqwest::Url::parse(url).is_ok_and(|url| url.host_str() == Some("crates.io"));
+        for attempt in 0..4 {
+            if crates {
+                crate::request_policy::crates_permit().await;
             }
-            Err(error) => {
-                if self.verbose {
-                    eprintln!("GET {url} failed: {error}");
+            let response = self
+                .client
+                .get(url)
+                .header("accept", "application/json")
+                .send()
+                .await;
+            match response {
+                Ok(response) => {
+                    let status = response.status();
+                    if self.verbose {
+                        eprintln!("GET {url} -> {}", status.as_u16());
+                    }
+                    if matches!(status.as_u16(), 403 | 429) && attempt < 3 {
+                        let delay = crate::request_policy::retry_delay(
+                            response
+                                .headers()
+                                .get("retry-after")
+                                .and_then(|value| value.to_str().ok()),
+                            attempt,
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    if status == reqwest::StatusCode::NOT_FOUND {
+                        return (Lookup::Missing, None);
+                    }
+                    if status.is_success() {
+                        return (
+                            response
+                                .bytes()
+                                .await
+                                .ok()
+                                .and_then(|body| serde_json::from_slice(&body).ok())
+                                .map_or(Lookup::Unknown, Lookup::Found),
+                            Some(status.as_u16()),
+                        );
+                    }
+                    return (Lookup::Unknown, Some(status.as_u16()));
                 }
-                Lookup::Unknown
+                Err(error) => {
+                    if self.verbose {
+                        eprintln!("GET {url} failed: {error}");
+                    }
+                    return (Lookup::Unknown, None);
+                }
             }
         }
+        unreachable!("bounded request attempts return a result")
     }
 
     /// Ask crates.io whether a token still authenticates, through an
@@ -329,8 +358,14 @@ impl RegistryClient {
         let Some(url) = self.endpoints.state_url(package) else {
             return PackageState::default();
         };
-        let document = match self.get_json(&url).await {
-            Lookup::Unknown => return PackageState::default(),
+        let (lookup, registry_http_status) = self.get_json_status(&url).await;
+        let document = match lookup {
+            Lookup::Unknown => {
+                return PackageState {
+                    registry_http_status,
+                    ..PackageState::default()
+                }
+            }
             Lookup::Missing => {
                 return PackageState {
                     exists: Some(false),
@@ -366,13 +401,6 @@ impl RegistryClient {
                         .or_else(|| versions.first())
                 });
                 let source = latest.map_or(&Value::Null, |version| &version["trustpub_data"]);
-                let settings = self
-                    .get_json(&format!(
-                        "{}/trusted_publishing/github_configs?crate={}",
-                        self.endpoints.base(Registry::CratesIo).unwrap_or_default(),
-                        encode_uri_component(&package.name)
-                    ))
-                    .await;
                 PackageState {
                     exists: Some(true),
                     trusted: Some(truthy(source)),
@@ -380,16 +408,9 @@ impl RegistryClient {
                         .into_iter()
                         .map(|publisher| publisher.repository)
                         .collect(),
-                    configured_publishers: match settings {
-                        Lookup::Found(value)
-                            if value["github_configs"].is_array()
-                                && value["meta"]["next_page"].as_str().is_none() =>
-                        {
-                            Some(publisher_identities(&value))
-                        }
-                        _ => None,
-                    },
+                    publisher_settings_reason: Some("publisher settings require an authenticated crates.io session; public provenance is independent".into()),
                     version: None,
+                    ..PackageState::default()
                 }
             }
             Registry::PyPi => {
@@ -463,6 +484,8 @@ impl RegistryClient {
                 continue;
             };
             let package = &mut probed.packages[index];
+            package.registry_http_status = state.registry_http_status;
+            package.publisher_settings_reason = state.publisher_settings_reason;
             if state.exists.is_some() {
                 package.exists_on_registry = state.exists;
             }

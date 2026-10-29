@@ -269,3 +269,33 @@ fn help_lists_every_catalogue_import_and_launch_channel() {
         assert!(help.contains(id), "{id} in\n{help}");
     }
 }
+
+#[test]
+fn migrate_selects_every_crate_without_package_argument() {
+    let root = tempfile::tempdir().unwrap();
+    for name in ["first-crate", "second-crate"] {
+        let directory = root.path().join(name);
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(
+            directory.join("Cargo.toml"),
+            format!("[package]\nname = \"{name}\"\nversion = \"1.0.0\"\n"),
+        )
+        .unwrap();
+    }
+    let output = run(
+        &[
+            "--repository",
+            root.path().to_str().unwrap(),
+            "--offline",
+            "setup",
+            "--registry",
+            "crates-io",
+            "--migrate",
+        ],
+        None,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("crates-io: first-crate"), "{stdout}");
+    assert!(stdout.contains("crates-io: second-crate"), "{stdout}");
+    assert!(stdout.contains("Dry run only"));
+}

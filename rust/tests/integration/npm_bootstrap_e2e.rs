@@ -340,7 +340,6 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
             "gh run list --repo acme/pipeline-app --workflow release.yml --branch main --event workflow_dispatch --limit 100 --json databaseId,conclusion,status,url,headSha,headBranch,event,createdAt".to_owned(),
             "npx -y npm@^11.10 trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false".to_owned(),
             "gh secret list --repo acme/pipeline-app --json name".to_owned(),
-            "gh secret delete NPM_TOKEN --repo acme/pipeline-app".to_owned(),
             format!("git worktree remove --force {worktree}"),
         ]
     );

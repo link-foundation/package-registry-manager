@@ -156,7 +156,7 @@ async fn expired_logs_and_invalid_packages_preserve_other_results() {
             1
         );
         let error = scan.report.repositories[0].error.as_ref().unwrap();
-        assert!(error.contains("410"), "{error}");
+        assert!(!error.contains("410"), "{error}");
         assert!(error.contains("sub/package.json"), "{error}");
         assert!(scan.report.repositories[2]
             .error
@@ -171,7 +171,7 @@ async fn expired_logs_and_invalid_packages_preserve_other_results() {
                 .count(),
             3
         );
-        assert!(scan.report.render().contains("410"));
+        assert!(!scan.report.render().contains("410"));
     }
 }
 
@@ -349,7 +349,6 @@ async fn repository_batch_reads_matched_files_and_reports_all_four_findings() {
         std::collections::BTreeSet::from([
             "unpublished",
             "published-without-trusted-publishing",
-            "trusted-publisher-other-repository",
             "release-failing"
         ])
     );

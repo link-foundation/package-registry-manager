@@ -154,6 +154,15 @@ pub struct Package {
     /// Long-lived registry token secrets that workflows still read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub token_secrets: Vec<String>,
+    /// Authentication policy of the publishing workflows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publishing_policy: Option<String>,
+    /// Last failed registry response, independent of package existence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry_http_status: Option<u16>,
+    /// Why owner-only publisher settings remain unverified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher_settings_reason: Option<String>,
     /// Whether the registry already has the package; unset when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exists_on_registry: Option<bool>,
@@ -200,6 +209,9 @@ impl Package {
             environment: None,
             workflow_candidates: Vec::new(),
             token_secrets: Vec::new(),
+            publishing_policy: None,
+            registry_http_status: None,
+            publisher_settings_reason: None,
             exists_on_registry: None,
             trusted_publishing: None,
             manifest_urls: Vec::new(),

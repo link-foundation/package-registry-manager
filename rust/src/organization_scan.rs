@@ -104,6 +104,12 @@ pub fn findings(inspection: &Inspection) -> Vec<Value> {
         if package.exists_on_registry == Some(false) {
             push("unpublished", Value::Null);
         }
+        if package.exists_on_registry.is_none() && package.registry_http_status.is_some() {
+            push(
+                "registry-state-unknown",
+                json!({"http_status":package.registry_http_status}),
+            );
+        }
         if package.exists_on_registry == Some(true)
             && (package.trusted_publishing == Some(false)
                 || crate::credential_cycle::credential_policy(package.registry).mode == "token")
@@ -325,7 +331,11 @@ pub async fn scan_repositories_with_inactive(
                             && package.exists_on_registry.is_none()
                             && client.endpoints().state_url(package).is_some()
                         {
-                            errors.push(json!({"stage":"registry","manifest":package.manifest,"package":package.name,"message":"registry lookup failed; package state unknown"}));
+                            let mut error = json!({"stage":"registry","manifest":package.manifest,"package":package.name,"message":"registry lookup failed; package state unknown"});
+                            if let Some(status) = package.registry_http_status {
+                                error["http_status"] = json!(status);
+                            }
+                            errors.push(error);
                         }
                     }
                     release_health(
@@ -398,6 +408,7 @@ async fn release_health(
                 .flat_map(|package| package.workflow.iter().chain(&package.workflow_candidates)),
         )
         .collect();
+    let expired = regex::Regex::new(r"GitHub log download (404|410)").expect("static pattern");
     for workflow in workflows {
         let result: Result<()> = async {
             let branch = branch.ok_or_else(|| anyhow!("repository has no default branch for release inspection"))?;
@@ -411,7 +422,11 @@ async fn release_health(
             findings.push(json!({"repository":slug,"type":"release-failing","evidence":evidence}));
             let mut args = vec!["runs".into(), "logs".into(), run["id"].to_string(), "--repo".into(), slug.into()];
             for pattern in failure_patterns(None) { args.extend(["--grep".into(), pattern]); }
-            evidence["matches"] = github.call(&args, None, root).await?;
+            evidence["matches"] = match github.call(&args, None, root).await {
+                Ok(matches) => matches,
+                Err(error) if expired.is_match(&error.to_string()) => json!({"status":"logs-expired","matches":[]}),
+                Err(error) => return Err(error),
+            };
             findings.last_mut().expect("release finding")["evidence"] = evidence;
             Ok(())
         }.await;
@@ -468,6 +483,10 @@ impl ScanReport {
                     }
                     let status = if package.exists_on_registry.is_none() {
                         "registry state unknown"
+                    } else if package.publishing_policy.as_deref()
+                        == Some("oidc-with-token-fallback")
+                    {
+                        "trusted publishing + token fallback"
                     } else if package.trusted_publishing == Some(true) {
                         "published with trusted publishing"
                     } else {

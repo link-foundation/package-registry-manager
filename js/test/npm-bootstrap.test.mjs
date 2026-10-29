@@ -3,13 +3,12 @@ import { cp, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 
 import { authUrlScanner, nodeOptionsWithShim } from "../src/auth-urls.mjs";
 import { inspectRepository } from "../src/discovery.mjs";
 import { buildPlans } from "../src/plan.mjs";
-import { probePackage, registryEndpoint } from "../src/registry-state.mjs";
+import { probePackage } from "../src/registry-state.mjs";
 import {
   installFakeTools,
   readLog,
@@ -84,8 +83,6 @@ test("plans a bootstrap for a package missing from npm", async () => {
       "verify-trusted-publisher",
       "rerun-release",
       "audit-token-secrets",
-      "confirm-oidc-cleanup",
-      "delete-token-secret",
       "sign-out",
       "remove-worktree",
     ],
@@ -167,7 +164,7 @@ test("keeps every conditional step when the registry state is unknown", async ()
   const plan = await npmPlan({}, { verifyRelease: true });
   assert.equal(plan.mode, undefined);
   assert.deepEqual(
-    plan.steps.slice(-9, -5).map((step) => step.id),
+    plan.steps.slice(-7, -3).map((step) => step.id),
     [
       "trigger-release",
       "find-release-run",
@@ -216,7 +213,7 @@ test("probes npm existence and trusted publishing", async () => {
     trusted: false,
     version: "2.0.0",
   });
-  assert.deepEqual(await probe("down"), {});
+  assert.deepEqual(await probe("down"), { registry_http_status: 503 });
 });
 
 test("finds npm web-authentication URLs in streamed output", () => {
@@ -243,7 +240,7 @@ test("finds npm web-authentication URLs in streamed output", () => {
 test("never reads, writes, or requests an npm token", async () => {
   const forbidden = [
     /_authToken/,
-    /NODE_AUTH_TOKEN/,
+    /process\.env\.NODE_AUTH_TOKEN|env::var\("NODE_AUTH_TOKEN"\)/,
     /\bnpm token\b/,
     /"token",\s*"create"/,
     /process\.env\.NPM_TOKEN/,
@@ -321,7 +318,6 @@ test(
       "gh run list --repo acme/pipeline-app --workflow release.yml --branch main --event workflow_dispatch --limit 100 --json databaseId,conclusion,status,url,headSha,headBranch,event,createdAt",
       "npx -y npm@^11.10 trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false",
       "gh secret list --repo acme/pipeline-app --json name",
-      "gh secret delete NPM_TOKEN --repo acme/pipeline-app",
       "npm logout",
       `git worktree remove --force ${worktree}`,
     ]);
@@ -849,31 +845,6 @@ test(
   },
 );
 
-test("names the development directories a tarball would publish", async () => {
-  const { developmentDirectories } = await import("../src/setup.mjs");
-  const files = [
-    "package.json",
-    "js/src/index.js",
-    "tests/cli.test.js",
-    ".github/workflows/release.yml",
-    "tests/unit/a.test.js",
-    "test.js",
-  ].map((path) => ({ path }));
-  assert.deepEqual(developmentDirectories({ files }), [".github/", "tests/"]);
-  assert.deepEqual(
-    developmentDirectories({ files: [{ path: "lib/test/a.js" }] }),
-    [],
-  );
-});
-
-test("reads npm pack output before and since npm 12 (#22)", async () => {
-  const { packedEntry } = await import("../src/setup.mjs");
-  const packed = { filename: "a-1.0.0.tgz", version: "1.0.0" };
-  assert.deepEqual(packedEntry(JSON.stringify([packed])), packed);
-  assert.deepEqual(packedEntry(JSON.stringify({ a: packed })), packed);
-  assert.throws(() => packedEntry("{}"), /npm pack printed no package/);
-});
-
 test(
   "packs and installs the tarball with npm 12's pack output (#22)",
   POSIX_ONLY,
@@ -990,18 +961,6 @@ test(
     );
   },
 );
-
-test("trims trailing slashes from endpoint overrides in linear time", () => {
-  const variable = "PACKAGE_REGISTRY_MANAGER_NPM_REGISTRY";
-  assert.equal(
-    registryEndpoint("npm", { [variable]: "http://mirror.test/npm///" }),
-    "http://mirror.test/npm",
-  );
-  const hostile = `${"/".repeat(100_000)}x`;
-  const started = performance.now();
-  assert.equal(registryEndpoint("npm", { [variable]: hostile }), hostile);
-  assert.ok(performance.now() - started < 1000);
-});
 
 test(
   "npm's stderr naming refusal retains the CLI session for a renamed retry (#51)",

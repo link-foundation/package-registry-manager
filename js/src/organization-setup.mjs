@@ -144,8 +144,13 @@ export async function accountCommand(command, options, outputPlans) {
     if (errors.length) {
       console.error(renderScan({ repositories: errors, findings: [] }));
     }
-    if (options.migrate && errors.length) {
-      throw new Error("migration requires a complete account scan");
+    if (options.migrate) {
+      items = items.filter((item) => !item.error);
+      for (const item of errors) {
+        console.error(
+          `Skipping migration for ${item.repository}: ${item.error}`,
+        );
+      }
     }
     const packages = items.flatMap((item) => item.inspection.packages);
     const environment = await (options.probeEnvironment ?? probeEnvironment)({
@@ -246,9 +251,6 @@ export async function accountCommand(command, options, outputPlans) {
         throw new Error(
           "some repositories could not be prepared; see scan errors",
         );
-      }
-      if (options.migrate && scan.repositories.some((item) => item.error)) {
-        throw new Error("migration requires a complete account scan");
       }
     }
     const secretRepositories = {};

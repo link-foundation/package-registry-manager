@@ -42,10 +42,10 @@ export function openerSucceeded(file, code) {
  * Starts an opener through command-stream without a shell and settles once it
  * exits, or after `graceMs` while it keeps running in the background.
  */
-export function detachedRunner(graceMs = OPENER_GRACE_MS) {
+export function detachedRunner(graceMs = OPENER_GRACE_MS, spawnChild = spawn) {
   return (file, args) =>
     new Promise((resolve, reject) => {
-      const child = spawn(file, args, {
+      const child = spawnChild(file, args, {
         detached: process.platform !== "win32",
         stdio: "ignore",
         shell: false,

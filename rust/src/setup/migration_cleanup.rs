@@ -135,14 +135,6 @@ impl Session<'_> {
             }
         }
         let current = snapshot(root, &slug).await?;
-        for name in &names {
-            if reads(&current.files, name)? {
-                println!("{slug} still reads {name}; merge the conversion PR before cleanup.");
-                self.values
-                    .insert("migration_status".into(), "migration-required".into());
-                return Ok(());
-            }
-        }
         let workflow = self
             .plan
             .oidc_publisher
@@ -219,6 +211,30 @@ impl Session<'_> {
             self.values
                 .insert("migration_status".into(), "awaiting-oidc-release".into());
             return Ok(());
+        }
+        if !self.options.delete_token_secrets {
+            let retained = names
+                .iter()
+                .filter_map(|name| match reads(&current.files, name) {
+                    Ok(true) => Some(Ok(name.as_str())),
+                    Ok(false) => None,
+                    Err(error) => Some(Err(error)),
+                })
+                .collect::<Result<Vec<_>>>()?
+                .join(", ");
+            println!("{slug}: OIDC publication verified; token secrets ({retained}) and expiry metadata retained for fallback. Use --delete-token-secrets after removing every consumer.");
+            self.values.insert("fallback_secrets".into(), retained);
+            self.values
+                .insert("migration_status".into(), "fallback-retained".into());
+            return Ok(());
+        }
+        for name in &names {
+            if reads(&current.files, name)? {
+                println!("{slug} still reads {name}; merge the conversion PR before cleanup.");
+                self.values
+                    .insert("migration_status".into(), "migration-required".into());
+                return Ok(());
+            }
         }
         let mut deletions = Vec::new();
         for name in &names {

@@ -157,9 +157,9 @@ pub fn inspect_repository_recovering(
                 let scoped = crate::package_coverage::package_workflows(&workflows, &item);
                 let publisher = detect_publisher(&root, &scoped, item.registry);
                 let publishers = BTreeMap::from([(item.registry, publisher)]);
-                with_publisher(item, &workflows, &publishers)
+                with_publisher(&root, item, &workflows, &publishers)
             } else {
-                with_publisher(item, &workflows, &publishers)
+                with_publisher(&root, item, &workflows, &publishers)
             }
         })
         .collect::<Vec<_>>();
@@ -185,6 +185,7 @@ pub fn inspect_repository_recovering(
             format!(".github/workflows/{workflow}"),
         );
         packages.push(with_publisher(
+            &root,
             package,
             &workflows,
             &BTreeMap::from([(Registry::ChromeWebStore, chrome)]),
@@ -246,6 +247,7 @@ fn kept(
 }
 
 fn with_publisher(
+    root: &Path,
     mut item: Package,
     workflows: &[Workflow],
     publishers: &BTreeMap<Registry, Publisher>,
@@ -261,6 +263,19 @@ fn with_publisher(
     }
     let secrets = token_secrets(workflows, item.registry);
     item.warnings.extend(publisher.warnings.iter().cloned());
+    if matches!(
+        item.registry,
+        Registry::CratesIo | Registry::Npm | Registry::PyPi
+    ) && (publisher.workflow.is_some() || !publisher.candidates.is_empty())
+    {
+        let policy = crate::publishing_state::publishing_policy(root, workflows, item.registry);
+        if policy != "oidc-with-token-fallback" {
+            item.warnings.push(format!(
+                "publishing authentication is {policy}; migrate to OIDC with token fallback"
+            ));
+        }
+        item.publishing_policy = Some(policy);
+    }
     if publisher.workflow.is_none() && publisher.candidates.is_empty() {
         item.warnings.push(format!(
             "no workflow publishes {} to {}; CI releases will not reach it",
@@ -270,6 +285,7 @@ fn with_publisher(
     item.warnings.extend(
         secrets
             .iter()
+            .filter(|_| item.publishing_policy.as_deref() != Some("oidc-with-token-fallback"))
             .map(|secret| token_secret_warning(item.registry, secret)),
     );
     for secret in secrets {

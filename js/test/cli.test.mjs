@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -292,4 +299,32 @@ test("setup --all selects all publishable manifests and accepts a registry filte
     ]),
     /mutually exclusive/,
   );
+});
+
+test("setup --migrate selects every crate without --package (#60)", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "prm-multi-crate-"));
+  try {
+    for (const name of ["first-crate", "second-crate"]) {
+      await mkdir(path.join(directory, name));
+      await writeFile(
+        path.join(directory, name, "Cargo.toml"),
+        `[package]\nname = "${name}"\nversion = "1.0.0"\n`,
+      );
+    }
+    const { stdout } = await execute(process.execPath, [
+      cli,
+      "setup",
+      "--repository",
+      directory,
+      "--registry",
+      "crates-io",
+      "--migrate",
+      "--offline",
+    ]);
+    assert.match(stdout, /crates-io: first-crate/);
+    assert.match(stdout, /crates-io: second-crate/);
+    assert.match(stdout, /Dry run only/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

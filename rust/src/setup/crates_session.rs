@@ -87,6 +87,10 @@ impl Session<'_> {
                 "the crates.io API steps drive the automated browser; drop --no-browser, or pass --manual for the manual checklist"
             );
         }
+        if self.browser.is_none() {
+            self.browser_headless = self.options.browser_options.attach
+                != Some(crate::browser_options::AttachMode::Extension);
+        }
         let plan = self.plan;
         let crate_name = plan.package.name.as_str();
         let domains = sign_in_domains(plan.registry);
@@ -97,7 +101,11 @@ impl Session<'_> {
                     step,
                 };
                 host.goto(CRATES_IO_URL).await?;
-                if !read_session(&mut host).await?.signed_in {
+                let saved = read_session(&mut host).await?;
+                if !saved.signed_in || !saved.email_verified {
+                    self.visible_automated().await?;
+                }
+                if !saved.signed_in {
                     // Whether imported or signed in by hand, the sign-in is this run's.
                     self.conditions.insert("crates-signed-in");
                     self.offer_sign_in_import(domains).await?;
@@ -108,6 +116,7 @@ impl Session<'_> {
                     step,
                 };
                 sign_in(&mut host, interval, SIGN_IN_TIMEOUT).await?;
+                println!("Using your crates.io session to register trusted publishers; no action needed while API requests run.");
             }
             "first-publish" => {
                 let version = crate_version(&self.cwd(step));
@@ -176,16 +185,27 @@ impl Session<'_> {
             .ok_or_else(|| anyhow!("the automated browser is not connected"))
     }
 
+    pub(super) async fn visible_automated(&mut self) -> Result<&mut Automation> {
+        if self.browser_headless {
+            if let Some(previous) = self.browser.take() {
+                previous.close().await;
+            }
+            self.browser_headless = false;
+        }
+        self.automated().await
+    }
+
     async fn connect(&mut self, browser: &BrowserOptions) -> Result<()> {
         if let Some(previous) = self.browser.take() {
             previous.close().await;
         }
         self.browser = Some(
-            Automation::connect(
+            Automation::connect_with_visibility(
                 browser,
                 self.options.browser_profile,
                 self.options.verbose && !self.options.quiet_browser,
                 &self.domains,
+                self.browser_headless,
             )
             .await?,
         );

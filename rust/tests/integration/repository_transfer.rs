@@ -19,8 +19,11 @@ async fn crates_probes_latest_provenance_and_configured_publishers_independently
     let state = client.probe_package(&package).await;
     assert_eq!(state.trusted, Some(false));
     assert_eq!(state.provenance_repositories, [] as [String; 0]);
-    assert_eq!(
-        state.configured_publishers.unwrap()[0].repository,
-        "konard/disk-space-saviour"
-    );
+    assert_eq!(state.exists, Some(true));
+    assert!(state.configured_publishers.is_none());
+    assert!(state
+        .publisher_settings_reason
+        .unwrap()
+        .contains("authenticated"));
+    assert_eq!(registry.requests().len(), 1);
 }
