@@ -113,13 +113,13 @@ export function fallbackSteps(
 }
 
 function appendTitle(line, suffix) {
-  return line.replace(/(name:\s*)(.*)$/, (_, key, value) => {
-    const quote = value[0];
-    return (
-      key +
-      ((quote === "'" || quote === '"') && value.endsWith(quote)
-        ? `${value.slice(0, -1)} (${suffix})${quote}`
-        : `${value} (${suffix})`)
-    );
-  });
+  const value = line.slice(line.indexOf("name:") + "name:".length).trimStart();
+  const key = line.slice(0, line.length - value.length);
+  const quote = value[0];
+  return (
+    key +
+    ((quote === "'" || quote === '"') && value.endsWith(quote)
+      ? `${value.slice(0, -1)} (${suffix})${quote}`
+      : `${value} (${suffix})`)
+  );
 }

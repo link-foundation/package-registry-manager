@@ -28,6 +28,11 @@ fallback credentials; inline-token/preflight migration rejected supported
 workflows. Additional review regressions reproduced duplicate npm fallback
 steps, variable-gated OIDC being incorrectly reported as complete, and inert
 JavaScript template strings being mistaken for shell command substitutions.
+CodeQL also found polynomial matching in fallback step titles. The regression
+in `js/test/workflow-fallback.test.mjs` preserves a Unicode line separator that
+made the old expression fail. A finite 2,000–16,000-space probe with a 128 MiB
+Node heap and five-second CPU limit reproduced the slowdown; string slicing
+and trimming remove the backtracking.
 
 The inherited failing CI ran at `c0847d5` on 2026-10-23. The upstream dependency
 log identified stale browser-commander versions at lines 177 and 179. The
