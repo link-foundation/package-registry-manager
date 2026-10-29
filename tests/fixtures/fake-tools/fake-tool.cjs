@@ -154,6 +154,7 @@ if (tool === "npm") {
       console.error("npm error Invalid response from web login endpoint");
       process.exit(1);
     }
+    set("published", true);
   }
   if (args[0] === "pkg") console.log("{}");
   if (args[0] === "install") {

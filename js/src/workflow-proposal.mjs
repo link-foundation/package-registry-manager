@@ -8,11 +8,12 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { exec } from "command-stream";
+import { exec } from "./exec.mjs";
 import { packageDirectory } from "./plan.mjs";
 import { parseWorkflow, registryTokenSecrets } from "./publishers.mjs";
 import { versionGuard } from "./version-guard.mjs";
 import { readWorkflows } from "./workflows.mjs";
+import { nugetWorkflowSteps } from "./nuget-workflow.mjs";
 import { fallbackSteps } from "./workflow-fallback.mjs";
 import {
   CRATES_AUTH_ACTION,
@@ -90,6 +91,9 @@ function job(packageInfo, index, environment, producer) {
         "          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}",
       );
       break;
+    case "nuget":
+      lines.push(...nugetWorkflowSteps(packageInfo));
+      break;
     case "pypi":
       lines.push("      - uses: actions/setup-python@v6", "        with:");
       lines.push(
@@ -141,7 +145,7 @@ export function workflowProposal(
         .filter(
           (item) =>
             item.publishable !== false &&
-            ["npm", "crates-io", "pypi"].includes(item.registry),
+            ["npm", "crates-io", "pypi", "nuget"].includes(item.registry),
         )
         .map((item) => item.workflow)
         .filter(Boolean),

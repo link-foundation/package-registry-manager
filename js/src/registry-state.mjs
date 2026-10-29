@@ -1,3 +1,8 @@
+import {
+  distributionState,
+  normalizedNugetVersion,
+  versionEvidence,
+} from "./publication-state.mjs";
 import { cratesPermit, delay, retryDelay } from "./request-policy.mjs";
 import {
   compareRepositories,
@@ -14,6 +19,18 @@ export const USER_AGENT =
   "package-registry-manager (+https://github.com/link-foundation/package-registry-manager)";
 
 const ENDPOINTS = {
+  "maven-central": [
+    "PACKAGE_REGISTRY_MANAGER_MAVEN_API",
+    "https://repo.maven.apache.org/maven2",
+  ],
+  "go-modules": [
+    "PACKAGE_REGISTRY_MANAGER_GO_PROXY",
+    "https://proxy.golang.org",
+  ],
+  packagist: [
+    "PACKAGE_REGISTRY_MANAGER_PACKAGIST_API",
+    "https://repo.packagist.org",
+  ],
   npm: ["PACKAGE_REGISTRY_MANAGER_NPM_REGISTRY", "https://registry.npmjs.org"],
   "crates-io": [
     "PACKAGE_REGISTRY_MANAGER_CRATES_IO_API",
@@ -58,6 +75,12 @@ export function registryStateUrl(packageInfo, env = process.env) {
   }
   const base = registryEndpoint(registry, env);
   switch (registry) {
+    case "maven-central":
+      return `${base}/${name.replaceAll(".", "/").replace(":", "/")}/maven-metadata.xml`;
+    case "go-modules":
+      return `${base}/${name.replace(/[A-Z]/g, (c) => `!${c.toLowerCase()}`)}/@v/list`;
+    case "packagist":
+      return `${base}/p2/${name.split("/").map(encodeURIComponent).join("/")}.json`;
     case "npm":
       return `${base}/${npmName(name)}/latest`;
     case "crates-io":
@@ -121,6 +144,15 @@ export async function probeRegistryState(inspection, options = {}) {
         }
         for (const key of [
           "registry_http_status",
+          "latest_version",
+          "manifest_version_exists",
+          "version_evidence_url",
+          "registry_evidence_url",
+          "version_state",
+          "registry_state_reason",
+          "tagged_release_exists",
+          "registry_owners",
+          "registry_repository",
           "publisher_settings_reason",
         ]) {
           if (state[key] !== undefined) {
@@ -191,10 +223,20 @@ export async function probePackage(packageInfo, options = {}) {
   const env = options.env ?? process.env;
   const url = registryStateUrl(packageInfo, env);
   if (!url) {
-    return {};
+    return {
+      registry_state_reason:
+        "public registry lookup is unsupported; publication is unverified",
+    };
+  }
+  if (["maven-central", "go-modules"].includes(packageInfo.registry)) {
+    return distributionState(
+      packageInfo,
+      options,
+      registryEndpoint(packageInfo.registry, env),
+    );
   }
   let httpStatus;
-  const document = await getJson(url, {
+  let document = await getJson(url, {
     ...options,
     onError: (error) => {
       httpStatus = error.http_status;
@@ -204,10 +246,68 @@ export async function probePackage(packageInfo, options = {}) {
   if (document === undefined) {
     return httpStatus ? { registry_http_status: httpStatus } : {};
   }
+  let latestMissing = false;
+  if (
+    document === null &&
+    packageInfo.registry === "npm" &&
+    packageInfo.version
+  ) {
+    const exactUrl = `${url.slice(0, -"latest".length)}${encodeURIComponent(packageInfo.version)}`;
+    document = await getJson(exactUrl, options);
+    latestMissing = true;
+    if (document && document.version !== packageInfo.version) {
+      return {
+        registry_state_reason: "invalid exact npm metadata",
+        registry_evidence_url: exactUrl,
+      };
+    }
+  }
+  if (document === undefined) {
+    return {
+      registry_state_reason:
+        "exact-version lookup failed; name presence is unknown",
+    };
+  }
   if (document === null) {
     return packageInfo.registry === "docker-hub"
       ? { exists: false }
       : { exists: false, trusted: false };
+  }
+  if (
+    packageInfo.registry === "packagist" &&
+    (!Array.isArray(document.packages?.[packageInfo.name]) ||
+      document.packages[packageInfo.name].some(
+        (v) => typeof v.version !== "string",
+      ))
+  ) {
+    return {
+      registry_state_reason: "invalid Packagist metadata",
+      registry_evidence_url: url,
+    };
+  }
+  if (
+    packageInfo.registry === "nuget" &&
+    (!Array.isArray(document.versions) ||
+      document.versions.some(
+        (version) =>
+          typeof version !== "string" ||
+          normalizedNugetVersion(version) === undefined,
+      ))
+  ) {
+    return {
+      registry_state_reason: "invalid NuGet metadata",
+      registry_evidence_url: url,
+    };
+  }
+  const audit = await versionEvidence(
+    packageInfo,
+    document,
+    url,
+    options,
+    getJson,
+  );
+  if (latestMissing) {
+    delete audit.latest_version;
   }
   switch (packageInfo.registry) {
     case "npm": {
@@ -217,6 +317,7 @@ export async function probePackage(packageInfo, options = {}) {
         : undefined;
       const sources = provenanceRepositories(provenance);
       return {
+        ...audit,
         exists: true,
         trusted: Boolean(document._npmUser?.trustedPublisher),
         version: document.version,
@@ -237,6 +338,7 @@ export async function probePackage(packageInfo, options = {}) {
       return {
         publisher_settings_reason:
           "publisher settings require an authenticated crates.io session; public provenance is independent",
+        ...audit,
         exists: true,
         trusted: Boolean(latest?.trustpub_data),
         provenance_repositories: publisherIdentities(latest?.trustpub_data).map(
@@ -250,13 +352,26 @@ export async function probePackage(packageInfo, options = {}) {
     case "pypi": {
       const provenance = await pypiProvenance(document, options);
       return {
+        ...audit,
         exists: true,
         trusted: Boolean(provenance),
         provenance_repositories: provenanceRepositories(provenance),
       };
     }
+    case "nuget":
+      return { ...audit, exists: document.versions.length > 0 };
+    case "packagist": {
+      const versions = document.packages?.[packageInfo.name];
+      if (!Array.isArray(versions)) {
+        return {
+          registry_state_reason: "invalid Packagist metadata",
+          registry_evidence_url: url,
+        };
+      }
+      return { ...audit, exists: versions.length > 0 };
+    }
     default:
-      return { exists: true };
+      return { ...audit, exists: true };
   }
 }
 

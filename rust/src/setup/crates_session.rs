@@ -195,14 +195,16 @@ impl Session<'_> {
         self.automated().await
     }
 
-    async fn connect(&mut self, browser: &BrowserOptions) -> Result<()> {
+    pub(super) async fn connect(&mut self, browser: &BrowserOptions) -> Result<()> {
         if let Some(previous) = self.browser.take() {
             previous.close().await;
         }
         self.browser = Some(
             Automation::connect_with_visibility(
                 browser,
-                self.options.browser_profile,
+                self.imported_profiles
+                    .last()
+                    .map_or(self.options.browser_profile, tempfile::TempDir::path),
                 self.options.verbose && !self.options.quiet_browser,
                 &self.domains,
                 self.browser_headless,
@@ -230,7 +232,7 @@ impl Session<'_> {
         };
         let mut resolved = browser.clone();
         resolved.import = None;
-        if self.plan.registry == Registry::CratesIo {
+        if matches!(self.plan.registry, Registry::CratesIo | Registry::NuGet) {
             return Ok(resolved);
         }
         let domains = self.domains.clone();

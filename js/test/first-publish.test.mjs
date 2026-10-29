@@ -265,6 +265,6 @@ test("no saved-login diagnostic names browsers before the form opens (#52)", asy
   );
   assert.match(
     warnings.join("\n"),
-    /No usable saved password.*pypi.org.*Chrome.*Safari/,
+    /Saved-login export did not produce a usable credential.*pypi.org.*Chrome.*Safari/,
   );
 });

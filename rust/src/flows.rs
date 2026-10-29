@@ -261,6 +261,11 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
         .command("npm", &["whoami"]),
     ];
     steps.extend(worktree_steps());
+    let generated = package.audit.contains_key("generated_alias")
+        || package.audit.contains_key("generated_artifact");
+    if generated {
+        steps.push(step("prepare-generated-artifact", "Generate selected npm artifact", StepKind::Check, "Run the declared generator and validate the actual selected name and version before packing.").when("package-missing"));
+    }
     steps.extend([
         step(
             "pack",
@@ -273,7 +278,7 @@ pub fn npm_flow(package: &Package, context: &FlowContext<'_>) -> Vec<SetupStep> 
             &["pack", "--ignore-scripts", "--json", "--pack-destination", "{pack_destination}"],
         )
         .when("package-missing")
-        .cwd(package_cwd.clone()),
+        .cwd(if generated { "{generated_package}".to_owned() } else { package_cwd.clone() }),
         step(
             "test-install",
             "Install the packed tarball",

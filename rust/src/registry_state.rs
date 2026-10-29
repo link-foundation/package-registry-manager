@@ -18,6 +18,18 @@ const USER_AGENT: &str =
 
 const fn endpoint_default(registry: Registry) -> Option<(&'static str, &'static str)> {
     match registry {
+        Registry::MavenCentral => Some((
+            "PACKAGE_REGISTRY_MANAGER_MAVEN_API",
+            "https://repo.maven.apache.org/maven2",
+        )),
+        Registry::GoModules => Some((
+            "PACKAGE_REGISTRY_MANAGER_GO_PROXY",
+            "https://proxy.golang.org",
+        )),
+        Registry::Packagist => Some((
+            "PACKAGE_REGISTRY_MANAGER_PACKAGIST_API",
+            "https://repo.packagist.org",
+        )),
         Registry::Npm => Some((
             "PACKAGE_REGISTRY_MANAGER_NPM_REGISTRY",
             "https://registry.npmjs.org",
@@ -93,6 +105,12 @@ impl Endpoints {
         let base = self.base(package.registry)?;
         let name = &package.name;
         Some(match package.registry {
+            Registry::MavenCentral => format!(
+                "{base}/{}/maven-metadata.xml",
+                name.replace(['.', ':'], "/")
+            ),
+            Registry::GoModules => format!("{base}/{name}/@v/list"),
+            Registry::Packagist => format!("{base}/p2/{name}.json"),
             Registry::Npm => format!("{base}/{}/latest", npm_name(name)),
             Registry::CratesIo => format!("{base}/crates/{}", encode_uri_component(name)),
             Registry::PyPi => format!("{base}/pypi/{}/json", encode_uri_component(name)),
@@ -167,6 +185,8 @@ pub enum Lookup {
 /// Registry state of one package; `None` means unknown.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PackageState {
+    /// Version evidence independent of public name presence.
+    pub audit: BTreeMap<String, Value>,
     /// HTTP status when existence could not be determined.
     pub registry_http_status: Option<u16>,
     /// Why owner-only publisher settings were not checked.
@@ -186,7 +206,7 @@ pub struct PackageState {
 /// HTTP client for registry lookups.
 #[derive(Debug, Clone)]
 pub struct RegistryClient {
-    client: reqwest::Client,
+    pub(crate) client: reqwest::Client,
     endpoints: Endpoints,
     verbose: bool,
 }
@@ -355,10 +375,40 @@ impl RegistryClient {
 
     /// Probe one package; unknown fields stay `None`.
     pub async fn probe_package(&self, package: &Package) -> PackageState {
+        if matches!(
+            package.registry,
+            Registry::MavenCentral | Registry::GoModules
+        ) {
+            return self.distribution_state(package).await;
+        }
         let Some(url) = self.endpoints.state_url(package) else {
-            return PackageState::default();
+            return PackageState {
+                audit: BTreeMap::from([(
+                    "registry_state_reason".into(),
+                    json!("public registry lookup is unsupported; publication is unverified"),
+                )]),
+                ..PackageState::default()
+            };
         };
-        let (lookup, registry_http_status) = self.get_json_status(&url).await;
+        let (mut lookup, registry_http_status) = self.get_json_status(&url).await;
+        let mut latest_missing = false;
+        if matches!(lookup, Lookup::Missing) && package.registry == Registry::Npm {
+            if let Some(version) = &package.version {
+                lookup = self
+                    .get_json(&format!(
+                        "{}{}",
+                        url.trim_end_matches("latest"),
+                        encode_uri_component(version)
+                    ))
+                    .await;
+                latest_missing = true;
+                if let Lookup::Found(document) = &lookup {
+                    if document["version"].as_str() != Some(version.as_str()) {
+                        lookup = Lookup::Unknown;
+                    }
+                }
+            }
+        }
         let document = match lookup {
             Lookup::Unknown => {
                 return PackageState {
@@ -376,7 +426,60 @@ impl RegistryClient {
             }
             Lookup::Found(document) => document,
         };
-        match package.registry {
+        if package.registry == Registry::Packagist
+            && document["packages"][&package.name]
+                .as_array()
+                .is_none_or(|versions| {
+                    versions
+                        .iter()
+                        .any(|version| !version["version"].is_string())
+                })
+        {
+            return PackageState {
+                audit: BTreeMap::from([
+                    (
+                        "registry_state_reason".into(),
+                        json!("invalid Packagist metadata"),
+                    ),
+                    ("registry_evidence_url".into(), json!(url)),
+                ]),
+                ..PackageState::default()
+            };
+        }
+        if package.registry == Registry::NuGet
+            && document["versions"].as_array().is_none_or(|versions| {
+                versions.iter().any(|version| {
+                    version
+                        .as_str()
+                        .and_then(crate::publication_state::normalized_nuget_version)
+                        .is_none()
+                })
+            })
+        {
+            return PackageState {
+                audit: BTreeMap::from([
+                    (
+                        "registry_state_reason".into(),
+                        json!("invalid NuGet metadata"),
+                    ),
+                    ("registry_evidence_url".into(), json!(url)),
+                ]),
+                ..PackageState::default()
+            };
+        }
+        let mut state = match package.registry {
+            Registry::NuGet => PackageState {
+                exists: document["versions"]
+                    .as_array()
+                    .map(|versions| !versions.is_empty()),
+                ..PackageState::default()
+            },
+            Registry::Packagist => PackageState {
+                exists: document["packages"][&package.name]
+                    .as_array()
+                    .map(|versions| !versions.is_empty()),
+                ..PackageState::default()
+            },
             Registry::Npm => PackageState {
                 exists: Some(true),
                 trusted: Some(npm_trusted(&document)),
@@ -426,7 +529,12 @@ impl RegistryClient {
                 exists: Some(true),
                 ..PackageState::default()
             },
+        };
+        state.audit = crate::publication_state::evidence(self, package, &document, &url).await;
+        if latest_missing {
+            state.audit.remove("latest_version");
         }
+        state
     }
 
     async fn pypi_provenance(&self, document: &Value) -> Value {
@@ -484,6 +592,7 @@ impl RegistryClient {
                 continue;
             };
             let package = &mut probed.packages[index];
+            package.audit.extend(state.audit);
             package.registry_http_status = state.registry_http_status;
             package.publisher_settings_reason = state.publisher_settings_reason;
             if state.exists.is_some() {

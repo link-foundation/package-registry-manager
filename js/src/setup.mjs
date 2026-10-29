@@ -1,10 +1,23 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+  recordPack,
+  reportPackWarnings,
+  binEntries,
+  readManifest,
+} from "./pack-review.mjs";
+export {
+  packedEntry,
+  packWarnings,
+  developmentDirectories,
+} from "./pack-review.mjs";
+import { prepareGeneratedArtifact } from "./generated-artifact.mjs";
+import { bootstrapNames, recoverBootstrap } from "./bootstrap-recovery.mjs";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout, stderr } from "node:process";
 
-import { exec } from "command-stream";
+import { exec } from "./exec.mjs";
 
 import {
   ANSI,
@@ -81,6 +94,17 @@ export class SetupSession {
     for (const step of this.plan.steps) {
       if (CLEANUP_CONDITIONS.has(step.when)) {
         // cleanup() runs these, even after a failed step.
+      } else if (
+        this.recoveryQueued &&
+        [
+          "trigger-release",
+          "find-release-run",
+          "watch-release",
+          "wait-for-release",
+        ].includes(step.id)
+      ) {
+        this.pendingReleaseSteps ??= [];
+        this.pendingReleaseSteps.push(step);
       } else if (!step.when || this.conditions.has(step.when)) {
         this.log(`==> ${step.title}`);
         await this.runStep(step);
@@ -136,7 +160,11 @@ export class SetupSession {
     if (this.automation && closeBrowser) {
       await this.automation.close();
     }
-    for (const directory of [this.temporary, this.shim?.directory]) {
+    for (const directory of [
+      this.temporary,
+      this.shim?.directory,
+      ...(closeBrowser ? (this.importProfiles ?? []) : []),
+    ]) {
       if (directory) {
         await rm(directory, { recursive: true, force: true });
       }
@@ -156,6 +184,23 @@ export class SetupSession {
   }
 
   async runStep(step) {
+    if (step.id === "audit-distribution-channel") {
+      const { auditDistributionChannel } =
+        await import("./distribution-channel.mjs");
+      return auditDistributionChannel(this);
+    }
+    if (step.id === "verify-nuget-release") {
+      if (this.options.nugetQueue) {
+        this.options.nugetQueue.push(this);
+        return;
+      }
+      const { verifyNugetRelease } = await import("./nuget-ci.mjs");
+      return verifyNugetRelease(this);
+    }
+    if (step.id === "configure-nuget-policy") {
+      const { configureNuget } = await import("./nuget-setup.mjs");
+      return configureNuget(this);
+    }
     if (step.id === "rotate-crates-token") {
       return rotateCratesToken(this);
     }
@@ -175,6 +220,9 @@ export class SetupSession {
     }
     switch (step.kind) {
       case "check":
+        if (step.id === "prepare-generated-artifact") {
+          return prepareGeneratedArtifact(this);
+        }
         if (step.id === "build-package" && this.plan.registry === "pypi") {
           return buildPythonDistribution(
             step.command.program,
@@ -296,6 +344,12 @@ export class SetupSession {
       case "read-release-failure":
         if (result.code !== 0) {
           console.error("warning: could not read the failed release log");
+        } else if (bootstrapNames(output).length) {
+          this.bootstrapNames = bootstrapNames(output);
+          this.conditions.add("release-failed-publish");
+          console.log(
+            `  Bootstrap preflight requires ${this.bootstrapNames.join(", ")}; fresh existence and publisher checks are required before retry.`,
+          );
         } else if (PUBLISH_REJECTED.test(output)) {
           console.log(
             "  It failed at publish: the registry rejected the workflow's trusted publishing identity (OIDC/E404/invalid-publisher). After attaching trust, its failed jobs can be re-run.",
@@ -512,6 +566,14 @@ export class SetupSession {
       this.values.pack_destination = this.temporary;
     }
     if (step.id === "rerun-release" && this.releaseSelection?.run) {
+      if (this.bootstrapNames?.length) {
+        if (this.options.recoveryQueue) {
+          this.recoveryQueued = true;
+          this.options.recoveryQueue.push({ session: this, step });
+          return;
+        }
+        return recoverBootstrap(this);
+      }
       console.log(
         `  Re-running failed release jobs: ${this.releaseSelection.run.url}`,
       );
@@ -564,6 +626,9 @@ export class SetupSession {
         `${step.command.program} exited with status ${result.code}`,
       );
     }
+    if (step.id === "first-publish") {
+      this.recordRecoveryChange();
+    }
     if (step.id === "attach-trusted-publisher") {
       this.confirmTrustCreated(result.stdout);
     } else if (step.id === "sign-in") {
@@ -584,41 +649,27 @@ export class SetupSession {
    * npm prints the stored configuration once `npm trust github` succeeds, so
    * that answer verifies it without a second 2FA-gated `npm trust list`.
    */
+  recordRecoveryChange() {
+    const publisher = this.plan.trusted_publisher;
+    if (!publisher || !this.options.recoveryChanges) {
+      return;
+    }
+    const key = `${publisher.organization}/${publisher.repository}:${publisher.workflow}`;
+    const changes = this.options.recoveryChanges.get(key) ?? [];
+    changes.push(this.plan.package.name);
+    this.options.recoveryChanges.set(key, changes);
+  }
+
   confirmTrustCreated(output) {
     if (TRUST_CREATED.test(stripAnsi(output))) {
+      this.recordRecoveryChange();
       console.log("  npm stored the trusted publisher.");
       this.conditions.delete("trust-missing");
     }
   }
 
   recordPack(output) {
-    const packed = packedEntry(output);
-    if (
-      packed.name !== this.plan.package.name ||
-      (this.plan.package.version &&
-        packed.version !== this.plan.package.version)
-    ) {
-      throw new Error(
-        "bootstrap ref package identity/version differs from inspection; inspect the selected ref again before publication",
-      );
-    }
-    for (const file of packed.files ?? []) {
-      console.log(`  ${String(file.size).padStart(8)}  ${file.path}`);
-    }
-    console.log(
-      `  ${packed.filename}: ${packed.size} bytes packed, ${packed.unpackedSize} bytes unpacked, ${packed.entryCount} files`,
-    );
-    const development = developmentDirectories(packed);
-    if (development.length > 0) {
-      throw new Error(
-        `the package would publish repository development files (${development.join(", ")}); add a "files" allowlist to package.json, commit it to the published ref, and re-run. Nothing was published.`,
-      );
-    }
-    this.values.tarball = path.join(
-      this.values.pack_destination,
-      packed.filename,
-    );
-    this.values.version = packed.version;
+    recordPack(this, output);
   }
 
   async wait(step) {
@@ -714,7 +765,7 @@ export class SetupSession {
         this.options.connectAutomation ?? connectAutomation
       )({
         browser: await launchBrowser(browser, domains, {
-          deferred: this.plan.registry === "crates-io",
+          deferred: ["crates-io", "nuget"].includes(this.plan.registry),
           verbose: quiet ? false : this.options.verbose,
           ...this.options.importDiscovery,
         }),
@@ -873,95 +924,6 @@ export function listsTrustedPublisher(output) {
 
 function stripAnsi(text) {
   return String(text ?? "").replaceAll(ANSI, "");
-}
-
-/**
- * npm's warnings from `npm pack`, such as fields it auto-corrected or removed
- * from the packed package.json, without npm's advice to run its fixer, which
- * rewrites package.json in place.
- */
-export function packWarnings(stderr) {
-  return String(stderr ?? "")
-    .split(/\r?\n/)
-    .map((line) => line.replaceAll(ANSI, "").trim())
-    .filter((line) => /^npm warn/i.test(line))
-    .map((line) =>
-      line.replace(/\s*Please run "npm pkg fix"[^.]*\.?/i, "").trim(),
-    )
-    .filter((line) => !/npm pkg fix/i.test(line));
-}
-
-/**
- * The first package in `npm pack --json` output: an array before npm 12, an
- * object keyed by package name since.
- */
-export function packedEntry(output) {
-  const parsed = JSON.parse(output);
-  const [packed] = Array.isArray(parsed) ? parsed : Object.values(parsed ?? {});
-  if (!packed) {
-    throw new Error("npm pack printed no package");
-  }
-  return packed;
-}
-
-/**
- * Top-level repository directories of development files: CI, tests, and
- * editor and build state, which belong in no published package.
- */
-const DEVELOPMENT_DIRECTORIES = new Set([
-  ".changeset",
-  ".github",
-  ".husky",
-  ".idea",
-  ".vscode",
-  "__tests__",
-  "coverage",
-  "experiments",
-  "target",
-  "test",
-  "tests",
-]);
-
-/**
- * The development directories a packed tarball contains, as `name/`, which
- * a package.json without a `files` allowlist lets in.
- */
-export function developmentDirectories(packed) {
-  const found = new Set();
-  for (const file of packed.files ?? []) {
-    const [top, ...rest] = String(file.path).split("/");
-    if (rest.length > 0 && DEVELOPMENT_DIRECTORIES.has(top)) {
-      found.add(`${top}/`);
-    }
-  }
-  return [...found].sort();
-}
-
-function reportPackWarnings(stderr) {
-  const warnings = packWarnings(stderr);
-  if (warnings.length === 0) {
-    return;
-  }
-  console.log("  npm warned while packing:");
-  for (const line of warnings) {
-    console.log(`    ${line}`);
-  }
-  if (warnings.some((line) => /corrected|invalid and removed/i.test(line))) {
-    console.log(
-      "  npm changed the packed package.json; correct these fields in package.json itself.",
-    );
-  }
-}
-
-function binEntries(manifest) {
-  if (typeof manifest.bin === "string") {
-    return { [String(manifest.name).replace(/^@[^/]+\//, "")]: manifest.bin };
-  }
-  return manifest.bin && typeof manifest.bin === "object" ? manifest.bin : {};
-}
-
-async function readManifest(file) {
-  return JSON.parse(await readFile(file, "utf8"));
 }
 
 function isTrustedRelease(document, values) {

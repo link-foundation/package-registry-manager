@@ -16,7 +16,28 @@ export const CRATES_TOKENS_URL = "https://crates.io/settings/tokens";
  * registry tokens trusted publishing makes unnecessary, one confirmation each.
  */
 export function tokenSecretSteps(packageInfo, slug) {
-  const names = registryTokenSecrets(packageInfo.registry);
+  const names = [
+    ...new Set([
+      ...registryTokenSecrets(packageInfo.registry),
+      ...(packageInfo.token_secrets ?? []),
+    ]),
+  ];
+  if (packageInfo.registry === "nuget") {
+    return [
+      {
+        id: "audit-token-secrets",
+        title: "Retain NuGet authentication fallbacks",
+        kind: "check",
+        description:
+          "Retain designated repository and organization fallback secrets, including custom names, after OIDC success. Cleanup requires a separate complete consumer audit and explicit decision.",
+        command: {
+          program: "gh",
+          args: ["secret", "list", "--repo", slug, "--json", "name"],
+        },
+        cwd: ".",
+      },
+    ];
+  }
   return [
     {
       id: "audit-token-secrets",
@@ -63,10 +84,17 @@ export function auditRegistryTokens(output, packageInfo) {
   const listed = new Set(
     JSON.parse(String(output || "[]")).map((item) => item.name),
   );
-  const present = registryTokenSecrets(packageInfo.registry).filter((name) =>
-    listed.has(name),
+  const present = [
+    ...new Set([
+      ...registryTokenSecrets(packageInfo.registry),
+      ...(packageInfo.token_secrets ?? []),
+    ]),
+  ].filter((name) => listed.has(name));
+  const read = new Set(
+    packageInfo.registry === "nuget"
+      ? present
+      : (packageInfo.token_secrets ?? []),
   );
-  const read = new Set(packageInfo.token_secrets ?? []);
   return {
     inUse: present.filter((name) => read.has(name)),
     leftover: present.filter((name) => !read.has(name)),

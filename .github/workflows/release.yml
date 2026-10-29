@@ -692,6 +692,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-test-
 
+      # Headed tests share window focus; concurrent sessions change the
+      # visibility state measured by the browser parity comparison.
       - name: Smoke-test the Rust launch
         shell: bash
         env:
@@ -699,7 +701,7 @@ jobs:
         run: >-
           bash scripts/run-with-budget-warning.sh "$RUST_SMOKE_BUDGET_SECONDS" "Rust browser smoke test"
           xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration
-          browser_ -- --nocapture
+          browser_ -- --nocapture --test-threads=1
 
   # === RELEASE SCRIPT TESTS ===
   # `cargo test` only builds the library crate, so the inline `#[cfg(test)]`

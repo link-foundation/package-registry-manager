@@ -1,3 +1,6 @@
+import { auditConfig, applyAuditConfig } from "./audit-config.mjs";
+import { cppDistribution } from "./cpp-distribution.mjs";
+import { markIdentityConflicts } from "./identity-conflicts.mjs";
 import { readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 
@@ -32,6 +35,9 @@ const IGNORED_DIRECTORIES = new Set([
 ]);
 
 const MANIFEST_NAMES = new Set([
+  "CMakeLists.txt",
+  "conanfile.py",
+  "vcpkg.json",
   "package.json",
   "Cargo.toml",
   "pyproject.toml",
@@ -63,6 +69,7 @@ export async function inspectRepository(repository, options = {}) {
   );
   const workflows = await readWorkflows(root);
   const ignore = await readIgnoreList(root);
+  const config = await auditConfig(root);
   const skipped = [];
   const skip = (manifest, reason) => {
     skipped.push({ manifest, reason });
@@ -77,7 +84,10 @@ export async function inspectRepository(repository, options = {}) {
     const directory = testDirectory(manifest);
     return (
       directory === null ||
-      (!["docs", "experiments", "case-studies"].includes(directory) &&
+      config.publish?.includes(manifest) ||
+      (!["docs", "experiments", "case-studies", "dev/log"].includes(
+        directory,
+      ) &&
         publishable &&
         referencedByWorkflow(workflows, manifest)) ||
       skip(manifest, testDirectoryReason(directory))
@@ -89,7 +99,7 @@ export async function inspectRepository(repository, options = {}) {
       .filter(([, manifest]) => !ignored(manifest))
       .map(async ([manifestPath, manifest]) => {
         try {
-          return await parseManifest(manifestPath, manifest);
+          return await parseManifest(manifestPath, manifest, root);
         } catch (error) {
           if (testDirectory(manifest) === null) {
             if (!options.onError) {
@@ -106,6 +116,7 @@ export async function inspectRepository(repository, options = {}) {
         }
       }),
   );
+  applyAuditConfig(parsed, config, workflows);
   const coordinates = await githubCoordinates(
     root,
     preferredManifests.filter((manifest) => {
@@ -117,6 +128,56 @@ export async function inspectRepository(repository, options = {}) {
   for (const registry of TRUSTED_REGISTRIES) {
     publishers.set(registry, await detectPublisher(root, workflows, registry));
   }
+  // Generated names share source metadata, but are independent registry identities.
+  for (const item of [...parsed].filter(Boolean)) {
+    if (item.registry !== "npm") {
+      continue;
+    }
+    const data = JSON.parse(await readManifest(path.join(root, item.manifest)));
+    const aliases = data.publishAliases ?? [];
+    if (
+      !Array.isArray(aliases) ||
+      aliases.some(
+        (name) =>
+          typeof name !== "string" ||
+          !/^(?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*$/.test(name),
+      ) ||
+      new Set([item.name, ...aliases]).size !== aliases.length + 1
+    ) {
+      throw new Error(
+        `${item.manifest}: publishAliases must contain distinct valid npm names`,
+      );
+    }
+    const generator =
+      Object.values(data.scripts ?? {}).flatMap((command) =>
+        [
+          ...String(command).matchAll(
+            /(?:^|\s)(?:node|bun)\s+(?:\.\/)?([^\s]+prepare[^\s]*\.mjs)/g,
+          ),
+        ].map((match) => match[1]),
+      )[0] ?? null;
+    if (aliases.length) {
+      item.generated_artifact = {
+        source_manifest: item.manifest,
+        source_name: item.name,
+        generator,
+        names: [item.name, ...aliases],
+      };
+    }
+    for (const name of aliases) {
+      parsed.push({
+        ...item,
+        name,
+        generated_alias: {
+          source_manifest: item.manifest,
+          source_name: item.name,
+          generator,
+          names: [item.name, ...aliases],
+        },
+      });
+    }
+  }
+  applyAuditConfig(parsed, config, workflows);
   // Extension packages can publish to both marketplaces independently.
   for (const item of [...parsed].filter(Boolean)) {
     if (item.registry !== "npm") {
@@ -169,7 +230,11 @@ export async function inspectRepository(repository, options = {}) {
     await Promise.all(
       parsed
         .filter(Boolean)
-        .filter((item) => kept(item.manifest, item.publishable))
+        .filter((item) =>
+          item.discovery_skip
+            ? skip(item.manifest, item.discovery_skip)
+            : kept(item.manifest, item.publishable),
+        )
         .map(async (item) => {
           const scoped =
             counts.get(item.registry) > 1 &&
@@ -223,6 +288,7 @@ export async function inspectRepository(repository, options = {}) {
       left.manifest.localeCompare(right.manifest),
     );
   }
+  markIdentityConflicts([inspection]);
   return inspectManifestRepositories(inspection);
 }
 
@@ -301,10 +367,14 @@ async function collectManifests(directory, manifests, dockerfiles) {
   }
 }
 
-async function parseManifest(manifestPath, manifest) {
+async function parseManifest(manifestPath, manifest, root) {
   const contents = await readManifest(manifestPath);
   const filename = path.basename(manifestPath);
   switch (filename) {
+    case "CMakeLists.txt":
+    case "conanfile.py":
+    case "vcpkg.json":
+      return cppDistribution(contents, filename, manifest, manifestPath);
     case "jsr.json":
     case "deno.json": {
       const value = JSON.parse(contents);
@@ -315,7 +385,10 @@ async function parseManifest(manifestPath, manifest) {
     case "package.json":
       return parseNpm(contents, manifest);
     case "Cargo.toml":
-      return parseCargo(contents, manifest);
+      return parseCargo(
+        await cargoContents(contents, manifestPath, root),
+        manifest,
+      );
     case "pyproject.toml":
       return parsePyproject(contents, manifest);
     case "setup.py":
@@ -373,6 +446,48 @@ function parseNpm(contents, manifest) {
   );
 }
 
+async function cargoContents(contents, manifestPath, root) {
+  if (
+    !/version\s*\.\s*workspace\s*=\s*true|version\s*=\s*\{\s*workspace\s*=\s*true/.test(
+      contents,
+    )
+  ) {
+    return contents;
+  }
+  const section = tomlSection(contents, "package") ?? "";
+  const explicit = tomlString(section, "workspace");
+  let directory = explicit
+    ? path.resolve(path.dirname(manifestPath), explicit)
+    : path.dirname(manifestPath);
+  while (directory === root || directory.startsWith(`${root}${path.sep}`)) {
+    let workspace;
+    try {
+      workspace = await readManifest(path.join(directory, "Cargo.toml"));
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+    if (workspace && tomlSection(workspace, "workspace") !== null) {
+      const version = tomlString(
+        tomlSection(workspace, "workspace.package") ?? "",
+        "version",
+      );
+      return version
+        ? contents.replace(
+            /version\s*\.\s*workspace\s*=\s*true|version\s*=\s*\{\s*workspace\s*=\s*true\s*\}/,
+            `version = "${version}"`,
+          )
+        : contents;
+    }
+    if (explicit || directory === root) {
+      break;
+    }
+    directory = path.dirname(directory);
+  }
+  return contents;
+}
+
 function parseCargo(contents, manifest) {
   const section = tomlSection(contents, "package");
   if (!section) {
@@ -414,6 +529,13 @@ function parsePyproject(contents, manifest) {
 }
 
 function parseDotnet(contents, manifestPath, manifest) {
+  if (xmlTag(contents, "IsPackable")?.toLowerCase() === "false") {
+    return {
+      manifest,
+      publishable: false,
+      discovery_skip: "MSBuild IsPackable is false",
+    };
+  }
   return packageInfo(
     "nuget",
     xmlTag(contents, "PackageId") ??
@@ -436,16 +558,33 @@ function parseMaven(contents, manifest) {
 }
 
 function parseGradle(contents, manifest) {
-  const group = capture(contents, /^\s*group\s*=\s*['"]([^'"]+)/m);
+  const literal = (key) =>
+    capture(contents, new RegExp(`\\b${key}\\s*(?:=\\s*)?['"]([^'"]+)`));
+  const group = literal("groupId") ?? literal("group");
   const artifact =
-    capture(
-      contents,
-      /^\s*(?:archivesBaseName|rootProject\.name)\s*=\s*['"]([^'"]+)/m,
-    ) ?? "gradle-project";
+    literal("artifactId") ??
+    literal("archivesBaseName") ??
+    literal("rootProject\\.name");
+  const version = literal("version");
+  if (
+    !group ||
+    !artifact ||
+    !version ||
+    /[$}{]/.test(`${group}${artifact}${version}`) ||
+    !/maven-publish|MavenPublication/.test(contents) ||
+    !/from\s*\(?\s*components|artifact\s*\(/.test(contents)
+  ) {
+    return {
+      manifest,
+      publishable: false,
+      discovery_skip:
+        "Gradle application/build definition has no resolved Maven publication coordinates and component",
+    };
+  }
   return packageInfo(
     "maven-central",
-    group ? `${group}:${artifact}` : artifact,
-    capture(contents, /^\s*version\s*=\s*['"]([^'"]+)/m),
+    `${group}:${artifact}`,
+    version,
     manifest,
   );
 }

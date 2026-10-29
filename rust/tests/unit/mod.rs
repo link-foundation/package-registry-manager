@@ -1,4 +1,5 @@
 mod approvals;
+mod audit_targets;
 mod browser_catalogue;
 mod browser_options;
 mod browser_profile;
@@ -6,6 +7,7 @@ mod crates_api;
 mod credential_cycle;
 mod issue_39;
 mod npm_bootstrap;
+mod nuget;
 mod pages;
 mod pipeline_template;
 mod prerequisites;

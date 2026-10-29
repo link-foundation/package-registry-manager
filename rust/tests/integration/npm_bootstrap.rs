@@ -35,11 +35,22 @@ async fn probes_npm_existence_and_trusted_publishing() {
         ..PackageState::default()
     };
     assert_eq!(probe("missing").await, state(false, false, None));
-    assert_eq!(
-        probe("@acme/widgets").await,
-        state(true, true, Some("1.0.0"))
-    );
-    assert_eq!(probe("manual").await, state(true, false, Some("2.0.0")));
+    for (name, trusted, version) in [("@acme/widgets", true, "1.0.0"), ("manual", false, "2.0.0")] {
+        let actual = probe(name).await;
+        assert_eq!(actual.audit["latest_version"], version);
+        assert_eq!(actual.audit["version_state"], "manifest-version-unresolved");
+        assert_eq!(
+            actual.audit["registry_evidence_url"],
+            format!("{}/{}/latest", registry.base, name.replace('/', "%2F"))
+        );
+        assert_eq!(
+            PackageState {
+                audit: std::collections::BTreeMap::default(),
+                ..actual
+            },
+            state(true, trusted, Some(version))
+        );
+    }
 
     let offline = RegistryClient::new(
         Endpoints::default().with(

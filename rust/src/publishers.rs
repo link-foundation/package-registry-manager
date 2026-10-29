@@ -78,8 +78,9 @@ static TRAILING_COMMENT: LazyLock<Regex> = LazyLock::new(|| regex(r"\s+#.*$"));
 
 static RUBYGEMS_JOB: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\bgem\s+push\b|rubygems/release-gem"));
-static NUGET_JOB: LazyLock<Regex> =
-    LazyLock::new(|| regex(r"\bdotnet\s+nuget\s+push\b|\bnuget\s+push\b"));
+static NUGET_JOB: LazyLock<Regex> = LazyLock::new(|| {
+    regex(r"\bdotnet\s+nuget\s+push\b|PRM_NUGET_OIDC|\bnuget\s+push\b|PRM_NUGET_OIDC")
+});
 static JSR_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:deno|jsr)\s+publish\b"));
 static MAVEN_JOB: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\bmvn\s+(?:-\S+\s+)*deploy\b|\bgradle(?:w)?\s+publish\b"));

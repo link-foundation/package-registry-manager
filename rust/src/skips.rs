@@ -70,6 +70,14 @@ pub fn ignored_by<'a>(ignore: &'a [String], manifest: &str) -> Option<&'a str> {
 #[must_use]
 pub fn test_directory(manifest: &str) -> Option<&str> {
     let (directories, _) = manifest.rsplit_once('/')?;
+    if directories
+        .split('/')
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|v| v == ["dev", "log"])
+    {
+        return Some("dev/log");
+    }
     directories
         .split('/')
         .find(|segment| TEST_DIRECTORIES.contains(segment))

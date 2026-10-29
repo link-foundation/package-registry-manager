@@ -101,10 +101,9 @@ export async function selectReleaseRun(session) {
     if (details.code !== 0) {
       throw new Error("could not read the failed release jobs");
     }
-    if (
-      failedPublishingJob(JSON.parse(String(details.stdout || "{}")).jobs ?? [])
-    ) {
-      session.releaseSelection = { run, publishFailure: true, branch };
+    const jobs = JSON.parse(String(details.stdout || "{}")).jobs ?? [];
+    if (failedPublishingJob(jobs)) {
+      session.releaseSelection = { run, publishFailure: true, branch, jobs };
       return session.releaseSelection;
     }
   }

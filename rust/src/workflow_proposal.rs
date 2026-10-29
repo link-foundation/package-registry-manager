@@ -114,6 +114,7 @@ fn job(
         .into_iter()
         .map(str::to_owned)
         .collect(),
+        Registry::NuGet => crate::nuget_workflow::steps(package)?,
         Registry::PyPi => vec![
             "      - uses: actions/setup-python@v6".into(),
             "        with:".into(),

@@ -1,3 +1,4 @@
+import { markIdentityConflicts } from "./identity-conflicts.mjs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,9 @@ import { scriptReferences } from "./publishers.mjs";
 /** Only files used by existing discovery; no full repository clones for scans. */
 export const SCAN_MATCHES = [
   ...[
+    "CMakeLists.txt",
+    "conanfile.py",
+    "vcpkg.json",
     "package.json",
     "Cargo.toml",
     "pyproject.toml",
@@ -52,11 +56,30 @@ export function packageFindings(inspection) {
         manifest: item.manifest,
       };
       const findings = [];
-      if (item.exists_on_registry === undefined && item.registry_http_status) {
+      if (
+        item.exists_on_registry === undefined &&
+        (item.registry_http_status || item.registry_state_reason)
+      ) {
         findings.push({
           ...common,
           type: "registry-state-unknown",
-          evidence: { http_status: item.registry_http_status },
+          evidence: {
+            http_status: item.registry_http_status,
+            reason:
+              item.registry_state_reason ??
+              "registry state could not be determined",
+          },
+        });
+      }
+      if (item.manifest_version_exists === false || item.version_state) {
+        findings.push({
+          ...common,
+          type: item.version_state ?? "manifest-version-absent",
+          evidence: {
+            expected_version: item.version,
+            latest_version: item.latest_version,
+            url: item.version_evidence_url ?? item.registry_evidence_url,
+          },
         });
       }
       if (item.exists_on_registry === false) {
@@ -247,6 +270,22 @@ export async function withAccountScan(options, callback) {
         index + 1,
         repositories.length,
       );
+    }
+    const conflicts = markIdentityConflicts(
+      scan.repositories.flatMap((item) =>
+        item.inspection ? [item.inspection] : [],
+      ),
+    );
+    for (const conflict of conflicts) {
+      scan.findings.push({
+        type: "package-identity-conflict",
+        repository: conflict.sources
+          .map((source) => source.repository)
+          .join(", "),
+        registry: conflict.identity.split(":")[0],
+        package: conflict.identity.slice(conflict.identity.indexOf(":") + 1),
+        evidence: conflict,
+      });
     }
     return await callback(scan, github);
   } finally {

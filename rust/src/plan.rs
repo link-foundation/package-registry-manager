@@ -119,7 +119,7 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
     if (options.migrate || options.add_publish_job)
         && matches!(
             package.registry,
-            Registry::CratesIo | Registry::Npm | Registry::PyPi
+            Registry::CratesIo | Registry::Npm | Registry::PyPi | Registry::NuGet
         )
         && package
             .publishing_policy
@@ -140,6 +140,7 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
         | Registry::PyPi
         | Registry::DockerHub
         | Registry::Ghcr | Registry::RubyGems | Registry::NuGet | Registry::Jsr => return flow_plan(inspection, package, options),
+        Registry::Cmake | Registry::Conan | Registry::Vcpkg => crate::extra_flows::cpp_flow(package),
         Registry::GoModules => vec![
                 check(
                     "test-module",
@@ -281,7 +282,7 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
             !["confirm-oidc-cleanup", "delete-token-secret"].contains(&step.id.as_str())
         });
     }
-    if options.migrate {
+    if options.migrate && package.registry != Registry::NuGet {
         steps.retain(|step| {
             ![
                 "audit-token-secrets",

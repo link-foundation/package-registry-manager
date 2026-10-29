@@ -74,6 +74,8 @@ pub trait CookieStores {
     fn profiles(&self, browser: &str) -> Result<Vec<BrowserProfile>>;
     /// How many cookies a profile holds for `domain`; the values are dropped.
     fn count(&self, browser: &str, profile: &str, domain: &str) -> Result<usize>;
+    /// Report metadata only; never include cookie values, passwords or filesystem data.
+    fn diagnostic(&self, _evidence: serde_json::Value) {}
     /// Count usable saved passwords through a disposable, domain-scoped migration.
     fn saved_logins(&self, _browser: &str, _profile: &str, _domains: &[&str]) -> Result<usize> {
         Ok(0)
@@ -84,6 +86,10 @@ pub trait CookieStores {
 pub struct InstalledBrowsers;
 
 impl CookieStores for InstalledBrowsers {
+    fn diagnostic(&self, evidence: serde_json::Value) {
+        eprintln!("{}", serde_json::json!({"local_credential":evidence}));
+    }
+
     fn profiles(&self, browser: &str) -> Result<Vec<BrowserProfile>> {
         list_browser_profiles(BrowserProfileOptions::default().browser(browser))
     }
@@ -161,6 +167,7 @@ pub fn find_sign_in_sources(
     let mut browsers = import_sources();
     browsers.sort_by_key(|browser| Some(*browser) != preferred);
     let mut found = Vec::new();
+    let mut physical = std::collections::BTreeSet::new();
     let mut access_reported = false;
     for browser in browsers {
         let profiles = stores.profiles(browser).unwrap_or_else(|error| {
@@ -168,6 +175,11 @@ pub fn find_sign_in_sources(
             Vec::new()
         });
         for profile in &profiles {
+            let location =
+                std::fs::canonicalize(&profile.path).unwrap_or_else(|_| profile.path.clone());
+            if !physical.insert(location) {
+                continue;
+            }
             if let Some(error) = &profile.error {
                 report_store_error(
                     browser,
@@ -177,12 +189,14 @@ pub fn find_sign_in_sources(
                 );
                 continue;
             }
+            let mut unreadable = false;
             let matched: Vec<String> = domains
                 .iter()
                 .filter(
                     |domain| match stores.count(browser, &profile.name, domain) {
                         Ok(count) => count > 0,
                         Err(error) => {
+                            unreadable = true;
                             report_store_error(browser, &error, verbose, &mut access_reported);
                             false
                         }
@@ -190,6 +204,7 @@ pub fn find_sign_in_sources(
                 )
                 .map(|domain| (*domain).to_owned())
                 .collect();
+            stores.diagnostic(serde_json::json!({"browser":browser,"profile":profile.name,"cookies":if unreadable {"unreadable"} else if matched.is_empty() {"not-found"} else {"present"},"passkey_presence":"unknown","provider_availability":"unknown","passkey_export":"unsupported","authentication":"not-yet-verified"}));
             if matched.is_empty() {
                 continue;
             }
@@ -225,13 +240,21 @@ pub fn find_saved_login_sources(
     browsers.sort_by_key(|browser| Some(*browser) != preferred);
     let mut found = Vec::new();
     let mut installed = Vec::new();
+    let mut physical = std::collections::BTreeSet::new();
     for browser in browsers {
         let profiles = stores.profiles(browser).unwrap_or_default();
         if !profiles.is_empty() {
             installed.push(source_name(browser));
         }
         for profile in profiles {
-            match stores.saved_logins(browser, &profile.name, domains) {
+            let location =
+                std::fs::canonicalize(&profile.path).unwrap_or_else(|_| profile.path.clone());
+            if !physical.insert(location) {
+                continue;
+            }
+            let saved = stores.saved_logins(browser, &profile.name, domains);
+            stores.diagnostic(serde_json::json!({"browser":browser,"profile":profile.name,"saved_passwords":match &saved {Ok(count) if *count > 0 => "present", Ok(_) => "unknown", Err(_) => "unreadable"},"passkey_presence":"unknown","provider_availability":"unknown","passkey_export":"unsupported","authentication":"not-yet-verified"}));
+            match saved {
                 Ok(count) if count > 0 => found.push(SignInSource {
                     browser: browser.to_owned(),
                     profile: Some(profile.name),
@@ -247,7 +270,7 @@ pub fn find_saved_login_sources(
         }
     }
     if found.is_empty() {
-        eprintln!("No usable saved password for {} in {}. Safari saved passwords require an export; passkeys cannot be exported by the installed Browser Commander. Sign in in the browser.", domains.join(", "), if installed.is_empty() { "installed browsers".to_owned() } else { installed.join(", ") });
+        eprintln!("Saved-login export did not produce a usable credential for {} in {}. Presence may be unknown or unreadable. Safari saved passwords require an export. Passkey metadata presence, provider availability, export support and authentication success are separate; the installed Browser Commander cannot export passkeys. Sign in in the browser.", domains.join(", "), if installed.is_empty() { "installed browsers".to_owned() } else { installed.join(", ") });
     }
     found
 }
@@ -321,4 +344,14 @@ pub fn default_unreadable() -> String {
         "--browser-import default: the default browser is unknown or cannot be imported (Browser Commander sources: {})",
         import_sources().join(", ")
     )
+}
+
+/// Domain filtering follows the selected `NuGet` federation route.
+#[must_use]
+pub fn nuget_sign_in_domains(route: &str) -> &'static [&'static str] {
+    match route {
+        "personal" => &["nuget.org", "login.live.com"],
+        "github" => &["nuget.org", "github.com"],
+        _ => &["nuget.org", "login.microsoftonline.com"],
+    }
 }

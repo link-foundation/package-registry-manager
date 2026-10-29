@@ -1,3 +1,4 @@
+import { cppPlan } from "./cpp-distribution.mjs";
 import {
   BOOTSTRAP_CONDITIONS,
   cratesFlow,
@@ -74,7 +75,7 @@ function buildPlan(inspection, packageInfo, options) {
   const command = (program, args) => ({ program, args });
   if (
     (options.migrate || options.addPublishJob) &&
-    ["crates-io", "npm", "pypi"].includes(packageInfo.registry) &&
+    ["crates-io", "npm", "pypi", "nuget"].includes(packageInfo.registry) &&
     (packageInfo.publishing_policy
       ? packageInfo.publishing_policy !== "oidc-with-token-fallback"
       : packageInfo.token_secrets?.length)
@@ -107,6 +108,10 @@ function buildPlan(inspection, packageInfo, options) {
   let steps;
 
   switch (packageInfo.registry) {
+    case "cmake":
+    case "conan":
+    case "vcpkg":
+      return basePlan(inspection, packageInfo, cppPlan(packageInfo));
     case "npm":
     case "crates-io":
     case "pypi":
@@ -249,7 +254,7 @@ function flowPlan(inspection, packageInfo, options) {
         !["confirm-oidc-cleanup", "delete-token-secret"].includes(step.id),
     );
   }
-  if (options.migrate) {
+  if (options.migrate && packageInfo.registry !== "nuget") {
     steps = steps.filter(
       (step) =>
         ![

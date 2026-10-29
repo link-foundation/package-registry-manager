@@ -285,6 +285,7 @@ fn convert_job(
     parsed: &ParsedWorkflow,
     lines: &[String],
     registry: Registry,
+    packages: &[Package],
 ) -> Result<Vec<String>> {
     let text = parsed
         .header
@@ -354,6 +355,11 @@ fn convert_job(
             },
             registry,
         );
+        if registry == Registry::NuGet && publishes {
+            first.get_or_insert(edits.len());
+            edits.push(crate::nuget_migration::convert_step(step, packages, index)?);
+            continue;
+        }
         let mut updated = step.to_vec();
         if publishes || consumer(step, registry) {
             first.get_or_insert(edits.len());
@@ -512,7 +518,7 @@ pub fn workflow_migration_proposal(
         }
         if !matches!(
             registry,
-            Registry::CratesIo | Registry::Npm | Registry::PyPi
+            Registry::CratesIo | Registry::Npm | Registry::PyPi | Registry::NuGet
         ) {
             bail!("workflow conversion is unavailable for {registry}");
         }
@@ -559,7 +565,7 @@ pub fn workflow_migration_proposal(
             let mut content =
                 lines[position + 1..positions.get(index + 1).copied().unwrap_or(end)].to_vec();
             for &registry in jobs.get(&name).into_iter().flatten() {
-                content = convert_job(root, &parsed[&workflow.name], &content, registry)?;
+                content = convert_job(root, &parsed[&workflow.name], &content, registry, packages)?;
             }
             body.push(lines[position].clone());
             body.extend(content);

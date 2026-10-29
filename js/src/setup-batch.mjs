@@ -1,3 +1,4 @@
+import { validateIdentities } from "./identity-conflicts.mjs";
 import { rm } from "node:fs/promises";
 import { protectLegacyProfile } from "./profile.mjs";
 import { SetupSession, prompt } from "./setup.mjs";
@@ -34,7 +35,14 @@ export async function executePlan(plan, options) {
 
 /** Runs all plans with one browser session and defers sign-out until the end. */
 export async function executePlans(plans, options, summary = true) {
-  options = { ...options, rotatedSecrets: options.rotatedSecrets ?? new Map() };
+  validateIdentities(plans);
+  options = {
+    ...options,
+    rotatedSecrets: options.rotatedSecrets ?? new Map(),
+    recoveryChanges: new Map(),
+    recoveryQueue: [],
+    nugetQueue: [],
+  };
   if (plans.length === 0) {
     throw new Error("no publishable package manifests were found");
   }
@@ -139,7 +147,9 @@ export async function executePlans(plans, options, summary = true) {
   ];
   let automation = options.automation ?? null;
   const deferred = new Map();
+  const importedProfiles = new Set();
   const outcomes = [];
+  const sessions = [];
   let failure;
   let preserveNpmSession = false;
   try {
@@ -152,6 +162,7 @@ export async function executePlans(plans, options, summary = true) {
         automation,
         domains,
       });
+      sessions.push(session);
       try {
         await session.run();
         outcomes.push({
@@ -174,9 +185,15 @@ export async function executePlans(plans, options, summary = true) {
       } finally {
         preserveNpmSession ||= session.conditions.has("npm-name-refused");
         const steps = await session.cleanup({
-          deferAuth: plans.length > 1,
+          deferAuth:
+            plans.length > 1 ||
+            session.recoveryQueued ||
+            options.nugetQueue.includes(session),
           closeBrowser: false,
         });
+        for (const profile of session.importProfiles ?? []) {
+          importedProfiles.add(profile);
+        }
         automation = session.automation;
         for (const step of steps) {
           deferred.set(`${plan.registry}:${step.id}`, { session, step });
@@ -184,6 +201,32 @@ export async function executePlans(plans, options, summary = true) {
       }
       if (failure && !options.accountScan) {
         break;
+      }
+    }
+    if (!failure) {
+      for (const session of options.nugetQueue) {
+        session.options = { ...session.options, nugetQueue: undefined };
+        await session.runStep({ id: "verify-nuget-release" });
+      }
+      const recovered = new Set();
+      for (const { session, step } of options.recoveryQueue) {
+        const key = `${session.plan.repository.root}:${session.releaseSelection.run.databaseId}`;
+        session.options = { ...session.options, recoveryQueue: undefined };
+        session.automation = automation;
+        if (!recovered.has(key)) {
+          await session.runStep(step);
+          recovered.add(key);
+        }
+        for (const pending of session.pendingReleaseSteps ?? []) {
+          if (!pending.when || session.conditions.has(pending.when)) {
+            await session.runStep(pending);
+          }
+        }
+      }
+      for (const [index, session] of sessions.entries()) {
+        if (session.outcome) {
+          Object.assign(outcomes[index], session.outcome);
+        }
       }
     }
   } finally {
@@ -206,6 +249,9 @@ export async function executePlans(plans, options, summary = true) {
       }
     }
     await automation?.close();
+    for (const profile of importedProfiles) {
+      await rm(profile, { recursive: true, force: true });
+    }
     for (const plan of plans.slice(outcomes.length)) {
       outcomes.push({
         registry: plan.registry,

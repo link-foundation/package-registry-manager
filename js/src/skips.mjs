@@ -65,6 +65,9 @@ export function ignoredBy(ignore, manifest) {
 
 /** Returns the test or example directory that holds a path, if any. */
 export function testDirectory(manifest) {
+  if (/(?:^|\/)dev\/log\//.test(manifest)) {
+    return "dev/log";
+  }
   return (
     manifest
       .split("/")
@@ -79,7 +82,12 @@ export function referencedByWorkflow(workflows, manifest) {
   return workflows.some((workflow) =>
     workflow.contents
       .split(/\r?\n/)
-      .some((line) => !/^\s*#/.test(line) && line.includes(directory)),
+      .some(
+        (line) =>
+          !/^\s*#/.test(line) &&
+          line.includes(directory) &&
+          /publish|push|pack|release/.test(workflow.contents),
+      ),
   );
 }
 

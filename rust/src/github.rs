@@ -5,7 +5,7 @@ use std::{path::Path, process::Stdio};
 use tokio::{io::AsyncWriteExt, process::Command};
 
 /// Source release used until the scoped npm package is published.
-pub const GH_MANAGER_PACKAGE: &str = "https://codeload.github.com/link-foundation/gh-manager/tar.gz/293e9a8ab9d6d91a08e95f4e09c2a0dcad9bc809";
+pub const GH_MANAGER_PACKAGE: &str = "https://codeload.github.com/link-foundation/gh-manager/tar.gz/0b3ceb1590be7eb0340ae088730698b5ae9bebfc";
 
 /// GitHub command transport, injectable for deterministic discovery tests.
 #[allow(async_fn_in_trait)]

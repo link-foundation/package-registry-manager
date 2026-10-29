@@ -101,6 +101,20 @@ pub fn findings(inspection: &Inspection) -> Vec<Value> {
             }
             results.push(finding);
         };
+        if let Some(kind) = package.audit.get("version_state").and_then(Value::as_str) {
+            push(
+                kind,
+                json!({"expected_version":package.version,"latest_version":package.audit.get("latest_version"),"url":package.audit.get("version_evidence_url").or_else(||package.audit.get("registry_evidence_url"))}),
+            );
+        }
+        if package.exists_on_registry.is_none()
+            && package.audit.contains_key("registry_state_reason")
+        {
+            push(
+                "registry-state-unknown",
+                json!({"reason":package.audit.get("registry_state_reason")}),
+            );
+        }
         if package.exists_on_registry == Some(false) {
             push("unpublished", Value::Null);
         }
@@ -383,6 +397,14 @@ pub async fn scan_repositories_with_inactive(
             repos.len(),
         )?;
         report.repositories.push(item);
+    }
+    let mut inspections = report
+        .repositories
+        .iter_mut()
+        .filter_map(|item| item.inspection.as_mut())
+        .collect::<Vec<_>>();
+    for conflict in crate::identity_conflicts::mark(&mut inspections) {
+        report.findings.push(json!({"type":"package-identity-conflict","repository":conflict["sources"].as_array().unwrap_or(&Vec::new()).iter().filter_map(|s|s["repository"].as_str()).collect::<Vec<_>>().join(", "),"registry":conflict["identity"].as_str().unwrap_or_default().split(':').next(),"package":conflict["identity"].as_str().unwrap_or_default().split_once(':').map(|(_,name)|name),"evidence":conflict}));
     }
     Ok(RepositoryScan { report, workspace })
 }

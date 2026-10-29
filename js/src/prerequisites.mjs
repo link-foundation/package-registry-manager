@@ -1,4 +1,4 @@
-import { exec } from "command-stream";
+import { exec } from "./exec.mjs";
 
 import { automatedDescription } from "./browser-options.mjs";
 import { probePython } from "./python.mjs";

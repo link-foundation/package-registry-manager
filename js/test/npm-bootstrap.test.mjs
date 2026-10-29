@@ -207,11 +207,19 @@ test("probes npm existence and trusted publishing", async () => {
     exists: true,
     trusted: true,
     version: "1.0.0",
+    latest_version: "1.0.0",
+    registry_evidence_url: "https://registry.npmjs.org/@acme%2Fwidgets/latest",
+    registry_owners: [],
+    version_state: "manifest-version-unresolved",
   });
   assert.deepEqual(await probe("manual"), {
     exists: true,
     trusted: false,
     version: "2.0.0",
+    latest_version: "2.0.0",
+    registry_evidence_url: "https://registry.npmjs.org/manual/latest",
+    registry_owners: [],
+    version_state: "manifest-version-unresolved",
   });
   assert.deepEqual(await probe("down"), { registry_http_status: 503 });
 });
@@ -283,13 +291,12 @@ test(
     const state = await mkdtemp(path.join(temporary, "state-"));
     process.env.FAKE_STATE = state;
     await installFakeTools(state);
-    let published = false;
+    let exactLookups = 0;
     const registry = (url) => {
-      if (url.endsWith("/pipeline-app/0.1.0")) {
-        published = true;
+      if (url.endsWith("/pipeline-app/0.1.0") && exactLookups++ > 0) {
         return { version: "0.1.0" };
       }
-      return published ? { version: "0.1.0" } : null;
+      return null;
     };
     const plan = await npmPlan({
       exists_on_registry: false,
@@ -936,8 +943,11 @@ test(
   async () => {
     await freshState();
     const plan = await npmPlan(missing);
+    let exactLookups = 0;
     const registry = (url) =>
-      url.endsWith("/pipeline-app/0.1.0") ? { version: "0.1.0" } : null;
+      url.endsWith("/pipeline-app/0.1.0") && exactLookups++ > 0
+        ? { version: "0.1.0" }
+        : null;
     // npm trust github fails, so verify-trusted-publisher throws.
     const error = await withEnv({ FAKE_TRUST_GITHUB: "fail" }, () =>
       runWithFakeTools(plan, registry).catch((failure) => failure),

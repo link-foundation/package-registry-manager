@@ -1,3 +1,4 @@
+import { convertNugetStep } from "./nuget-migration.mjs";
 import { publishingPolicy } from "./publishing-state.mjs";
 import { fallbackSteps } from "./workflow-fallback.mjs";
 import {
@@ -12,7 +13,7 @@ export const CRATES_AUTH_ACTION =
   "rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18";
 const LOCAL = /^\s*uses:\s*["']?\.\/\.github\/workflows\/([\w.-]+\.ya?ml)/;
 const indent = (line) => line.search(/\S/);
-const supported = new Set(["crates-io", "npm", "pypi"]);
+const supported = new Set(["crates-io", "npm", "pypi", "nuget"]);
 const keys = (registry) => [
   ...registryTokenSecrets(registry),
   ...(registry === "npm"
@@ -129,7 +130,7 @@ function grantJob(lines, level, parsed) {
   return grant(lines, level);
 }
 
-async function convertJob(root, parsed, lines, registry) {
+async function convertJob(root, parsed, lines, registry, packages) {
   if (
     publishingPolicy([...parsed.header, ...lines], registry) ===
     "oidc-with-token-fallback"
@@ -196,6 +197,17 @@ async function convertJob(root, parsed, lines, registry) {
           [...names].some((name) => line.includes(name)) ||
           /preflight.*(?:crates|cargo)|(?:crates|cargo).*preflight/.test(line),
       );
+    if (registry === "nuget" && publishes) {
+      first = first < 0 ? index : first;
+      edits.push(
+        convertNugetStep(
+          step,
+          packages.filter((item) => item.registry === "nuget"),
+          index,
+        ),
+      );
+      continue;
+    }
     let updated = [...step];
     if (publishes || consumer) {
       if (first < 0) {
@@ -410,6 +422,7 @@ export async function workflowMigrationProposal(root, packages, workflows) {
           parsed.get(workflow.name),
           content,
           registry,
+          packages,
         );
       }
       body.push(lines[position], ...content);

@@ -50,14 +50,7 @@ const websiteOnly = {
 };
 
 test("requires a verified OIDC release before unused-secret deletion", async () => {
-  for (const registry of [
-    "npm",
-    "pypi",
-    "crates-io",
-    "rubygems",
-    "nuget",
-    "jsr",
-  ]) {
+  for (const registry of ["npm", "pypi", "crates-io", "rubygems", "jsr"]) {
     const steps = tokenSecretSteps({ registry }, "acme/demo");
     assert.deepEqual(ids(steps), [
       "audit-token-secrets",
@@ -83,6 +76,12 @@ test("requires a verified OIDC release before unused-secret deletion", async () 
       /verified OIDC release is required/,
     );
   }
+});
+
+test("retains designated NuGet fallback secrets after OIDC success", () => {
+  assert.deepEqual(ids(tokenSecretSteps({ registry: "nuget" }, "acme/demo")), [
+    "audit-token-secrets",
+  ]);
 });
 
 test("splits token secrets into ones still read and leftovers (#16)", () => {

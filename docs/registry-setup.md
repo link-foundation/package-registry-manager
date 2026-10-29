@@ -102,7 +102,7 @@ maintainer wants a deprecation notice. Setup never deprecates the old name.
 | npm, PyPI | Trusted publishing, remove unused long-lived secrets after verification |
 | crates.io | Trusted publishing; existing short-lived in-memory first-publish token flow |
 | RubyGems | Register pending/existing trusted publisher for the GitHub workflow |
-| NuGet | Trusted policy plus NuGet/login's temporary OIDC API key, never a stored fallback |
+| NuGet | NuGet/login OIDC first; retain an existing provided token for unavailable/rejected trusted publishing; no persistent key creation |
 | JSR | Repository-linked OIDC publishing |
 | GHCR | GITHUB_TOKEN with packages: write |
 | Go modules, Packagist | Public repository tags |
@@ -110,7 +110,8 @@ maintainer wants a deprecation notice. Setup never deprecates the old name.
 
 Setup retains token secrets and expiry companions by default. Migration first
 tries trusted publishing and keeps a conditional token fallback for crates.io,
-npm and PyPI. After an OIDC release, it reports which credentials are retained
+npm, PyPI and NuGet. NuGet fallback secrets remain intentionally retained even
+after OIDC success. After an OIDC release, it reports which credentials are retained
 as fallback; token rotation continues to maintain them.
 
 Use `--delete-token-secrets` only after removing every secret consumer. Deletion
@@ -249,3 +250,20 @@ compare the manifest version with its output before npm/cargo publication. A
 mismatch stops the job. Multiple producers require explicit human workflow editing.
 An existing job that exposes no release output still uses the exact-version guard;
 review its ordering before accepting the proposal.
+
+## Generated targets and audit decisions
+
+`publishAliases` adds separate npm targets with the source manifest's version,
+generator and publishing workflow. Setup validates each actual generated package
+before bootstrap and verifies every name at its actual post-release version.
+Gradle build/application definitions without real Maven publication coordinates,
+unpublished examples and `dev/log` copies are skipped with reasons. Explicit
+repository configuration can opt in a known published example or resolve Gradle
+coordinates. CMake, Conan and vcpkg manifests produce distribution targets;
+local metadata and validation do not establish public registry presence.
+
+Account findings retain expected/latest/exact public version evidence, including
+Maven Central, Packagist and Go pseudo-versions. Colliding normalized identities
+block setup before mutation until names or a complete reviewed canonical-artifact
+mapping resolve them. See the [requirements, configuration and research](issue-73-requirements.md)
+for the full decision inventory and live verification limits.
