@@ -378,13 +378,17 @@ mod tests {
         write_rust_file_with_lines(&repo.join("long_document.md"), MAX_DOC_LINES + 1);
 
         let result = check_directory(&repo);
+        // Directory traversal order varies by filesystem; only the findings
+        // and their budgets are part of this test's contract.
+        let mut violations: Vec<_> = result
+            .violations
+            .iter()
+            .map(|finding| finding.file.as_str())
+            .collect();
+        violations.sort_unstable();
 
         assert_eq!(
-            result
-                .violations
-                .iter()
-                .map(|finding| finding.file.as_str())
-                .collect::<Vec<_>>(),
+            violations,
             vec!["long_document.md", "source.rs"],
             "a document just over the source limit is fine, while a document over \
              the docs limit and a source file over the source limit are not"
