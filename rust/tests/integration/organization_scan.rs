@@ -306,6 +306,13 @@ async fn malformed_go_latest_versions_remain_unknown() {
         json!(""),
         json!("invalid"),
         json!("v1.2.3-?"),
+        json!("V1.2.3"),
+        json!("v01.2.3"),
+        json!("v1.02.3"),
+        json!("v1.2.03"),
+        json!("v1.2.3-01"),
+        json!("v1.2.3+build"),
+        json!("v1.2.3-alpha..1"),
     ] {
         let body = json!({"Version": version}).to_string();
         let registry = super::mock_registry::MockRegistry::start(move |path| {
@@ -333,6 +340,52 @@ async fn malformed_go_latest_versions_remain_unknown() {
             .as_str()
             .unwrap()
             .contains("invalid"));
+    }
+}
+
+#[tokio::test]
+async fn canonical_go_versions_and_tagged_lists_are_checked() {
+    use package_registry_manager::{Package, Registry};
+    for (version, list, tagged) in [
+        ("v2.3.4+incompatible", "v2.3.4+incompatible\n", Some(true)),
+        ("v1.2.3-RC.1", "v1.2.3-RC.1\n", Some(true)),
+        ("v1.2.3", "not-a-version\n", None),
+        ("v1.2.3", "V1.2.3\n", None),
+    ] {
+        let body = json!({"Version": version}).to_string();
+        let registry = super::mock_registry::MockRegistry::start(move |path| {
+            Some(if path.ends_with("/list") {
+                list.into()
+            } else {
+                body.clone()
+            })
+        });
+        let state = RegistryClient::new(
+            Endpoints::default().with("PACKAGE_REGISTRY_MANAGER_GO_PROXY", &registry.base),
+            false,
+        )
+        .probe_package(&Package::new(
+            Registry::GoModules,
+            "example.com/module".into(),
+            None,
+            "go.mod".into(),
+        ))
+        .await;
+        assert_eq!(state.exists, Some(true));
+        assert_eq!(state.audit["latest_version"], version);
+        assert_eq!(
+            state
+                .audit
+                .get("tagged_release_exists")
+                .and_then(Value::as_bool),
+            tagged
+        );
+        if tagged.is_none() {
+            assert!(state.audit["registry_state_reason"]
+                .as_str()
+                .unwrap()
+                .contains("invalid"));
+        }
     }
 }
 

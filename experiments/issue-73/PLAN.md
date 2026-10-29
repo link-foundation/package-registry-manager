@@ -36,6 +36,13 @@ coverage. They do not mark the external publication acceptance criteria complete
 7. Update PR title/body with reproduction/tests/limitations and Fixes #65 through #73, one keyword each.
 8. Inspect fresh CI timestamps/SHA, download each failed run log to ci-logs, diagnose with exact lines, fix and recheck. Finish background work, clean tree, mark ready only with accurate completion status; never merge.
 
+## Final regression review
+
+- [x] Reproduce malformed NuGet version and Go proxy metadata states before fixing both ports and the embedded verifier. Validate canonical Go versions and tagged lists against the official protocol.
+- [x] Replace the Windows generator test raw npm spawn with the production portable runner after CI log line 901 reported ENOENT.
+- [x] Remove configured NuGet profile values from sign-in messages in both ports after CodeQL alert 18; add a failing-before/passing-after sign-in regression.
+- [ ] Verify all checks on the final pushed SHA, preserving and reading any failing run logs.
+
 ## External completion evidence
 
 Maintain explicit unresolved criteria where required external identity/account/main-revision

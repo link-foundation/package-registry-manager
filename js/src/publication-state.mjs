@@ -129,6 +129,21 @@ export function olderVersion(expected, latest) {
   return false;
 }
 
+// The proxy protocol requires canonical SemVer, with only +incompatible metadata.
+function canonicalGoVersion(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const match =
+    /^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+incompatible)?$/.exec(
+      value,
+    );
+  return Boolean(
+    match &&
+    (!match[1] || match[1].split(".").every((part) => !/^0[0-9]+$/.test(part))),
+  );
+}
+
 /** Read-only providers whose metadata is not JSON, with explicit uncertainty. */
 export async function distributionState(item, options, base) {
   const fetcher = options.fetch ?? globalThis.fetch;
@@ -209,15 +224,15 @@ export async function distributionState(item, options, base) {
     const url = `${base}/${module}/@v/list`;
     const list = await read(url);
     const latest = await read(`${base}/${module}/@latest`);
+    const tags =
+      typeof list === "string"
+        ? list.split(/\r?\n/).filter(Boolean)
+        : undefined;
+    const validList = tags?.every(canonicalGoVersion);
     let version;
     try {
       const candidate = JSON.parse(latest)?.Version;
-      if (
-        typeof candidate === "string" &&
-        /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i.test(
-          candidate,
-        )
-      ) {
+      if (canonicalGoVersion(candidate)) {
         version = candidate;
       }
     } catch {
@@ -225,7 +240,8 @@ export async function distributionState(item, options, base) {
     }
     return {
       registry_evidence_url: url,
-      ...(!version && !(list === null && latest === null)
+      ...((!version && !(list === null && latest === null)) ||
+      validList === false
         ? {
             registry_state_reason:
               "Go proxy lookup failed or returned invalid metadata",
@@ -236,10 +252,8 @@ export async function distributionState(item, options, base) {
         : list === null && latest === null
           ? { exists: false }
           : {}),
-      ...(typeof list === "string"
-        ? { tagged_release_exists: list.trim().length > 0 }
-        : {}),
-      ...(typeof list === "string" && !list.trim() && version
+      ...(validList ? { tagged_release_exists: tags.length > 0 } : {}),
+      ...(validList && tags.length === 0 && version
         ? { version_state: "no-tagged-release" }
         : {}),
     };

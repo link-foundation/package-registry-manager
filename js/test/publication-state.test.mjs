@@ -145,7 +145,21 @@ test("NuGet exact evidence uses normalized versions and rejects malformed indexe
 });
 
 test("malformed Go latest versions remain unknown rather than proving publication", async () => {
-  for (const Version of [null, 42, {}, "", "invalid", "v1.2.3-?"]) {
+  for (const Version of [
+    null,
+    42,
+    {},
+    "",
+    "invalid",
+    "v1.2.3-?",
+    "V1.2.3",
+    "v01.2.3",
+    "v1.02.3",
+    "v1.2.03",
+    "v1.2.3-01",
+    "v1.2.3+build",
+    "v1.2.3-alpha..1",
+  ]) {
     const state = await probePackage(
       pkg("go-modules", "example.com/module", null),
       {
@@ -157,5 +171,29 @@ test("malformed Go latest versions remain unknown rather than proving publicatio
     assert.equal(state.exists, undefined, JSON.stringify(Version));
     assert.equal(state.version_state, undefined);
     assert.match(state.registry_state_reason, /invalid/);
+  }
+});
+
+test("Go proxy accepts canonical versions and keeps malformed tagged lists unknown", async () => {
+  for (const [Version, list, tagged] of [
+    ["v2.3.4+incompatible", "v2.3.4+incompatible\n", true],
+    ["v1.2.3-RC.1", "v1.2.3-RC.1\n", true],
+    ["v1.2.3", "not-a-version\n", undefined],
+    ["v1.2.3", "V1.2.3\n", undefined],
+  ]) {
+    const state = await probePackage(
+      pkg("go-modules", "example.com/module", null),
+      {
+        fetch: fetchWith((url) => ({
+          body: url.endsWith("/list") ? list : { Version },
+        })),
+      },
+    );
+    assert.equal(state.exists, true);
+    assert.equal(state.latest_version, Version);
+    assert.equal(state.tagged_release_exists, tagged);
+    if (tagged === undefined) {
+      assert.match(state.registry_state_reason, /invalid/);
+    }
   }
 });

@@ -10,9 +10,22 @@ static NUGET_VERSION: LazyLock<regex::Regex> = LazyLock::new(|| {
         .expect("static NuGet version regex")
 });
 static GO_VERSION: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?i)^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$")
+    regex::Regex::new(r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+incompatible)?$")
         .expect("static Go version regex")
 });
+
+// Proxy responses require canonical SemVer, with only +incompatible metadata.
+fn canonical_go_version(version: &str) -> bool {
+    GO_VERSION.captures(version).is_some_and(|parts| {
+        parts.get(1).is_none_or(|pre| {
+            pre.as_str().split('.').all(|part| {
+                !(part.len() > 1
+                    && part.starts_with('0')
+                    && part.bytes().all(|c| c.is_ascii_digit()))
+            })
+        })
+    })
+}
 
 /// Normalize the `NuGet` release identity used by the public flat-container API.
 #[must_use]
@@ -323,10 +336,7 @@ impl RegistryClient {
             let list = self.publication_text(&url).await;
             let latest = self.get_json(&format!("{base}/{module}/@latest")).await;
             if let Lookup::Found(doc) = latest {
-                if doc["Version"]
-                    .as_str()
-                    .is_some_and(|version| GO_VERSION.is_match(version))
-                {
+                if doc["Version"].as_str().is_some_and(canonical_go_version) {
                     state.exists = Some(true);
                     state
                         .audit
@@ -336,14 +346,25 @@ impl RegistryClient {
                 state.exists = Some(false);
             }
             if let Ok(Some(list)) = list {
-                let tagged = !list.trim().is_empty();
-                state
-                    .audit
-                    .insert("tagged_release_exists".into(), json!(tagged));
-                if !tagged && state.exists == Some(true) {
+                if list
+                    .lines()
+                    .filter(|line| !line.is_empty())
+                    .all(canonical_go_version)
+                {
+                    let tagged = !list.trim().is_empty();
                     state
                         .audit
-                        .insert("version_state".into(), json!("no-tagged-release"));
+                        .insert("tagged_release_exists".into(), json!(tagged));
+                    if !tagged && state.exists == Some(true) {
+                        state
+                            .audit
+                            .insert("version_state".into(), json!("no-tagged-release"));
+                    }
+                } else {
+                    state.audit.insert(
+                        "registry_state_reason".into(),
+                        json!("Go proxy tagged-version list returned invalid metadata"),
+                    );
                 }
             }
         }

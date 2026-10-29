@@ -26,10 +26,10 @@ under `rust/src/setup`. Deterministic tests do not assert live account access.
 | #67 historical snapshots in every ecosystem | Shared skip rule excludes `dev/log` copies unless configured in `publish` | JS/Rust audit-targets fixtures |
 | #68 expected/latest/exact evidence | `publication-state` augments registry state and account findings with exact-version existence and evidence URL | publication-state tests |
 | #68 missing newer release versus stale source | Compare resolved numerical versions conservatively; keep absent manifest version distinct from source older than latest | state tests; incomparable versions remain absent rather than guessed stale |
-| #68 uncertainty never becomes absence | Only supported, successful metadata or explicit 404 establishes a result; authorization, transport and invalid responses remain unknown | registry-state tests |
+| #68 uncertainty never becomes absence | Only supported, successful metadata or explicit 404 establishes a result; authorization, transport and invalid responses remain unknown | registry-state tests; malformed NuGet versions and Go metadata remain unknown |
 | #68 Maven Central | Read Maven metadata and exact POM; retain separate evidence | Maven state fixture |
 | #68 Packagist | Read Composer p2 versions including normalized leading `v`; validate response schema | Packagist fixture |
-| #68 Go modules | Read escaped proxy list and latest; distinguish empty tagged list with importable pseudo-version | Go fixture with uppercase path and pseudo-version |
+| #68 Go modules | Read escaped proxy list and latest; distinguish empty tagged list with importable pseudo-version | Go fixtures validate canonical latest/list versions, uppercase path escaping and pseudo-versions |
 | #68 inherited Cargo versions | Resolve explicit/nearest workspace.package.version without executing build code | Rust workspace and JS audit-targets fixtures |
 | #68 unsupported registries | Emit explicit unknown/unsupported findings rather than silently omit coverage | account-state tests; C++ channels remain unverified |
 | #69 full normalized collision inventory | Group all publishable targets, including aliases, before selection or mutation; PyPI punctuation and Cargo hyphen/underscore normalization | identity-conflicts tests |

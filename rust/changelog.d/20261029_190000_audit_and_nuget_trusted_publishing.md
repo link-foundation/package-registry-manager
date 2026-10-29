@@ -13,3 +13,5 @@
   unpublished examples and historical development snapshots from artifact audits.
 - Preserve existing browser credentials with fresh sign-in migration targets and
   distinguish uncertain provider/publication evidence from verified completion.
+- Keep malformed NuGet versions and noncanonical Go proxy metadata unknown;
+  omit the configured NuGet profile from interactive sign-in diagnostics.
