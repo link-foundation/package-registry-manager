@@ -318,22 +318,40 @@ test("shell substitutions and executed string-built scripts are detected (#60)",
       );
       assert.equal(result.workflow, "release.yml", command);
     }
-    await writeFile(
-      `${temporary}/scripts/publish.mjs`,
-      "const message = 'cargo publish';\nconsole.log(message);\n",
-    );
-    const result = await detectPublisher(
-      temporary,
-      [
-        {
-          name: "release.yml",
-          contents:
-            "jobs:\n  release:\n    steps:\n      - run: node scripts/publish.mjs\n",
-        },
-      ],
-      "crates-io",
-    );
-    assert.equal(result.workflow, null);
+    for (const quote of ["'", "`"]) {
+      await writeFile(
+        `${temporary}/scripts/publish.mjs`,
+        `const command = ${quote}cargo publish${quote};\nexecSync(command);\n`,
+      );
+      const executed = await detectPublisher(
+        temporary,
+        [
+          {
+            name: "release.yml",
+            contents:
+              "jobs:\n  release:\n    steps:\n      - run: node scripts/publish.mjs\n",
+          },
+        ],
+        "crates-io",
+      );
+      assert.equal(executed.workflow, "release.yml", quote);
+      await writeFile(
+        `${temporary}/scripts/publish.mjs`,
+        `const message = ${quote}cargo publish${quote};\nconsole.log(message);\n`,
+      );
+      const result = await detectPublisher(
+        temporary,
+        [
+          {
+            name: "release.yml",
+            contents:
+              "jobs:\n  release:\n    steps:\n      - run: node scripts/publish.mjs\n",
+          },
+        ],
+        "crates-io",
+      );
+      assert.equal(result.workflow, null, quote);
+    }
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

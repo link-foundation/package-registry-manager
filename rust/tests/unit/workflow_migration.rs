@@ -197,22 +197,43 @@ fn command_substitutions_and_executed_command_variables_are_publishers() {
             "{command}"
         );
     }
-    std::fs::write(
-        &script,
-        "const message = 'cargo publish';\nconsole.log(message);",
-    )
-    .unwrap();
     let workflow = Workflow {
         name: "release.yml".into(),
         contents: "jobs:\n  publish:\n    steps:\n      - run: node scripts/publish.mjs\n".into(),
     };
-    assert!(package_registry_manager::publishers::detect_publisher(
-        root.path(),
-        &[workflow],
-        Registry::CratesIo
-    )
-    .workflow
-    .is_none());
+    for quote in ["'", "`"] {
+        std::fs::write(
+            &script,
+            format!("const command = {quote}cargo publish{quote};\nexecSync(command);"),
+        )
+        .unwrap();
+        assert_eq!(
+            package_registry_manager::publishers::detect_publisher(
+                root.path(),
+                std::slice::from_ref(&workflow),
+                Registry::CratesIo
+            )
+            .workflow
+            .as_deref(),
+            Some("release.yml"),
+            "{quote}"
+        );
+        std::fs::write(
+            &script,
+            format!("const message = {quote}cargo publish{quote};\nconsole.log(message);"),
+        )
+        .unwrap();
+        assert!(
+            package_registry_manager::publishers::detect_publisher(
+                root.path(),
+                std::slice::from_ref(&workflow),
+                Registry::CratesIo
+            )
+            .workflow
+            .is_none(),
+            "{quote}"
+        );
+    }
 }
 
 #[test]
