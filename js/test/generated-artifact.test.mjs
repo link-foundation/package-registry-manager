@@ -3,10 +3,8 @@ import { test } from "node:test";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
-import { execFile } from "node:child_process";
+import { exec } from "command-stream";
 import { prepareGeneratedArtifact } from "../src/generated-artifact.mjs";
-const run = promisify(execFile);
 
 test("bootstrap executes the real generator and validates the selected artifact", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "prm-alias-"));
@@ -40,8 +38,13 @@ test("bootstrap executes the real generator and validates the selected artifact"
       },
       values: { worktree: root, pack_destination: root },
       capture: async ({ command, cwd }) => {
-        await run(command.program, command.args, { cwd });
-        return { code: 0 };
+        // Use the same runner as setup, including Windows command-shim support.
+        return exec(command.program, command.args, {
+          cwd,
+          capture: true,
+          mirror: false,
+          stdin: "ignore",
+        });
       },
     };
     await prepareGeneratedArtifact(session);
