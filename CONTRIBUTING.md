@@ -55,8 +55,11 @@ have. It needs a display, so it is skipped unless `PRM_BROWSER_SMOKE=1`:
 
 ```bash
 PRM_BROWSER_SMOKE=1 xvfb-run -a node --test js/test/browser-parity.test.mjs js/test/publisher-dom.test.mjs
-PRM_BROWSER_SMOKE=1 xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration browser_
+PRM_BROWSER_SMOKE=1 xvfb-run -a cargo test --manifest-path rust/Cargo.toml --test integration browser_ -- --test-threads=1
 ```
+
+Run the headed Rust browser tests serially: concurrent windows can change focus
+and invalidate the visibility-state parity comparison.
 
 The link-foundation libraries (browser-commander, command-stream, and
 lino-arguments) must stay at their latest release in both manifests.
