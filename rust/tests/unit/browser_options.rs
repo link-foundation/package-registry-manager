@@ -392,3 +392,18 @@ fn firefox_variants_have_separate_default_profiles() {
         default_browser_profile_for_channel("librewolf").unwrap()
     );
 }
+
+#[test]
+fn crates_api_can_reuse_the_dedicated_profile_headlessly() {
+    let browser = package_registry_manager::browser_options::parse_browser_options(
+        &package_registry_manager::browser_options::BrowserArgs::default(),
+    )
+    .expect("options");
+    let options = package_registry_manager::automation::quiet_launch_options(
+        &browser,
+        std::path::Path::new("/tmp/prm-quiet"),
+        false,
+        &["crates.io"],
+    );
+    assert!(options.headless);
+}

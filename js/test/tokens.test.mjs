@@ -286,7 +286,7 @@ test(
         packages: [{ ...crate, token_secrets: ["CARGO_TOKEN"] }],
       },
       ["crates-io"],
-      { manual: true },
+      { manual: true, deleteTokenSecrets: true },
     );
     const saved = { ...process.env };
     const cargo = await cargoCredentials();
@@ -353,7 +353,7 @@ test(
     );
     assert.ok(
       lines.includes(
-        "  CARGO_TOKEN is still read by a workflow; switch that workflow to trusted publishing before deleting it.",
+        "  CARGO_TOKEN is still read by a workflow; retained for authentication fallback.",
       ),
     );
     await assert.rejects(readFile(path.join(cargo, "credentials.toml")));
@@ -364,7 +364,7 @@ test("stops before any upload when the one-time token is declined", async () => 
   const [plan] = buildPlans(
     { repository: {}, packages: [crate] },
     ["crates-io"],
-    { manual: true },
+    { manual: true, deleteTokenSecrets: true },
   );
   const create = plan.steps.findIndex(
     (step) => step.id === "create-publish-token",

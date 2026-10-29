@@ -31,7 +31,7 @@ impl Session<'_> {
             }
             return Ok(());
         }
-        self.automated().await?.goto(url).await
+        self.visible_automated().await?.goto(url).await
     }
 
     async fn open_with(&self, url: &str, app: &str) -> Result<()> {

@@ -13,9 +13,13 @@
       "version": "1.2.3",
       "manifest": "package.json",
       "publishable": true,
+      "publishing_policy": "oidc-only",
       "workflow": "publish.yml",
       "workflow_jobs": [
         "publish"
+      ],
+      "warnings": [
+        "publishing authentication is oidc-only; migrate to OIDC with token fallback"
       ]
     },
     {

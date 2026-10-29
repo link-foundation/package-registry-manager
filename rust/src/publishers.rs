@@ -490,7 +490,7 @@ pub fn token_secret_warning(registry: Registry, secret: &TokenSecret) -> String 
         );
     }
     format!(
-        "{} reads secrets.{}; publish with {} and delete the long-lived token after verification",
+        "{} reads secrets.{}; publish with {} and retain a rotated token as fallback",
         secret.workflow,
         secret.secret,
         trusted_publishing_hint(registry)
@@ -555,7 +555,7 @@ pub fn job_publishes(root: &Path, parsed: &ParsedWorkflow, job: &Job, registry: 
     false
 }
 
-fn only_called(header: &[String]) -> bool {
+pub(crate) fn only_called(header: &[String]) -> bool {
     let Some(block) = child_block(header, 0, r#"["']?on["']?"#) else {
         return false;
     };
@@ -647,6 +647,23 @@ fn script_publishes(lines: &[String], registry: Registry) -> bool {
         return true;
     }
     let declaration = regex(r"\b(?:const|let|var)\s+(\w+)\s*=");
+    let commands: Vec<_> = lines
+        .iter()
+        .filter_map(|line| {
+            let captures = declaration.captures(line)?;
+            pattern.is_match(line).then(|| captures[1].to_owned())
+        })
+        .collect();
+    if lines.iter().any(|line| {
+        commands.iter().any(|name| {
+            regex(&format!(
+                r"(?:exec(?:Sync)?|spawn(?:Sync)?|run|system)\s*\(\s*{name}\b"
+            ))
+            .is_match(line)
+        })
+    }) {
+        return true;
+    }
     let variables: Vec<_> = lines
         .iter()
         .filter_map(|line| {
@@ -751,19 +768,19 @@ fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start().len()
 }
 
-fn child_indent(lines: &[String]) -> usize {
+pub(crate) fn child_indent(lines: &[String]) -> usize {
     lines
         .iter()
         .find(|line| !line.trim().is_empty())
         .map_or(0, |line| indent_of(line))
 }
 
-struct Block {
+pub(crate) struct Block {
     inline: String,
     nested: Vec<String>,
 }
 
-fn child_block(lines: &[String], indent: usize, key: &str) -> Option<Block> {
+pub(crate) fn child_block(lines: &[String], indent: usize, key: &str) -> Option<Block> {
     let expression = regex(&format!(r"^\s*{key}\s*:\s*(.*)$"));
     let start = lines
         .iter()
@@ -782,7 +799,7 @@ fn child_block(lines: &[String], indent: usize, key: &str) -> Option<Block> {
     })
 }
 
-fn grants_id_token(block: Option<&Block>) -> Option<bool> {
+pub(crate) fn grants_id_token(block: Option<&Block>) -> Option<bool> {
     let block = block?;
     let inline = unquote(&block.inline);
     if !inline.is_empty() {

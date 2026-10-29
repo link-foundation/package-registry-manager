@@ -96,12 +96,12 @@ pub fn audit_registry_tokens(output: &str, package: &Package) -> Result<TokenSec
 pub fn report_token_secrets(output: &str, package: &Package) -> Result<Vec<String>> {
     let audit = audit_registry_tokens(output, package)?;
     for name in &audit.in_use {
-        println!(
-            "  {name} is still read by a workflow; switch that workflow to trusted publishing before deleting it."
-        );
+        println!("  {name} is still read by a workflow; retained for authentication fallback.");
     }
     for name in &audit.leftover {
-        println!("  {name} is no longer needed with trusted publishing.");
+        println!(
+            "  {name} is unused by workflows; retained unless cleanup is explicitly requested."
+        );
     }
     Ok(audit.leftover)
 }

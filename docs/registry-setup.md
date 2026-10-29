@@ -108,14 +108,15 @@ maintainer wants a deprecation notice. Setup never deprecates the old name.
 | Go modules, Packagist | Public repository tags |
 | Docker Hub, Central, VS Code Marketplace, Open VSX, Chrome Web Store | Provider credential lifecycle through gh-manager; see current limits below |
 
-After OIDC release verification, setup audits repository secrets and offers to
-delete unused known token names. It retains secrets referenced by any workflow;
-remove those references after migration. Organization credentials can be shared
-by other repositories and need an organization-wide audit before deletion.
+Setup retains token secrets and expiry companions by default. Migration first
+tries trusted publishing and keeps a conditional token fallback for crates.io,
+npm and PyPI. After an OIDC release, it reports which credentials are retained
+as fallback; token rotation continues to maintain them.
 
-Cleanup requires an explicit successful-release confirmation even with `--yes`.
-For npm, `--verify-release` checks registry provenance before cleanup and supplies
-that confirmation automatically. Other registries require maintainer verification.
+Use `--delete-token-secrets` only after removing every secret consumer. Deletion
+requires successful release verification and checks fresh default-branch workflow
+contents. Shared organization credentials require a complete organization audit.
+`--yes` cannot bypass those evidence checks.
 
 ## Scan and set up an organization or user
 

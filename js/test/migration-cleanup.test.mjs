@@ -70,7 +70,12 @@ function fixture({
         package: { workflow: "js.yml" },
         repository: { github_owner: "acme", github_repository: "one" },
       },
-      options: { github, accountScan: true, yes: true },
+      options: {
+        github,
+        accountScan: true,
+        yes: true,
+        deleteTokenSecrets: true,
+      },
     },
   };
 }
@@ -162,4 +167,16 @@ test("skipped uploads, stale commits and changed default branches never authoriz
     ),
     false,
   );
+});
+
+test("default migration retains fallback tokens and expiry after verified OIDC (#62)", async () => {
+  const { session, deleted } = fixture();
+  session.options.deleteTokenSecrets = false;
+  session.options.github.repos.files = async () => [
+    { content: "env:\n  CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}" },
+  ];
+  await cleanupMigratedSecrets(session);
+  assert.deepEqual(deleted, []);
+  assert.equal(session.outcome.status, "fallback-retained");
+  assert.equal(session.outcome.oidc_verified, true);
 });

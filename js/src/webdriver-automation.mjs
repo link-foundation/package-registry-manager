@@ -36,7 +36,7 @@ export function bidiCookie(cookie) {
 
 /** Launches the selected installed Firefox variant and exposes the common page API. */
 export async function connectWebDriverAutomation(
-  { browser, profile, verbose, domains },
+  { browser, profile, verbose, domains, headless = false },
   dependencies = {},
 ) {
   // Validation happens before profile creation, including programmatic callers.
@@ -65,7 +65,7 @@ export async function connectWebDriverAutomation(
     browser: "firefox",
     executablePath,
     userDataDir: profile,
-    headless: false,
+    headless,
     bidi: true,
     verbose,
   });
@@ -101,6 +101,7 @@ export async function connectWebDriverAutomation(
     );
   }
   return {
+    headless,
     goto: (url) => connection.page.goto(url),
     evaluate: (script) => connection.page.evaluate(script),
     close: () => connection.close(),

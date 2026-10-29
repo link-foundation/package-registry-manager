@@ -67,3 +67,10 @@ local `--offline` commands keep local scope. Both CLIs' GitHub dependency needs
 Node.js 22.12 or newer and npm; JavaScript checks the runtime before loading it.
 
 See the [bootstrap, wrapper and credential guide](../docs/registry-setup.md) for branch/PR setup, dual npm names, registry policies and integration limits.
+
+Migration tries trusted publishing first and retains token fallback and expiry
+metadata by default. `--delete-token-secrets` explicitly opts into cleanup after
+OIDC publication and verification that no workflow still uses the credentials.
+Saved crates.io API sessions run headlessly; sign-in opens a visible window only
+when user action is needed. Organization migration skips and reports scan errors
+while continuing for clean repositories.

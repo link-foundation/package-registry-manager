@@ -1,3 +1,4 @@
+import { cratesPermit, delay, retryDelay } from "./request-policy.mjs";
 import {
   compareRepositories,
   identityCommand,
@@ -118,6 +119,14 @@ export async function probeRegistryState(inspection, options = {}) {
         if (state.trusted !== undefined) {
           packageInfo.trusted_publishing = state.trusted;
         }
+        for (const key of [
+          "registry_http_status",
+          "publisher_settings_reason",
+        ]) {
+          if (state[key] !== undefined) {
+            packageInfo[key] = state[key];
+          }
+        }
         const evidence = { ...packageInfo, ...state };
         if (state.configured_publishers !== undefined) {
           packageInfo.configured_publishers = state.configured_publishers;
@@ -184,9 +193,16 @@ export async function probePackage(packageInfo, options = {}) {
   if (!url) {
     return {};
   }
-  const document = await getJson(url, options);
+  let httpStatus;
+  const document = await getJson(url, {
+    ...options,
+    onError: (error) => {
+      httpStatus = error.http_status;
+      options.onError?.(error);
+    },
+  });
   if (document === undefined) {
-    return {};
+    return httpStatus ? { registry_http_status: httpStatus } : {};
   }
   if (document === null) {
     return packageInfo.registry === "docker-hub"
@@ -212,11 +228,15 @@ export async function probePackage(packageInfo, options = {}) {
         (document.versions ?? []).find(
           (item) => item.num === document.crate?.max_version,
         ) ?? document.versions?.[0];
-      const settings = await getJson(
-        `${registryEndpoint("crates-io", env)}/trusted_publishing/github_configs?crate=${encodeURIComponent(packageInfo.name)}`,
-        options,
-      );
+      const settings = options.cratesPublisherSettings
+        ? await getJson(
+            `${registryEndpoint("crates-io", env)}/trusted_publishing/github_configs?crate=${encodeURIComponent(packageInfo.name)}`,
+            options,
+          )
+        : undefined;
       return {
+        publisher_settings_reason:
+          "publisher settings require an authenticated crates.io session; public provenance is independent",
         exists: true,
         trusted: Boolean(latest?.trustpub_data),
         provenance_repositories: publisherIdentities(latest?.trustpub_data).map(
@@ -257,25 +277,42 @@ async function pypiProvenance(document, options) {
  */
 export async function getJson(url, options = {}) {
   const fetcher = options.fetch ?? globalThis.fetch;
+  const crates = new URL(url).hostname === "crates.io";
+  const attempts = crates ? 4 : 1;
   try {
-    const response = await fetcher(url, {
-      headers: { accept: "application/json", "user-agent": USER_AGENT },
-      signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
-    });
-    if (options.verbose) {
-      console.error(`GET ${url} -> ${response.status}`);
-    }
-    if (response.status === 404) {
-      return null;
-    }
-    if (!response.ok) {
-      options.onError?.({
-        stage: "registry",
-        message: `registry lookup returned HTTP ${response.status}`,
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      // Test fetches do not contact the service. An injected limiter can exercise pacing.
+      if (crates) {
+        await (options.requestLimiter ?? cratesPermit)();
+      }
+      const response = await fetcher(url, {
+        headers: { accept: "application/json", "user-agent": USER_AGENT },
+        signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
       });
-      return undefined;
+      if (options.verbose) {
+        console.error(
+          `GET ${url} -> ${response.status} (attempt ${attempt + 1})`,
+        );
+      }
+      if ([403, 429].includes(response.status) && attempt + 1 < attempts) {
+        const wait = retryDelay(response.headers?.get("retry-after"), attempt);
+        await response.body?.cancel();
+        await (options.sleep ?? delay)(wait);
+        continue;
+      }
+      if (response.status === 404) {
+        return null;
+      }
+      if (!response.ok) {
+        options.onError?.({
+          stage: "registry",
+          http_status: response.status,
+          message: `registry lookup returned HTTP ${response.status}`,
+        });
+        return undefined;
+      }
+      return await response.json();
     }
-    return await response.json();
   } catch (error) {
     options.onError?.({
       stage: "registry",
@@ -284,6 +321,6 @@ export async function getJson(url, options = {}) {
     if (options.verbose) {
       console.error(`GET ${url} failed: ${error.message}`);
     }
-    return undefined;
   }
+  return undefined;
 }

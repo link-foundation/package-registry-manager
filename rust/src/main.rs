@@ -44,6 +44,7 @@ fn browser_import_help() -> String {
     version,
     about = "Inspect repositories and guide secure package-registry setup"
 )]
+#[allow(clippy::struct_excessive_bools)] // Independent CLI options.
 struct Args {
     /// Inspect only this repository; otherwise prefer organization or user scope.
     #[arg(long, global = true)]
@@ -64,9 +65,12 @@ struct Args {
     /// Explicitly rotate an existing crates.io secret while workflows still use it.
     #[arg(long, global = true)]
     rotate_token: Option<String>,
-    /// Convert existing token jobs in reviewed PRs, then verify OIDC before cleanup.
+    /// Convert existing jobs to OIDC with token fallback and verify releases.
     #[arg(long, global = true)]
     migrate: bool,
+    /// Delete unused token secrets and expiry only after verified OIDC publication.
+    #[arg(long, global = true)]
+    delete_token_secrets: bool,
 
     /// Inspect private crates.io token expiry in the browser during an account scan.
     #[arg(long, global = true, value_parser = clap::value_parser!(u16).range(0..=365))]
@@ -391,6 +395,7 @@ async fn main() -> Result<()> {
         } => {
             let options = PlanOptions {
                 migrate: false,
+                delete_token_secrets: args.delete_token_secrets,
                 rotate_token: None,
                 bootstrap_ref: bootstrap_ref.clone(),
                 python,
@@ -463,6 +468,7 @@ async fn main() -> Result<()> {
             };
             let options = PlanOptions {
                 migrate: args.migrate,
+                delete_token_secrets: args.delete_token_secrets,
                 rotate_token: args.rotate_token.clone(),
                 bootstrap_ref: bootstrap_ref.clone(),
                 python,
@@ -476,7 +482,7 @@ async fn main() -> Result<()> {
                 manual,
             };
             let plans = build_plans_with(&inspection, &selected, &options);
-            let selected_plans = if all {
+            let selected_plans = if all || (args.migrate && package.is_none()) {
                 plans
                     .into_iter()
                     .filter(|plan| plan.package.publishable)
@@ -497,6 +503,7 @@ async fn main() -> Result<()> {
                     no_browser,
                     open_with: open_with.as_deref(),
                     keep_session: !sign_out,
+                    delete_token_secrets: args.delete_token_secrets,
                     verbose: args.verbose,
                     secret_name: args.secret_name.as_deref(),
                     repository_batch: false,
@@ -511,7 +518,7 @@ async fn main() -> Result<()> {
                 Some(&inspection),
                 options.workflow.as_deref(),
                 options.publisher_environment.as_deref(),
-                all,
+                all || args.migrate,
             )
             .await
         }
@@ -617,7 +624,9 @@ fn output_inspection(inspection: &Inspection, format: OutputFormat) -> Result<()
                     Some(false) => details.push("not published yet"),
                     None => {}
                 }
-                if package.trusted_publishing == Some(true) {
+                if package.publishing_policy.as_deref() == Some("oidc-with-token-fallback") {
+                    details.push("trusted publishing + token fallback");
+                } else if package.trusted_publishing == Some(true) {
                     details.push("trusted publishing");
                 }
                 writeln!(
@@ -627,6 +636,9 @@ fn output_inspection(inspection: &Inspection, format: OutputFormat) -> Result<()
                     package.name,
                     details.join(", ")
                 )?;
+                if let Some(status) = package.registry_http_status {
+                    writeln!(output, "  registry state unknown (HTTP {status})")?;
+                }
                 if let (Some(workflow), true) = (&package.workflow, package.publishable) {
                     writeln!(
                         output,

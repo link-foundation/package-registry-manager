@@ -51,3 +51,51 @@ test(
     }
   },
 );
+
+test(
+  "headless API sessions retain saved cookies across profile reuse (#59)",
+  { skip: !smoke, timeout: 180_000 },
+  async () => {
+    const { createServer } = await import("node:http");
+    const { connectAutomation } = await import("../src/automation.mjs");
+    const server = createServer((req, res) => {
+      if (req.url === "/login") {
+        res.setHeader(
+          "Set-Cookie",
+          "prm_session=saved; Path=/; Max-Age=300; HttpOnly",
+        );
+      }
+      res.end(req.headers.cookie ?? "no session");
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const profile = await mkdtemp(path.join(os.tmpdir(), "prm-quiet-smoke-"));
+    let session;
+    try {
+      session = await connectAutomation({
+        browser: parseBrowserOptions(),
+        profile,
+        domains: ["127.0.0.1"],
+      });
+      await session.goto(`${base}/login`);
+      await session.close();
+      session = null;
+      session = await connectAutomation({
+        browser: parseBrowserOptions(),
+        profile,
+        domains: ["127.0.0.1"],
+        headless: true,
+      });
+      await session.goto(`${base}/api`);
+      assert.equal(session.headless, true);
+      assert.equal(
+        await session.evaluate("document.body.innerText"),
+        "prm_session=saved",
+      );
+    } finally {
+      await session?.close();
+      await rm(profile, { recursive: true, force: true });
+      await new Promise((resolve) => server.close(resolve));
+    }
+  },
+);

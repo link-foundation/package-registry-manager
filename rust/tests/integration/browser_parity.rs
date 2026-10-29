@@ -68,3 +68,26 @@ async fn launches_the_automated_profile_like_a_browser_started_by_hand() -> anyh
     assert!(report.ok);
     Ok(())
 }
+
+#[tokio::test]
+async fn browser_quiet_api_profile_launches_headlessly() -> anyhow::Result<()> {
+    if std::env::var("PRM_BROWSER_SMOKE").as_deref() != Ok("1") {
+        return Ok(());
+    }
+    let profile = tempfile::tempdir()?;
+    let options = package_registry_manager::automation::quiet_launch_options(
+        &BrowserOptions::default(),
+        profile.path(),
+        false,
+        &[],
+    );
+    let launched = Box::pin(launch_real_browser(options)).await?;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        launched.page.goto("about:blank").await?;
+        anyhow::Ok(launched.page.evaluate("1 + 1").await?)
+    })
+    .await;
+    launched.close().await?;
+    assert_eq!(result??, serde_json::json!(2));
+    Ok(())
+}

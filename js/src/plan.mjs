@@ -75,7 +75,9 @@ function buildPlan(inspection, packageInfo, options) {
   if (
     (options.migrate || options.addPublishJob) &&
     ["crates-io", "npm", "pypi"].includes(packageInfo.registry) &&
-    packageInfo.token_secrets?.length
+    (packageInfo.publishing_policy
+      ? packageInfo.publishing_policy !== "oidc-with-token-fallback"
+      : packageInfo.token_secrets?.length)
   ) {
     return basePlan(inspection, packageInfo, [
       {
@@ -84,7 +86,7 @@ function buildPlan(inspection, packageInfo, options) {
         kind: "manual",
         confirm: true,
         description:
-          "Convert existing publishing jobs and reusable callers to OIDC, preserve the release commands and environment, and remove legacy token wiring. Review and merge the PR, then re-run setup --migrate to register trust and verify an OIDC release before deleting secrets.",
+          "Convert existing publishing jobs and reusable callers to OIDC, preserve the release commands and environment, and retain token secrets as fallback. Review and merge the PR, then re-run setup --migrate to register trust and verify an OIDC release while retaining fallback secrets by default.",
       },
     ]);
   }
@@ -241,6 +243,12 @@ function flowPlan(inspection, packageInfo, options) {
         : steps.filter((item) => !BOOTSTRAP_CONDITIONS.has(item.when)),
     );
   }
+  if (!options.deleteTokenSecrets) {
+    steps = steps.filter(
+      (step) =>
+        !["confirm-oidc-cleanup", "delete-token-secret"].includes(step.id),
+    );
+  }
   if (options.migrate) {
     steps = steps.filter(
       (step) =>
@@ -252,11 +260,11 @@ function flowPlan(inspection, packageInfo, options) {
     );
     steps.push({
       id: "cleanup-migrated-secrets",
-      title: "Verify OIDC publication and clean up legacy secrets",
+      title: "Verify OIDC publication and report fallback secrets",
       kind: "api",
       confirm: true,
       description:
-        "Read the default-branch workflows and successful publishing steps at its current commit. Delete repository token secrets only after verification; delete organization secrets only after a complete fresh scan proves no remaining consumer.",
+        "Read the default-branch workflows and successful publishing steps at its current commit. Retain token secrets and expiry metadata for fallback by default. With --delete-token-secrets, delete repository secrets only after verification and proof of non-use; delete organization secrets only after a complete fresh scan proves no remaining consumer.",
     });
   }
   if (options.ref) {

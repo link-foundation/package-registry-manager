@@ -25,6 +25,7 @@ pub async fn read_account_token_inventory(root: &Path) -> Result<Vec<Value>> {
         no_browser: false,
         open_with: None,
         keep_session: true,
+        delete_token_secrets: false,
         verbose: false,
         secret_name: None,
         quiet_browser: true,

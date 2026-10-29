@@ -1,3 +1,4 @@
+import { publishingPolicy } from "./publishing-state.mjs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { stripComments, commandPosition } from "./source-code.mjs";
@@ -146,6 +147,76 @@ export function parseWorkflow(contents) {
  * the trusted publisher names the workflow CI actually publishes from.
  */
 export async function detectPublisher(root, workflows, registry) {
+  const result = await detectPublisherDetails(root, workflows, registry);
+  if (
+    ["crates-io", "npm", "pypi"].includes(registry) &&
+    (result.workflow || result.candidates.length)
+  ) {
+    result.policy = await publishingPolicies(root, workflows, registry);
+    if (result.policy !== "oidc-with-token-fallback") {
+      result.warnings.push(
+        `publishing authentication is ${result.policy}; migrate to OIDC with token fallback`,
+      );
+    }
+  }
+  return result;
+}
+
+async function publishingPolicies(root, workflows, registry) {
+  const parsed = new Map(
+    workflows.map((workflow) => [
+      workflow.name,
+      parseWorkflow(workflow.contents),
+    ]),
+  );
+  const policies = [];
+  const visit = async (name, callerGrant, seen = new Set()) => {
+    if (seen.has(name) || !parsed.has(name)) {
+      return;
+    }
+    const workflow = parsed.get(name);
+    const workflowGrant = grantsIdToken(
+      childBlock(workflow.header, 0, "permissions"),
+    );
+    for (const job of workflow.jobs) {
+      const own =
+        grantsIdToken(
+          childBlock(job.lines, childIndent(job.lines), "permissions"),
+        ) ?? workflowGrant;
+      const grant =
+        callerGrant === undefined
+          ? (own ?? false)
+          : callerGrant && (own ?? true);
+      const called = LOCAL_WORKFLOW.exec(
+        job.lines.find((line) => LOCAL_WORKFLOW.test(line)) ?? "",
+      )?.[1];
+      if (called) {
+        await visit(called, grant, new Set([...seen, name]));
+      } else if (await jobPublishes(root, workflow, job, registry)) {
+        policies.push(
+          publishingPolicy(
+            [[...workflow.header, ...job.lines].join("\n")],
+            registry,
+            grant,
+          ),
+        );
+      }
+    }
+  };
+  for (const workflow of workflows) {
+    if (!onlyCalled(parsed.get(workflow.name).header)) {
+      await visit(workflow.name);
+    }
+  }
+  const unique = [...new Set(policies)];
+  return unique.length === 1
+    ? unique[0]
+    : unique.length
+      ? "mixed-authentication"
+      : "authentication-unverified";
+}
+
+async function detectPublisherDetails(root, workflows, registry) {
   const parsedWorkflows = new Map(
     workflows.map((workflow) => [
       workflow.name,
@@ -289,7 +360,7 @@ export function tokenSecrets(workflows, registry) {
 /** Explains how to replace a long-lived token secret with trusted publishing. */
 export function tokenSecretWarning(registry, { workflow, secret }) {
   return TRUSTED_REGISTRIES.includes(registry)
-    ? `${workflow} reads secrets.${secret}; publish with ${TRUSTED_PUBLISHING_HINTS.get(registry) ?? `${registry} trusted publishing (id-token: write)`} and delete the long-lived token after verification`
+    ? `${workflow} reads secrets.${secret}; publish with ${TRUSTED_PUBLISHING_HINTS.get(registry) ?? `${registry} trusted publishing (id-token: write)`} and retain a rotated token as fallback`
     : `${workflow} reads secrets.${secret}; ensure a scoped expiring publishing token through gh-manager`;
 }
 
@@ -458,6 +529,25 @@ function scriptPublishes(lines, registry) {
     )
   ) {
     return true;
+  }
+  const commands = new Set();
+  for (const line of lines) {
+    const declaration = /\b(?:const|let|var)\s+(\w+)\s*=/.exec(line);
+    if (
+      declaration &&
+      new RegExp(pattern.source).test(line.slice(declaration.index))
+    ) {
+      commands.add(declaration[1]);
+    }
+    if (
+      [...commands].some((name) =>
+        new RegExp(
+          `(?:exec(?:Sync)?|spawn(?:Sync)?|run|system)\\s*\\(\\s*${name}\\b`,
+        ).test(line),
+      )
+    ) {
+      return true;
+    }
   }
   const patterns = SCRIPT_PATTERNS.get(registry);
   if (!patterns) {

@@ -10,10 +10,15 @@ import os from "node:os";
 import path from "node:path";
 import { exec } from "command-stream";
 import { packageDirectory } from "./plan.mjs";
-import { parseWorkflow } from "./publishers.mjs";
+import { parseWorkflow, registryTokenSecrets } from "./publishers.mjs";
 import { versionGuard } from "./version-guard.mjs";
 import { readWorkflows } from "./workflows.mjs";
-import { workflowMigrationProposal } from "./workflow-migration.mjs";
+import { fallbackSteps } from "./workflow-fallback.mjs";
+import {
+  CRATES_AUTH_ACTION,
+  removeCredentials,
+  workflowMigrationProposal,
+} from "./workflow-migration.mjs";
 
 const quote = (text) => `'${text.replaceAll("'", "''")}'`;
 const RELEASE_IF =
@@ -75,13 +80,14 @@ function job(packageInfo, index, environment, producer) {
       lines.push(
         "      - uses: dtolnay/rust-toolchain@stable",
         ...versionGuard("crates-io"),
-        "      - uses: rust-lang/crates-io-auth-action@v1",
+        `      - uses: ${CRATES_AUTH_ACTION} # v1.0.5`,
+        "        continue-on-error: true",
         "        if: steps.version-check.outputs.publish == 'true'",
         "        id: auth",
         "      - run: cargo publish",
         "        if: steps.version-check.outputs.publish == 'true'",
         "        env:",
-        "          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}",
+        "          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}",
       );
       break;
     case "pypi":
@@ -103,6 +109,20 @@ function job(packageInfo, index, environment, producer) {
       break;
     default:
       throw new Error(`no publishing job template for ${packageInfo.registry}`);
+  }
+  if (["npm", "pypi"].includes(packageInfo.registry)) {
+    const at = lines.findLastIndex((line) =>
+      /- (?:run: npm publish|uses: pypa\/gh-action-pypi-publish)/.test(line),
+    );
+    const edits = fallbackSteps(
+      lines.slice(at),
+      packageInfo.registry,
+      new Set(registryTokenSecrets(packageInfo.registry)),
+      6,
+      index,
+      removeCredentials,
+    );
+    lines.splice(at, lines.length - at, ...edits.flat());
   }
   return `${lines.join("\n")}\n`;
 }
@@ -212,7 +232,13 @@ export async function offerWorkflow(plans, options) {
     repository: plans[0].repository,
     packages: plans.map((plan) => plan.package),
   };
-  const migration = plans.some((plan) => plan.package.token_secrets?.length);
+  const migration = plans.some(
+    (plan) =>
+      plan.package.workflow &&
+      (options.migrate ||
+        plan.package.token_secrets?.length ||
+        plan.package.publishing_policy),
+  );
   const propose = async (root, workflows, override) =>
     migration
       ? workflowMigrationProposal(
@@ -231,6 +257,9 @@ export async function offerWorkflow(plans, options) {
     options.repository,
     await readWorkflows(options.repository),
     options.workflow,
+  );
+  console.log(
+    "Proposal preview uses the inspected working tree. Execution recomputes from the latest default branch and displays any changes before approval.",
   );
   console.log(
     migration
@@ -350,7 +379,7 @@ export async function offerWorkflow(plans, options) {
             .replace("T", "_")
             .slice(0, 15);
           files[`${directory}/${stamp}_trusted_publishing.md`] =
-            "---\nbump: patch\n---\n\n### Changed\n- Publish through GitHub Actions trusted publishing and remove long-lived registry token workflow inputs.\n";
+            "---\nbump: patch\n---\n\n### Changed\n- Publish through GitHub Actions trusted publishing with token secrets retained as fallback.\n";
         }
       }
     }
@@ -374,7 +403,7 @@ export async function offerWorkflow(plans, options) {
       : "Add missing trusted publishing jobs";
     await run("git", ["commit", "-m", title], checkout);
     await run("git", ["push", "origin", `HEAD:refs/heads/${branch}`], checkout);
-    const body = `${migration ? "Convert existing token publishing" : "Add missing publishing jobs"} for ${plans.map((plan) => `${plan.registry}: ${plan.package.name}`).join(", ")} in ${Object.keys(current.files ?? { [current.workflow]: current.contents }).join(", ")}. Review the build, versioning, triggers and job dependencies before merging. Then re-run setup${migration ? " --migrate" : ""} to attach the trusted publishers to the caller workflow${migration ? " and verify an OIDC release before cleaning up legacy secrets" : ""}.`;
+    const body = `${migration ? "Convert existing token publishing" : "Add missing publishing jobs"} for ${plans.map((plan) => `${plan.registry}: ${plan.package.name}`).join(", ")} in ${Object.keys(current.files ?? { [current.workflow]: current.contents }).join(", ")}. Review the build, versioning, triggers and job dependencies before merging. Then re-run setup${migration ? " --migrate" : ""} to attach the trusted publishers to the caller workflow${migration ? " and verify an OIDC release while retaining fallback secrets" : ""}.`;
     const bodyFile = path.join(temporary, "pr-body.md");
     await writeFile(bodyFile, body);
     const url = await run(

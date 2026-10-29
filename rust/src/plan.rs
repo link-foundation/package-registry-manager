@@ -16,8 +16,10 @@ use crate::registry_state::Endpoints;
 #[derive(Debug, Clone, Default)]
 #[allow(clippy::struct_excessive_bools)] // Independent CLI choices, rather than exclusive states.
 pub struct PlanOptions {
-    /// Convert legacy workflow jobs, then verify OIDC publication and clean up secrets.
+    /// Convert workflow jobs to OIDC with token fallback, then verify publication.
     pub migrate: bool,
+    /// Explicitly delete unused token secrets after verified OIDC publication.
+    pub delete_token_secrets: bool,
     /// Explicit maintenance of a legacy crates.io secret during OIDC migration.
     pub rotate_token: Option<String>,
     /// Pushed branch or PR head for the first publication.
@@ -119,9 +121,14 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
             package.registry,
             Registry::CratesIo | Registry::Npm | Registry::PyPi
         )
-        && !package.token_secrets.is_empty()
+        && package
+            .publishing_policy
+            .as_ref()
+            .map_or(!package.token_secrets.is_empty(), |policy| {
+                policy != "oidc-with-token-fallback"
+            })
     {
-        return base_plan(inspection,package,vec![SetupStep::new("add-publishing-workflow", "Convert token publishing in a reviewed pull request", StepKind::Manual, "Convert existing publishing jobs and reusable callers to OIDC, preserve release commands and environment, and remove legacy token wiring. Review and merge the PR, then re-run setup --migrate to register trust and verify an OIDC release before deleting secrets.").confirmed()]);
+        return base_plan(inspection,package,vec![SetupStep::new("add-publishing-workflow", "Convert token publishing in a reviewed pull request", StepKind::Manual, "Convert existing publishing jobs and reusable callers to OIDC, preserve release commands and environment, and retain token secrets as fallback. Review and merge the PR, then re-run setup --migrate to register trust and verify an OIDC release while retaining fallback secrets by default.").confirmed()]);
     }
     let browser = |id: &str, title: &str, description: &str, url: &str| {
         SetupStep::new(id, title, StepKind::Browser, description).url(url)
@@ -269,6 +276,11 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
         ),
         _ => flow(package, &context),
     };
+    if !options.delete_token_secrets {
+        steps.retain(|step| {
+            !["confirm-oidc-cleanup", "delete-token-secret"].contains(&step.id.as_str())
+        });
+    }
     if options.migrate {
         steps.retain(|step| {
             ![
@@ -278,7 +290,7 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
             ]
             .contains(&step.id.as_str())
         });
-        steps.push(SetupStep::new("cleanup-migrated-secrets", "Verify OIDC publication and clean up legacy secrets", StepKind::Api, "Read current default-branch workflows and successful publishing steps. Delete repository secrets only after verification; delete organization secrets only after a fresh complete consumer scan.").confirmed());
+        steps.push(SetupStep::new("cleanup-migrated-secrets", "Verify OIDC publication and report fallback secrets", StepKind::Api, "Read current default-branch workflows and successful publishing steps. Retain token secrets and expiry metadata for fallback by default. With --delete-token-secrets, delete repository secrets only after verification and proof of non-use; delete organization secrets only after a fresh complete consumer scan.").confirmed());
     }
     if let Some(reference) = &options.bootstrap_ref {
         if let Some(fetch) = steps

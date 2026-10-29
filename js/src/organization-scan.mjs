@@ -52,6 +52,13 @@ export function packageFindings(inspection) {
         manifest: item.manifest,
       };
       const findings = [];
+      if (item.exists_on_registry === undefined && item.registry_http_status) {
+        findings.push({
+          ...common,
+          type: "registry-state-unknown",
+          evidence: { http_status: item.registry_http_status },
+        });
+      }
       if (item.exists_on_registry === false) {
         findings.push({ ...common, type: "unpublished" });
       }
@@ -267,14 +274,24 @@ async function releaseHealth(github, item, findings, onError) {
       }
       const runs = [];
       for (const event of ["push", "workflow_dispatch"]) {
-        runs.push(
-          ...(await github.runs.list(item.repository, {
+        let listed;
+        try {
+          listed = await github.runs.list(item.repository, {
             workflow,
             branch: item.default_branch,
             event,
             limit: 1,
-          })),
-        );
+          });
+        } catch (error) {
+          if (!/404/.test(error.message)) {
+            throw error;
+          }
+          listed = await github.runs.list(item.repository, {
+            workflow,
+            event,
+          });
+        }
+        runs.push(...listed);
       }
       const latest = runs
         .filter(
@@ -304,10 +321,17 @@ async function releaseHealth(github, item, findings, onError) {
         evidence,
       };
       findings.push(finding);
-      evidence.matches = await github.runs.logs(latest.id, {
-        repo: item.repository,
-        grep: RELEASE_FAILURE_PATTERNS,
-      });
+      evidence.matches = await github.runs
+        .logs(latest.id, {
+          repo: item.repository,
+          grep: RELEASE_FAILURE_PATTERNS,
+        })
+        .catch((error) => {
+          if (/GitHub log download (?:404|410)/.test(error.message)) {
+            return { status: "logs-expired", matches: [] };
+          }
+          throw error;
+        });
     } catch (error) {
       onError({ stage: "release", workflow, message: error.message });
     }
@@ -351,9 +375,11 @@ export function renderScan(scan) {
       const status =
         pkg.exists_on_registry === undefined
           ? "registry state unknown"
-          : pkg.trusted_publishing === true
-            ? "published with trusted publishing"
-            : "published; trusted publishing unknown";
+          : pkg.publishing_policy === "oidc-with-token-fallback"
+            ? "trusted publishing + token fallback"
+            : pkg.trusted_publishing === true
+              ? "published with trusted publishing"
+              : "published; trusted publishing unknown";
       rows.push(`${repo.repository}\t${pkg.registry}\t${pkg.name}\t${status}`);
     }
   }

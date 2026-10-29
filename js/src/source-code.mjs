@@ -53,7 +53,8 @@ export function commandPosition(prefix) {
     /^(?:(?:npx|bunx|exec|sudo|env|time|command|pnpm\s+exec|yarn|\w+=\S*)\s+)*$/.test(
       segment,
     ) ||
-    /(?:\$|shell)\s*`\s*$/.test(segment) ||
+    /(?:\$|shell|=)\s*`\s*$/.test(segment) ||
+    /\$\(\s*$/.test(segment) ||
     /(?:exec(?:Sync)?|spawn(?:Sync)?|run(?:_command)?|system|check_call|check_output|Popen)\s*\(\s*["'`]\s*$/.test(
       segment,
     )

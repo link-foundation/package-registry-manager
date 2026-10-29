@@ -26,6 +26,7 @@ pub fn npm_plan(state: impl FnOnce(&mut Package), verify_release: bool) -> Setup
     );
     let options = PlanOptions {
         verify_release,
+        delete_token_secrets: true,
         endpoints: Endpoints::default(),
         ..PlanOptions::default()
     };
@@ -190,7 +191,7 @@ fn finds_npm_web_authentication_urls_in_streamed_output() {
 fn never_reads_writes_or_requests_an_npm_token() {
     let forbidden = [
         r"_authToken",
-        r"NODE_AUTH_TOKEN",
+        r#"process\.env\.NODE_AUTH_TOKEN|env::var\("NODE_AUTH_TOKEN"\)"#,
         r"\bnpm token\b",
         r#""token",\s*"create""#,
         r"process\.env\.NPM_TOKEN",

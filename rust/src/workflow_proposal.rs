@@ -102,13 +102,14 @@ fn job(
         .collect(),
         Registry::CratesIo => [
             "      - uses: dtolnay/rust-toolchain@stable",
-            "      - uses: rust-lang/crates-io-auth-action@v1",
+            "      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5",
+            "        continue-on-error: true",
             "        if: steps.version-check.outputs.publish == 'true'",
             "        id: auth",
             "      - run: cargo publish",
             "        if: steps.version-check.outputs.publish == 'true'",
             "        env:",
-            "          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}",
+            "          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN || secrets.CARGO_TOKEN }}",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -160,6 +161,18 @@ fn job(
         );
     }
     lines.extend(steps);
+    if matches!(package.registry, Registry::Npm | Registry::PyPi) {
+        let at = lines
+            .iter()
+            .rposition(|line| {
+                line.contains("- run: npm publish")
+                    || line.contains("- uses: pypa/gh-action-pypi-publish")
+            })
+            .expect("publishing step");
+        let edits =
+            crate::workflow_migration::fallback_steps(&lines[at..], package.registry, 6, index);
+        lines.splice(at.., edits.into_iter().flatten());
+    }
     Ok(format!("{}\n", lines.join("\n")))
 }
 
@@ -329,9 +342,11 @@ pub async fn offer_workflow(
     options: WorkflowOptions<'_>,
 ) -> Result<Option<String>> {
     let packages: Vec<_> = plans.iter().map(|plan| plan.package.clone()).collect();
-    let migration = packages
-        .iter()
-        .any(|package| !package.token_secrets.is_empty());
+    println!("Proposal preview uses the inspected working tree. Execution recomputes from the latest default branch and displays changes before approval.");
+    let migration = packages.iter().any(|package| {
+        package.workflow.is_some()
+            && (!package.token_secrets.is_empty() || package.publishing_policy.is_some())
+    });
     let propose = |root: &Path, override_file: Option<&str>| -> Result<WorkflowProposal> {
         if migration {
             let files = crate::workflow_migration::workflow_migration_proposal(
@@ -446,7 +461,7 @@ pub async fn offer_workflow(
         if migration {
             for directory in ["changelog.d","rust/changelog.d","js/changelog.d"] {
                 if fs::symlink_metadata(checkout.join(directory)).is_ok_and(|metadata| metadata.is_dir()) {
-                    files.insert(format!("{directory}/{}_trusted_publishing.md",chrono::Utc::now().format("%Y%m%d_%H%M%S")),"---\nbump: patch\n---\n\n### Changed\n- Publish through GitHub Actions trusted publishing and remove long-lived registry token workflow inputs.\n".into());
+                    files.insert(format!("{directory}/{}_trusted_publishing.md",chrono::Utc::now().format("%Y%m%d_%H%M%S")),"---\nbump: patch\n---\n\n### Changed\n- Publish through GitHub Actions trusted publishing with token secrets retained as fallback.\n".into());
                 }
             }
         }
@@ -465,7 +480,7 @@ pub async fn offer_workflow(
         run(&checkout, "git", &["commit", "-m", title], verbose).await?;
         run(&checkout, "git", &["push", "origin", &format!("HEAD:refs/heads/{branch}")], verbose).await?;
         let names = plans.iter().map(|plan| format!("{}: {}", plan.registry, plan.package.name)).collect::<Vec<_>>().join(", ");
-        let body = format!("{} for {names} in {}. Review the build, versioning, triggers and job dependencies before merging. Then re-run setup{} to attach the trusted publishers to the caller workflow{}.",if migration {"Convert existing token publishing"} else {"Add missing publishing jobs"},files.keys().cloned().collect::<Vec<_>>().join(", "),if migration {" --migrate"} else {""},if migration {" and verify an OIDC release before cleaning up legacy secrets"} else {""});
+        let body = format!("{} for {names} in {}. Review the build, versioning, triggers and job dependencies before merging. Then re-run setup{} to attach the trusted publishers to the caller workflow{}.",if migration {"Convert existing token publishing"} else {"Add missing publishing jobs"},files.keys().cloned().collect::<Vec<_>>().join(", "),if migration {" --migrate"} else {""},if migration {" and verify an OIDC release while retaining fallback secrets"} else {""});
         let body_file = temporary.path().join("pr-body.md"); fs::write(&body_file,body)?;
         let url = run(&checkout, "gh", &["pr", "create", "--repo", &slug, "--base", &base, "--head", &branch, "--draft", "--title", title, "--body-file", &body_file.to_string_lossy()], verbose).await?;
         println!("Review {url}, merge it, then re-run setup. Trusted publishers have not been attached.");

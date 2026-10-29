@@ -237,6 +237,7 @@ pub async fn execute_plans_with(
     }
     protect_legacy_profile(options.repository, options.browser_profile, options.verbose).await?;
     let mut browser = None;
+    let mut browser_headless = false;
     let mut sessions = Vec::new();
     let mut outcomes = Vec::new();
     let mut failure = None;
@@ -306,10 +307,12 @@ pub async fn execute_plans_with(
         }
         let mut session = Session::new(plan, options);
         session.browser = browser.take();
+        session.browser_headless = browser_headless;
         session.domains.clone_from(&domains);
         let result = session.run().await;
         let deferred = session.cleanup(plans.len() > 1, false).await;
         browser = session.browser.take();
+        browser_headless = session.browser_headless;
         let details = session
             .values
             .get("secret_scope")
@@ -362,6 +365,7 @@ pub async fn execute_plans_with(
     let mut signed_out = std::collections::BTreeSet::new();
     for (mut session, deferred) in sessions {
         session.browser = browser.take();
+        session.browser_headless = browser_headless;
         for step in deferred {
             if preserve_npm_session && step.id == "sign-out" {
                 println!(
@@ -377,6 +381,7 @@ pub async fn execute_plans_with(
         }
         session.shim = None;
         browser = session.browser.take();
+        browser_headless = session.browser_headless;
     }
     if let Some(browser) = browser {
         browser.close().await;

@@ -36,7 +36,8 @@ Global options:
   --org <org> | --user <login>      Scan repositories through gh-manager
   --secret-name <template>         Secret name; supports {REGISTRY}, {REPO}, {ORG}
   --rotate-token <secret>          Explicitly replace a legacy crates.io token
-  --migrate                       Convert token jobs in PRs, then verify OIDC and clean up secrets
+  --migrate                       Convert jobs to OIDC with token fallback, then verify releases
+  --delete-token-secrets          Opt in to verified unused token and expiry cleanup
   --token-expiry-days <N>          Read browser token inventory in account scans
   --format <text|json>            Output format (default: text)
   --offline                       Do not look up packages on registries
@@ -118,6 +119,7 @@ export async function main(args = process.argv.slice(2)) {
       "secret-name": { type: "string" },
       "rotate-token": { type: "string" },
       migrate: { type: "boolean", default: false },
+      "delete-token-secrets": { type: "boolean", default: false },
       "token-expiry-days": { type: "string" },
       format: { type: "string", default: "text" },
       verbose: { type: "boolean", default: false },
@@ -273,6 +275,7 @@ export async function main(args = process.argv.slice(2)) {
         secretName: values["secret-name"],
         rotateToken,
         migrate: values.migrate,
+        deleteTokenSecrets: values["delete-token-secrets"],
         tokenExpiryDays,
         package: values.package,
         browser: values.browser,
@@ -288,6 +291,7 @@ export async function main(args = process.argv.slice(2)) {
           publisherEnvironment: values.environment,
           addPublishJob: values["add-publish-job"],
           migrate: values.migrate,
+          deleteTokenSecrets: values["delete-token-secrets"],
           manual: values.manual,
           verifyRelease: values["verify-release"],
         },
@@ -331,6 +335,7 @@ export async function main(args = process.argv.slice(2)) {
   const planOptions = {
     rotateToken,
     migrate: values.migrate,
+    deleteTokenSecrets: values["delete-token-secrets"],
     ref: values.ref,
     verifyRelease: values["verify-release"],
     manual: values.manual,
@@ -375,9 +380,10 @@ export async function main(args = process.argv.slice(2)) {
   }
 
   const plans = buildPlans(inspection, registries, planOptions);
-  const selected = values.all
-    ? plans.filter((plan) => plan.package.publishable)
-    : [selectPlan(plans, values.package)];
+  const selected =
+    values.all || (values.migrate && !values.package)
+      ? plans.filter((plan) => plan.package.publishable)
+      : [selectPlan(plans, values.package)];
   outputPlans(selected, values.format);
   await executePlans(
     selected,
@@ -394,6 +400,7 @@ export async function main(args = process.argv.slice(2)) {
       secretName: values["secret-name"],
       rotateToken,
       migrate: values.migrate,
+      deleteTokenSecrets: values["delete-token-secrets"],
       quietBrowser: selected.some((plan) =>
         plan.steps.some((step) =>
           ["manage-registry-token", "rotate-crates-token"].includes(step.id),
@@ -408,7 +415,7 @@ export async function main(args = process.argv.slice(2)) {
       verbose: values.verbose,
       verifyRelease: values["verify-release"],
     },
-    values.all,
+    values.all || values.migrate,
   );
 }
 
@@ -520,7 +527,14 @@ function outputInspection(inspection, format) {
         packageInfo.exists_on_registry ? "published" : "not published yet",
       );
     }
-    if (packageInfo.trusted_publishing) {
+    if (packageInfo.registry_http_status) {
+      details.push(
+        `registry state unknown (HTTP ${packageInfo.registry_http_status})`,
+      );
+    }
+    if (packageInfo.publishing_policy === "oidc-with-token-fallback") {
+      details.push("trusted publishing + token fallback");
+    } else if (packageInfo.trusted_publishing) {
       details.push("trusted publishing");
     }
     process.stdout.write(

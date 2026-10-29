@@ -178,12 +178,17 @@ for (const scope of [{ org: "team" }, { user: "team" }]) {
     ]);
     assert.deepEqual(logs, [[3, "team/expired"]]);
     assert.equal(scan.repositories[0].inspection.packages.length, 1);
-    assert.match(scan.repositories[0].error, /410/);
+    assert.equal(scan.repositories[0].error, undefined);
+    assert.equal(
+      scan.findings.find((item) => item.type === "release-failing").evidence
+        .matches.status,
+      "logs-expired",
+    );
     assert.equal(
       scan.findings.filter((item) => item.type === "unpublished").length,
       3,
     );
-    assert.match(renderScan(scan), /410/);
+    assert.doesNotMatch(renderScan(scan), /410/);
     assert.match(JSON.stringify(scan), /files forbidden/);
   });
 }
@@ -265,10 +270,18 @@ test("HTTP registry errors retain unknown state and successful peer findings (#4
       manifest: "package.json",
       package: "scan-fixture",
       message: "registry lookup returned HTTP 503",
+      http_status: 503,
     },
   ]);
-  assert.equal(scan.findings.length, 1);
-  assert.equal(scan.findings[0].package, "peer");
+  assert.equal(scan.findings.length, 2);
+  assert.equal(
+    scan.findings.find((item) => item.package === "scan-fixture").type,
+    "registry-state-unknown",
+  );
+  assert.equal(
+    scan.findings.find((item) => item.package === "peer").type,
+    "unpublished",
+  );
 });
 
 test("unknown registry state stays unknown and unsafe file paths are rejected (#43)", async () => {

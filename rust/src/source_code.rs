@@ -61,7 +61,8 @@ pub fn command_position(prefix: &str) -> bool {
         .trim_start();
     [
         r"^(?:(?:npx|bunx|exec|sudo|env|time|command|pnpm\s+exec|yarn|\w+=\S*)\s+)*$",
-        r"(?:\$|shell)\s*`\s*$",
+        r"(?:\$|shell|=)\s*`\s*$",
+        r"\$\(\s*$",
         r#"(?:exec(?:Sync)?|spawn(?:Sync)?|run(?:_command)?|system|check_call|check_output|Popen)\s*\(\s*["'`]\s*$"#,
     ].iter().any(|pattern| Regex::new(pattern).expect("static pattern").is_match(segment))
 }

@@ -350,11 +350,15 @@ export async function runCratesApiStep(session, step) {
   }
   const crate = plan.package.name;
   const domains = signInDomains(plan.registry);
-  let page = await session.automatedPage();
+  let page = await session.automatedPage(undefined, false, true);
   switch (step.id) {
     case "crates-sign-in": {
       await page.goto(CRATES_IO_URL);
-      if (!(await readSession(page)).signedIn) {
+      const saved = await readSession(page);
+      if (!saved.signedIn || !saved.emailVerified) {
+        page = await session.visiblePage();
+      }
+      if (!saved.signedIn) {
         // Whether imported or signed in by hand, the sign-in is this run's.
         conditions.add("crates-signed-in");
         if (await offerSignInImport(session, domains)) {
@@ -362,6 +366,9 @@ export async function runCratesApiStep(session, step) {
         }
       }
       await signIn(page, options);
+      console.log(
+        "Using your crates.io session to register trusted publishers; no action needed while API requests run.",
+      );
       return;
     }
     case "first-publish": {

@@ -268,6 +268,14 @@ pub async fn run(args: &Args) -> Result<()> {
     let mut plans = Vec::new();
     let mut rotation_consumers = BTreeSet::new();
     for repo in &mut scan.report.repositories {
+        if args.migrate && repo.error.is_some() {
+            eprintln!(
+                "{}: skipped migration: {}",
+                repo.repository,
+                repo.error.as_deref().unwrap_or_default()
+            );
+            continue;
+        }
         let Some(inspection) = &repo.inspection else {
             continue;
         };
@@ -316,6 +324,7 @@ pub async fn run(args: &Args) -> Result<()> {
         };
         let options = PlanOptions {
             migrate: args.migrate,
+            delete_token_secrets: args.delete_token_secrets,
             rotate_token: args.rotate_token.clone(),
             python: python.clone(),
             add_publish_job: publisher.add_publish_job,
@@ -336,7 +345,7 @@ pub async fn run(args: &Args) -> Result<()> {
         );
     }
     plans.sort_by_key(|plan| plan.registry != Registry::Npm);
-    if (args.rotate_token.is_some() || args.migrate)
+    if args.rotate_token.is_some()
         && scan
             .report
             .repositories
@@ -439,7 +448,7 @@ pub async fn run(args: &Args) -> Result<()> {
             if plans.is_empty() {
                 bail!("some repositories could not be prepared; see scan errors");
             }
-            if (args.rotate_token.is_some() || args.migrate)
+            if args.rotate_token.is_some()
                 && scan
                     .report
                     .repositories
@@ -465,6 +474,7 @@ pub async fn run(args: &Args) -> Result<()> {
                 no_browser: *no_browser,
                 open_with: open_with.as_deref(),
                 keep_session: !*sign_out,
+                delete_token_secrets: args.delete_token_secrets,
                 verbose: args.verbose,
                 secret_name: args.secret_name.as_deref(),
                 quiet_browser: true,

@@ -35,14 +35,14 @@ fn adds_oidc_jobs_in_the_shared_release_workflow() {
     for expected in [
         "npm install --global npm@^11",
         "npm publish --provenance --access public",
-        "rust-lang/crates-io-auth-action@v1",
+        "rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5",
         "cargo publish",
         "id-token: write",
         "github.ref == format(",
     ] {
         assert!(proposal.contents.contains(expected), "{expected}");
     }
-    assert!(!proposal.contents.contains("NPM_TOKEN"));
+    assert!(proposal.contents.contains("secrets.NPM_TOKEN"));
     assert!(proposal.contents.ends_with("env:\n  OTHER: kept\n"));
     let updated = vec![Workflow {
         name: proposal.workflow,

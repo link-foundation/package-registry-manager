@@ -113,10 +113,13 @@ test("adds missing jobs in the workflow already used by the other registries (#3
   assert.equal(proposal.workflow, "release.yml");
   assert.match(proposal.contents, /npm publish --provenance --access public/);
   assert.match(proposal.contents, /npm install --global npm@\^11/);
-  assert.match(proposal.contents, /rust-lang\/crates-io-auth-action@v1/);
+  assert.match(
+    proposal.contents,
+    /rust-lang\/crates-io-auth-action@c6f97d4.*# v1.0.5/,
+  );
   assert.match(proposal.contents, /cargo publish/);
   assert.match(proposal.contents, /id-token: write/);
-  assert.doesNotMatch(proposal.contents, /NPM_TOKEN/);
+  assert.match(proposal.contents, /secrets.NPM_TOKEN/);
   assert.equal(proposal.contents.split("env:\n").at(-1), "  OTHER: kept\n");
   assert.match(proposal.contents, /github.ref == format\(/);
 });

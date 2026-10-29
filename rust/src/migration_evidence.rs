@@ -20,6 +20,19 @@ pub fn published_through_oidc(job: &Value, log: &str, registry: Registry) -> boo
     {
         return false;
     }
+    if registry != Registry::CratesIo
+        && (steps.iter().any(|step| {
+            step["name"]
+                .as_str()
+                .is_some_and(|name| name.to_lowercase().contains("token fallback"))
+        }) || !steps.iter().any(|step| {
+            step["name"]
+                .as_str()
+                .is_some_and(|name| name.contains("OIDC"))
+        }))
+    {
+        return false;
+    }
     match registry {
         Registry::CratesIo => {
             steps.iter().any(|step| {

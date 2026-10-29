@@ -246,6 +246,9 @@ function withPublisher(item, workflows, publishers) {
     return item;
   }
   const result = { ...item };
+  if (publisher.policy) {
+    result.publishing_policy = publisher.policy;
+  }
   if (publisher.workflow) {
     result.workflow = publisher.workflow;
   }
@@ -266,7 +269,9 @@ function withPublisher(item, workflows, publishers) {
           `no workflow publishes ${item.name} to ${item.registry}; CI releases will not reach it`,
         ]
       : []),
-    ...secrets.map((secret) => tokenSecretWarning(item.registry, secret)),
+    ...secrets
+      .filter(() => publisher.policy !== "oidc-with-token-fallback")
+      .map((secret) => tokenSecretWarning(item.registry, secret)),
   ];
   if (warnings.length > 0) {
     result.warnings = [...(item.warnings ?? []), ...warnings];
