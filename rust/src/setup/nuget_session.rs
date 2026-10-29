@@ -174,12 +174,12 @@ impl Session<'_> {
                 .is_some_and(|v| v.eq_ignore_ascii_case(account))
         {
             if snapshot["username"].as_str().is_some() {
-                bail!("signed-in NuGet profile differs from configured {account}; policy was not changed");
+                bail!("signed-in NuGet profile differs from the configured identity; policy was not changed");
             }
             if self.options.yes {
                 bail!("NuGet sign-in requires interaction; local session reuse did not verify the configured identity");
             }
-            prompt(&format!("Sign in as {account}; complete password, 2FA or platform passkey authentication, then press Enter..."))?;
+            prompt("Sign in with the configured NuGet profile; complete password, 2FA or platform passkey authentication, then press Enter...")?;
             if tokio::time::Instant::now() >= deadline {
                 bail!("NuGet authentication remains unverified");
             }

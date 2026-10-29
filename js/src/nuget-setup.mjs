@@ -90,7 +90,7 @@ export async function configureNuget(session) {
   ) {
     if (snapshot.username) {
       throw new Error(
-        `signed-in NuGet profile differs from configured ${expected.username}; policy was not changed`,
+        "signed-in NuGet profile differs from the configured identity; policy was not changed",
       );
     }
     if (session.options.yes) {
@@ -99,7 +99,7 @@ export async function configureNuget(session) {
       );
     }
     await session.prompt(
-      `Sign in as ${expected.username} using ${route}; complete password, 2FA or platform passkey authentication, then press Enter...`,
+      `Sign in with the configured NuGet profile using ${route}; complete password, 2FA or platform passkey authentication, then press Enter...`,
     );
     if (Date.now() >= deadline) {
       throw new Error("NuGet authentication remains unverified");
