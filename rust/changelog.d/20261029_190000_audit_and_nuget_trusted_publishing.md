@@ -15,3 +15,5 @@
   distinguish uncertain provider/publication evidence from verified completion.
 - Keep malformed NuGet versions and noncanonical Go proxy metadata unknown;
   omit the configured NuGet profile from interactive sign-in diagnostics.
+- Resolve Windows npm launchers for captured JavaScript commands while retaining
+  exact argument vectors, exit codes and captured diagnostics.

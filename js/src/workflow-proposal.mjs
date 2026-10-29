@@ -8,7 +8,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { exec } from "command-stream";
+import { exec } from "./exec.mjs";
 import { packageDirectory } from "./plan.mjs";
 import { parseWorkflow, registryTokenSecrets } from "./publishers.mjs";
 import { versionGuard } from "./version-guard.mjs";

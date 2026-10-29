@@ -105,6 +105,11 @@ only the canonical publisher. A mapping never renames another package's tarball.
 
 ## Research and existing components
 
+- [Execa's Windows support](https://github.com/sindresorhus/execa/blob/main/docs/windows.md)
+  resolves `PATHEXT` and safely runs `.cmd` launchers such as npm. The existing
+  command-stream Execa adapter now handles captured commands throughout the
+  JavaScript port; its direct `exec` API did not resolve these launchers. Rust
+  already resolves `PATHEXT` through its shared `resolve_program` helper.
 - [NuGet trusted publishing](https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing)
   describes temporary, one-hour credentials and independent package ownership.
   [NuGet/login](https://github.com/NuGet/login) is the official exchange action;

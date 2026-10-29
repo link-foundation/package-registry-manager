@@ -2,7 +2,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { exec } from "command-stream";
+import { exec } from "./exec.mjs";
 import { findBrowserSource } from "browser-commander";
 
 const APPLICATION = "package-registry-manager";

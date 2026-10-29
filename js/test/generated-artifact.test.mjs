@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { exec } from "command-stream";
+import { exec } from "../src/exec.mjs";
 import { prepareGeneratedArtifact } from "../src/generated-artifact.mjs";
 
 test("bootstrap executes the real generator and validates the selected artifact", async () => {
@@ -38,13 +38,15 @@ test("bootstrap executes the real generator and validates the selected artifact"
       },
       values: { worktree: root, pack_destination: root },
       capture: async ({ command, cwd }) => {
-        // Use the same runner as setup, including Windows command-shim support.
-        return exec(command.program, command.args, {
+        // Use the same captured-command adapter as setup.
+        const result = await exec(command.program, command.args, {
           cwd,
           capture: true,
           mirror: false,
           stdin: "ignore",
         });
+        assert.equal(result.code, 0, `${command.program}: ${result.stderr}`);
+        return result;
       },
     };
     await prepareGeneratedArtifact(session);

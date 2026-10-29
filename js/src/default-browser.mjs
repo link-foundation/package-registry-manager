@@ -1,4 +1,4 @@
-import { exec } from "command-stream";
+import { exec } from "./exec.mjs";
 
 import { browserSources, catalogueName } from "./browser-catalogue.mjs";
 

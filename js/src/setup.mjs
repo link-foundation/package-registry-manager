@@ -17,7 +17,7 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout, stderr } from "node:process";
 
-import { exec } from "command-stream";
+import { exec } from "./exec.mjs";
 
 import {
   ANSI,

@@ -40,6 +40,7 @@ coverage. They do not mark the external publication acceptance criteria complete
 
 - [x] Reproduce malformed NuGet version and Go proxy metadata states before fixing both ports and the embedded verifier. Validate canonical Go versions and tagged lists against the official protocol.
 - [x] Replace the Windows generator test raw npm spawn with the production portable runner after CI log line 901 reported ENOENT.
+- [x] Trace the subsequent Windows failure at job log line 904 to direct exec's missing PATHEXT support. Use command-stream's Execa adapter throughout captured JavaScript commands; test literal argv, failure output and real Windows batch launchers.
 - [x] Remove configured NuGet profile values from sign-in messages in both ports after CodeQL alert 18; add a failing-before/passing-after sign-in regression.
 - [ ] Verify all checks on the final pushed SHA, preserving and reading any failing run logs.
 

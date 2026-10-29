@@ -1,7 +1,7 @@
 import { readdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { exec } from "command-stream";
+import { exec } from "./exec.mjs";
 
 // requires-python describes interpreter releases. Reject unsupported or
 // prerelease syntax rather than silently choosing an incompatible executable.
