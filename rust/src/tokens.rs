@@ -21,9 +21,12 @@ pub const CRATES_TOKENS_URL: &str = "https://crates.io/settings/tokens";
 /// Steps that list the repository's secrets and delete the long-lived
 /// registry tokens trusted publishing makes unnecessary, one confirmation each.
 #[must_use]
-pub fn token_secret_steps(package: &Package, slug: &str) -> [SetupStep; 3] {
+pub fn token_secret_steps(package: &Package, slug: &str) -> Vec<SetupStep> {
+    if package.registry == crate::model::Registry::NuGet {
+        return vec![SetupStep::new("audit-token-secrets","Retain NuGet fallback credentials",StepKind::Check,"Retain repository and shared organization fallback secrets after OIDC verification. Deletion requires a separate explicit consumer audit and cleanup decision.").command("gh", &["secret","list","--repo",slug,"--json","name"]).cwd(".")];
+    }
     let names = registry_token_secrets(package.registry).join(", ");
-    [
+    vec![
         SetupStep::new(
             "audit-token-secrets",
             "Look for leftover long-lived token secrets",
@@ -74,14 +77,25 @@ pub fn audit_registry_tokens(output: &str, package: &Package) -> Result<TokenSec
         serde_json::from_str(output)?
     };
     let mut audit = TokenSecretAudit::default();
-    for name in registry_token_secrets(package.registry) {
+    let mut names = registry_token_secrets(package.registry)
+        .iter()
+        .map(|v| (*v).to_owned())
+        .collect::<Vec<_>>();
+    if package.registry == crate::model::Registry::NuGet {
+        names.extend(package.token_secrets.clone());
+        names.sort();
+        names.dedup();
+    }
+    for name in &names {
         if listed.iter().any(|item| item["name"] == *name) {
-            let list = if package.token_secrets.iter().any(|read| read == name) {
+            let list = if package.registry == crate::model::Registry::NuGet
+                || package.token_secrets.iter().any(|read| read == name)
+            {
                 &mut audit.in_use
             } else {
                 &mut audit.leftover
             };
-            list.push((*name).to_owned());
+            list.push((*name).clone());
         }
     }
     Ok(audit)

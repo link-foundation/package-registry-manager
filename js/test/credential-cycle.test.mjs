@@ -7,16 +7,10 @@ import {
 } from "../src/credential-cycle.mjs";
 
 test("registry policy prefers OIDC and built-in GitHub credentials (#38)", () => {
-  for (const registry of [
-    "npm",
-    "pypi",
-    "crates-io",
-    "rubygems",
-    "nuget",
-    "jsr",
-  ]) {
+  for (const registry of ["npm", "pypi", "crates-io", "rubygems", "jsr"]) {
     assert.equal(credentialPolicy(registry).mode, "trusted");
   }
+  assert.equal(credentialPolicy("nuget").mode, "oidc-with-token-fallback");
   assert.equal(credentialPolicy("ghcr").mode, "github-token");
   for (const registry of [
     "docker-hub",

@@ -24,7 +24,9 @@
   ],
   "nuget": [
     "API key.*(?:invalid|expired)",
-    "invalid-publisher"
+    "invalid-publisher",
+    "(?:401.*Unauthorized|403.*Forbidden)",
+    "NuGet/login.*(?:failed|rejected)"
   ],
   "jsr": [
     "invalid-publisher",

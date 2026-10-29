@@ -33,10 +33,13 @@ pub enum Registry {
     VsCodeMarketplace,
     OpenVsx,
     ChromeWebStore,
+    Cmake,
+    Conan,
+    Vcpkg,
 }
 
 impl Registry {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 17] = [
         Self::Npm,
         Self::CratesIo,
         Self::PyPi,
@@ -51,6 +54,9 @@ impl Registry {
         Self::VsCodeMarketplace,
         Self::OpenVsx,
         Self::ChromeWebStore,
+        Self::Cmake,
+        Self::Conan,
+        Self::Vcpkg,
     ];
 
     #[must_use]
@@ -70,6 +76,9 @@ impl Registry {
             Self::VsCodeMarketplace => "VS Code Marketplace",
             Self::OpenVsx => "Open VSX",
             Self::ChromeWebStore => "Chrome Web Store",
+            Self::Cmake => "CMake",
+            Self::Conan => "Conan",
+            Self::Vcpkg => "vcpkg",
         }
     }
 }
@@ -91,6 +100,9 @@ impl fmt::Display for Registry {
             Self::VsCodeMarketplace => "vscode-marketplace",
             Self::OpenVsx => "open-vsx",
             Self::ChromeWebStore => "chrome-web-store",
+            Self::Cmake => "cmake",
+            Self::Conan => "conan",
+            Self::Vcpkg => "vcpkg",
         })
     }
 }
@@ -106,6 +118,9 @@ impl FromStr for Registry {
             "vscode" | "vsce" | "vscode-marketplace" => Ok(Self::VsCodeMarketplace),
             "ovsx" | "open-vsx" => Ok(Self::OpenVsx),
             "chrome-web-store" => Ok(Self::ChromeWebStore),
+            "cmake" => Ok(Self::Cmake),
+            "conan" => Ok(Self::Conan),
+            "vcpkg" => Ok(Self::Vcpkg),
             "npm" => Ok(Self::Npm),
             "cargo" | "crate" | "crates" | "crates-io" => Ok(Self::CratesIo),
             "python" | "pypi" => Ok(Self::PyPi),
@@ -125,6 +140,8 @@ impl FromStr for Registry {
 /// A package discovered in a repository, with its registry state when probed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Package {
+    #[serde(default, flatten)]
+    pub audit: std::collections::BTreeMap<String, serde_json::Value>,
     pub registry: Registry,
     pub name: String,
     pub version: Option<String>,
@@ -197,6 +214,7 @@ impl Package {
     ) -> Self {
         Self {
             registry,
+            audit: std::collections::BTreeMap::new(),
             requires_python: None,
             name,
             version,

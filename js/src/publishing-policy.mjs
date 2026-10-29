@@ -20,7 +20,12 @@ export const AUTH_FAILURE_PATTERNS = Object.freeze({
     "403.*Forbidden",
   ],
   rubygems: ["API key.*(?:invalid|expired)", "invalid-publisher"],
-  nuget: ["API key.*(?:invalid|expired)", "invalid-publisher"],
+  nuget: [
+    "API key.*(?:invalid|expired)",
+    "invalid-publisher",
+    "(?:401.*Unauthorized|403.*Forbidden)",
+    "NuGet/login.*(?:failed|rejected)",
+  ],
   jsr: ["invalid-publisher", "publishing.*(?:unauthorized|permission)"],
   "docker-hub": [
     "unauthorized: authentication required",
@@ -43,4 +48,5 @@ export const AUTH_FAILURE_PATTERNS = Object.freeze({
 
 export const RELEASE_FAILURE_PATTERNS = Object.freeze([
   ...new Set(Object.values(AUTH_FAILURE_PATTERNS).flat()),
+  "npm owner setup required for",
 ]);

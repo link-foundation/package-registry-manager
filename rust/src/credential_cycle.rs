@@ -17,7 +17,8 @@ pub struct CredentialPolicy {
 #[must_use]
 pub fn credential_policy(registry: Registry) -> CredentialPolicy {
     let (mode, description) = match registry {
-        Registry::Npm | Registry::PyPi | Registry::CratesIo | Registry::RubyGems | Registry::NuGet | Registry::Jsr => ("trusted", format!("{registry}: trusted publishing; remove unused long-lived tokens after verification")),
+        Registry::NuGet => ("oidc-with-token-fallback", "NuGet/login OIDC first; use an existing provided token only after unavailable or rejected OIDC. Retain fallback secrets; no persistent key creation.".into()),
+        Registry::Npm | Registry::PyPi | Registry::CratesIo | Registry::RubyGems | Registry::Jsr => ("trusted", format!("{registry}: trusted publishing; remove unused long-lived tokens after verification")),
         Registry::Ghcr => ("github-token", "ghcr: GITHUB_TOKEN with packages: write; no registry secret".into()),
         Registry::GoModules | Registry::Packagist => ("tags", format!("{registry}: public repository tags; no publishing token secret")),
         _ => ("token", format!("{registry}: scoped expiring token; gh-manager stores selected-repository organization secrets by default")),

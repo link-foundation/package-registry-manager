@@ -13,11 +13,12 @@ pub(super) struct ReleaseSelection {
     pub run: Option<Value>,
     pub publish_failure: bool,
     pub branch: String,
+    pub jobs: Vec<Value>,
 }
 
 #[allow(clippy::future_not_send)] // Session includes native browser automation.
 impl Session<'_> {
-    async fn release_query(&self, args: &[&str]) -> Result<String> {
+    pub(super) async fn release_query(&self, args: &[&str]) -> Result<String> {
         let step = SetupStep::new(
             "release-lookup",
             "Read release runs",
@@ -82,6 +83,7 @@ impl Session<'_> {
             run: eligible.first().cloned(),
             publish_failure: false,
             branch,
+            jobs: Vec::new(),
         };
         for run in eligible.iter().filter(|run| run["conclusion"] == "failure") {
             let output = self
@@ -99,6 +101,7 @@ impl Session<'_> {
             if failed_publishing_job(&details["jobs"]) {
                 selection.run = Some(run.clone());
                 selection.publish_failure = true;
+                selection.jobs = details["jobs"].as_array().cloned().unwrap_or_default();
                 break;
             }
         }

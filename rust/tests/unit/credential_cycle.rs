@@ -25,11 +25,14 @@ fn oidc_and_builtin_credentials_take_precedence() {
         Registry::PyPi,
         Registry::CratesIo,
         Registry::RubyGems,
-        Registry::NuGet,
         Registry::Jsr,
     ] {
         assert_eq!(credential_policy(registry).mode, "trusted");
     }
+    assert_eq!(
+        credential_policy(Registry::NuGet).mode,
+        "oidc-with-token-fallback"
+    );
     assert_eq!(credential_policy(Registry::Ghcr).mode, "github-token");
     for registry in [
         Registry::DockerHub,

@@ -439,10 +439,19 @@ monorepo), then request that version through `proxy.golang.org`. See
 
 ### NuGet
 
-The CLI creates a Release package locally with `dotnet pack`, then opens
-NuGet.org trusted publishing. Add the GitHub repository and workflow as a
-federated credential, scope it to the package, and keep the actual push in CI.
-See [NuGet trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing).
+Configure the explicit NuGet login profile, package owner, exact IDs and push
+operation in `.package-registry-manager.json`. Setup discovers the policy in a
+dedicated authenticated browser, verifies the active saved state, and ensures
+the effective `NUGET_USER` Actions variable through gh-manager. It never registers
+template placeholders or broadens a policy to work around an incompatible probe.
+
+Generated CI uses official `NuGet/login` first and retains an existing provided
+fallback (`NUGET_TOKEN`, `NUGET_API_KEY` or the workflow's custom name). Only an
+unavailable/rejected trusted path can select fallback. Authentication retries
+reuse the same validated package; actual push, exact public download and consumer
+checks remain required. Setup itself does not upload NuGet artifacts.
+See [configuration and verification requirements](docs/issue-73-requirements.md)
+and [NuGet trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing).
 
 ### Maven Central
 

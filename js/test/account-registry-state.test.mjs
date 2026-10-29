@@ -22,7 +22,11 @@ test("account scans query NuGet, RubyGems and JSR without guessing trusted-publi
       {
         fetch: async (actual) => {
           assert.equal(actual, url);
-          return { ok: true, status: 200, json: async () => ({}) };
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ versions: ["1.0.0"] }),
+          };
         },
       },
     );

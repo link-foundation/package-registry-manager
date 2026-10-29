@@ -11,7 +11,6 @@ fn requires_verified_oidc_before_unused_secret_deletion() {
         Registry::PyPi,
         Registry::CratesIo,
         Registry::RubyGems,
-        Registry::NuGet,
         Registry::Jsr,
     ] {
         let steps = package_registry_manager::tokens::token_secret_steps(
@@ -29,6 +28,17 @@ fn requires_verified_oidc_before_unused_secret_deletion() {
         assert_eq!(steps[1].kind, package_registry_manager::StepKind::Manual);
         assert_eq!(steps[1].when.as_deref(), Some("token-secret-present"));
     }
+}
+
+#[test]
+fn nuget_retains_designated_fallback_secrets() {
+    assert_eq!(
+        ids(&package_registry_manager::tokens::token_secret_steps(
+            &crate_package(Registry::NuGet),
+            "acme/demo"
+        )),
+        ["audit-token-secrets"]
+    );
 }
 
 fn ids(steps: &[SetupStep]) -> Vec<&str> {

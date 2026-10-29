@@ -93,6 +93,19 @@ fn visit(
     }
 }
 pub(crate) fn policy(text: &str, registry: Registry, grant: bool) -> &'static str {
+    if registry == Registry::NuGet {
+        let oidc = grant && text.contains("NuGet/login@");
+        let fallback = rx(r"PRM_NUGET_FALLBACK:\s*\$\{\{\s*secrets\.[\w]+").is_match(text);
+        return if oidc && fallback && rx(r"continue-on-error:\s*true").is_match(text) {
+            "oidc-with-token-fallback"
+        } else if oidc {
+            "oidc-only"
+        } else if rx(r"secrets\.[\w]+").is_match(text) {
+            "token-only"
+        } else {
+            "authentication-unverified"
+        };
+    }
     let token = rx(r"secrets\.(?:CARGO_(?:REGISTRY_)?TOKEN|NPM_(?:AUTH_)?TOKEN|NODE_AUTH_TOKEN|PYPI_(?:API_)?TOKEN)").is_match(text);
     let oidc = grant
         && match registry {

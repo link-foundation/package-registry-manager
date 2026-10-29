@@ -1,8 +1,13 @@
 /** Registry-specific policy; tokens are never a fallback for OIDC registries. */
 export function credentialPolicy(registry) {
-  if (
-    ["npm", "pypi", "crates-io", "rubygems", "nuget", "jsr"].includes(registry)
-  ) {
+  if (registry === "nuget") {
+    return {
+      mode: "oidc-with-token-fallback",
+      description:
+        "NuGet: NuGet/login OIDC first, retain provided fallback secrets; never create a persistent publishing key",
+    };
+  }
+  if (["npm", "pypi", "crates-io", "rubygems", "jsr"].includes(registry)) {
     return {
       mode: "trusted",
       description: `${registry}: trusted publishing; remove unused long-lived tokens after verification`,

@@ -3,6 +3,9 @@ import { tokenSecretSteps } from "./tokens.mjs";
 
 /** Additional OIDC registries never fall back to a stored publishing token. */
 export function trustedFlow(item, context) {
+  if (item.registry === "nuget") {
+    return nugetFlow(item, context);
+  }
   const specs = {
     rubygems: [
       "gem",
@@ -85,4 +88,40 @@ export function tokenFlow(item) {
   return steps.concat(
     credentialSteps(item.registry, item.token_secrets?.[0] ?? item.registry),
   );
+}
+
+/** NuGet uses explicit account policy and preserves provided fallback credentials. */
+export function nugetFlow(item, context) {
+  return [
+    {
+      id: "validate-package",
+      title: "Validate NuGet package",
+      kind: "check",
+      description:
+        "Build and test the selected project before configuration; do not upload.",
+      command: {
+        program: "dotnet",
+        args: [
+          "test",
+          item.manifest.split("/").at(-1),
+          "--configuration",
+          "Release",
+        ],
+      },
+    },
+    {
+      id: "configure-nuget-policy",
+      title: "Verify exact NuGet trusted publishing policy",
+      kind: "api",
+      description:
+        "Read explicit nuget.username, package_owner, package_ids and operations from .package-registry-manager.json; resolve immutable GitHub IDs, verify the authenticated profile, discover before creating a narrow policy, read activation back and ensure effective NUGET_USER through gh-manager. Retain existing fallback secrets.",
+    },
+    {
+      id: "verify-nuget-release",
+      title: "Verify NuGet CI and exact public consumer",
+      kind: "api",
+      description: `Verify ${context.workflow}: successful OIDC exchange and actual upload are separate gates. Retain existing token fallbacks. Require the repaired current-main revision, every required build/test/documentation/mirror/release stage, exact public package download and consumer restore/build. A skipped stage or placeholder remains incomplete.`,
+    },
+    ...(context.slug ? tokenSecretSteps(item, context.slug) : []),
+  ];
 }

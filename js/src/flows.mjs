@@ -244,6 +244,11 @@ export function npmFlow(packageInfo, context) {
     name,
     "--browser=false",
   ]);
+  const artifact =
+    packageInfo.generated_alias ?? packageInfo.generated_artifact;
+  const packCwd = artifact
+    ? "{generated_package}"
+    : packageCwd(context.directory);
   const steps = [
     step(
       "validate-package",
@@ -276,6 +281,17 @@ export function npmFlow(packageInfo, context) {
       { command: command("npm", ["whoami"]) },
     ),
     ...worktreeSteps(),
+    ...(artifact
+      ? [
+          step(
+            "prepare-generated-artifact",
+            "Generate the selected npm artifact",
+            "check",
+            "Run the declared generator in the clean checkout and validate the generated name/version before packing.",
+            { when: "package-missing" },
+          ),
+        ]
+      : []),
     step(
       "pack",
       "Pack the package",
@@ -290,7 +306,7 @@ export function npmFlow(packageInfo, context) {
           "{pack_destination}",
         ]),
         when: "package-missing",
-        cwd: packageCwd(context.directory),
+        cwd: packCwd,
       },
     ),
     step(
@@ -337,7 +353,7 @@ export function npmFlow(packageInfo, context) {
           "--provenance=false",
         ]),
         when: "package-missing",
-        cwd: packageCwd(context.directory),
+        cwd: packCwd,
       },
     ),
     // Sign in right before publishing, so the sign-in, publish, and trust
@@ -373,7 +389,7 @@ export function npmFlow(packageInfo, context) {
           "--provenance=false",
         ]),
         when: "package-missing",
-        cwd: packageCwd(context.directory),
+        cwd: packCwd,
         confirm: true,
       },
     ),

@@ -6,6 +6,8 @@ import {
   createRunManager,
   createSecretHealth,
   createSecretManager,
+  createVariableManager,
+  createRepairVerifier,
 } from "@link-foundation/gh-manager";
 
 /** GitHub-only operations, supplied by the installed gh-manager library. */
@@ -32,6 +34,8 @@ export function githubServices(options = {}) {
     repos: createRepoManager(context),
     runs: createRunManager(context),
     health: createSecretHealth(context),
+    variables: (scope) => createVariableManager({ ...context, scope }),
+    repair: createRepairVerifier(context),
     secrets: (scope) => {
       if (typeof scope.repo === "string") {
         const [owner, name, extra] = scope.repo.split("/");

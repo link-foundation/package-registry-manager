@@ -13,9 +13,15 @@ export const REGISTRIES = Object.freeze([
   "vscode-marketplace",
   "open-vsx",
   "chrome-web-store",
+  "cmake",
+  "conan",
+  "vcpkg",
 ]);
 
 const REGISTRY_ALIASES = new Map([
+  ["cmake", "cmake"],
+  ["conan", "conan"],
+  ["vcpkg", "vcpkg"],
   ["ruby", "rubygems"],
   ["rubygems", "rubygems"],
   ["gem", "rubygems"],

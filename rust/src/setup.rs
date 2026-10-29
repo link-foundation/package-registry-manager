@@ -21,8 +21,7 @@ use crate::flows::CLEANUP_CONDITIONS;
 use crate::model::Registry;
 use crate::model::{CommandSpec, SetupPlan, SetupStep, StepKind};
 use crate::npm_package::{
-    development_directories, lists_trusted_publisher, packed_entry, report_pack_warnings,
-    trust_created, verify_bins, PUBLISH_REJECTED,
+    lists_trusted_publisher, report_pack_warnings, trust_created, verify_bins, PUBLISH_REJECTED,
 };
 use crate::pages::{pages_change_warning, report_pages, PagesState, PAGES_CHANGES};
 use crate::plan::package_directory;
@@ -33,10 +32,16 @@ use crate::tokens::{
 };
 
 mod batch;
+mod bootstrap_session;
 mod browser_session;
 mod crates_session;
 mod credential_session;
+mod distribution_channel;
+mod generated_artifact;
 mod migration_cleanup;
+mod nuget_ci;
+mod nuget_session;
+mod pack_session;
 mod publisher_session;
 mod release_session;
 mod repository_session;
@@ -109,6 +114,8 @@ struct Session<'a> {
     browser_headless: bool,
     domains: Vec<&'static str>,
     temporary: Option<tempfile::TempDir>,
+    imported_profiles: Vec<tempfile::TempDir>,
+    recovery_steps: Vec<SetupStep>,
     shim: Option<(tempfile::TempDir, PathBuf)>,
     /// The default browser's name, when detected.
     browser_name: Option<&'static str>,
@@ -140,6 +147,8 @@ impl<'a> Session<'a> {
             browser_headless: false,
             domains: crate::sign_in_import::sign_in_domains(plan.registry).to_vec(),
             temporary: None,
+            imported_profiles: Vec::new(),
+            recovery_steps: Vec::new(),
             shim: None,
             browser_name: None,
             browser_detected: false,
@@ -160,6 +169,18 @@ impl<'a> Session<'a> {
 
     async fn run(&mut self) -> Result<()> {
         for step in &self.plan.steps {
+            if !self.recovery_steps.is_empty()
+                && [
+                    "trigger-release",
+                    "find-release-run",
+                    "watch-release",
+                    "wait-for-release",
+                ]
+                .contains(&step.id.as_str())
+            {
+                self.recovery_steps.push(step.clone());
+                continue;
+            }
             match step.when.as_deref() {
                 // cleanup() runs these, even after a failed step.
                 Some(when) if CLEANUP_CONDITIONS.contains(&when) => {}
@@ -241,6 +262,22 @@ impl<'a> Session<'a> {
     }
 
     async fn run_step(&mut self, step: &SetupStep) -> Result<()> {
+        if step.id == "audit-distribution-channel" {
+            return self.audit_distribution_channel().await;
+        }
+        if step.id == "prepare-generated-artifact" {
+            return self.prepare_generated_artifact().await;
+        }
+        if step.id == "verify-nuget-release" {
+            if !self.values.contains_key("draining_recovery") {
+                self.recovery_steps.push(step.clone());
+                return Ok(());
+            }
+            return self.verify_nuget_release().await;
+        }
+        if step.id == "configure-nuget-policy" {
+            return self.configure_nuget().await;
+        }
         if step.id == "cleanup-migrated-secrets" {
             return self.cleanup_migrated_secrets().await;
         }
@@ -389,6 +426,12 @@ impl<'a> Session<'a> {
             "read-release-failure" => {
                 if result.code != 0 {
                     eprintln!("warning: could not read the failed release log");
+                } else if !crate::bootstrap_recovery::bootstrap_names(output).is_empty() {
+                    let names = crate::bootstrap_recovery::bootstrap_names(output);
+                    println!("  Bootstrap preflight requires {}; fresh existence and publisher checks are required before retry.", names.join(", "));
+                    self.values
+                        .insert("bootstrap_names".into(), serde_json::to_string(&names)?);
+                    self.conditions.insert("release-failed-publish");
                 } else if Regex::new(PUBLISH_REJECTED)?.is_match(output) {
                     println!(
                         "  It failed at publish: the registry rejected the workflow's trusted publishing identity (OIDC/E404/invalid-publisher). After attaching trust, its failed jobs can be re-run."
@@ -567,6 +610,13 @@ impl<'a> Session<'a> {
                 .insert("pack_destination".to_owned(), destination);
             self.temporary = Some(temporary);
         }
+        if step.id == "rerun-release" && self.values.contains_key("bootstrap_names") {
+            if !self.values.contains_key("draining_recovery") {
+                self.recovery_steps.push(step.clone());
+                return Ok(());
+            }
+            return self.recover_bootstrap().await;
+        }
         if step.id == "rerun-release" {
             if let Some(run) = self
                 .release_selection
@@ -634,7 +684,11 @@ impl<'a> Session<'a> {
             }
         }
         match step.id.as_str() {
+            "first-publish" => {
+                self.values.insert("recovery_changed".into(), "true".into());
+            }
             "attach-trusted-publisher" if trust_created(&result.stdout) => {
+                self.values.insert("recovery_changed".into(), "true".into());
                 println!("  npm stored the trusted publisher.");
                 self.conditions.remove("trust-missing");
             }
@@ -657,54 +711,6 @@ impl<'a> Session<'a> {
             }
             _ => {}
         }
-        Ok(())
-    }
-
-    fn record_pack(&mut self, output: &str) -> Result<()> {
-        let packed = packed_entry(output)?;
-        if packed["name"].as_str() != Some(&self.plan.package.name)
-            || self
-                .plan
-                .package
-                .version
-                .as_deref()
-                .is_some_and(|version| packed["version"].as_str() != Some(version))
-        {
-            bail!("bootstrap ref package identity/version differs from inspection; inspect the selected ref again before publication");
-        }
-        for file in packed["files"].as_array().into_iter().flatten() {
-            println!(
-                "  {:>8}  {}",
-                json_text(&file["size"]),
-                json_text(&file["path"])
-            );
-        }
-        let filename = json_text(&packed["filename"]);
-        println!(
-            "  {filename}: {} bytes packed, {} bytes unpacked, {} files",
-            json_text(&packed["size"]),
-            json_text(&packed["unpackedSize"]),
-            json_text(&packed["entryCount"])
-        );
-        let development = development_directories(&packed);
-        if !development.is_empty() {
-            bail!(
-                "the package would publish repository development files ({}); add a \"files\" \
-                 allowlist to package.json, commit it to the published ref, and re-run. Nothing \
-                 was published.",
-                development.join(", ")
-            );
-        }
-        let destination = self
-            .values
-            .get("pack_destination")
-            .map_or_else(|| self.options.repository.to_path_buf(), PathBuf::from);
-        self.values.insert(
-            "tarball".to_owned(),
-            destination.join(&filename).to_string_lossy().into_owned(),
-        );
-        self.values
-            .insert("version".to_owned(), json_text(&packed["version"]));
         Ok(())
     }
 

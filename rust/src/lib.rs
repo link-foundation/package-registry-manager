@@ -1,6 +1,7 @@
 //! Repository discovery and package-registry setup planning.
 
 pub mod approvals;
+pub mod audit_discovery;
 pub mod auth_urls;
 pub mod automation;
 pub mod bootstrap_reference;
@@ -18,18 +19,21 @@ pub mod discovery;
 pub mod extra_flows;
 pub mod flows;
 pub mod github;
+pub mod identity_conflicts;
 pub mod manifest_proposal;
 pub mod migration_evidence;
 pub mod model;
 pub mod npm_package;
 pub mod npm_policy;
 pub mod npm_similarity;
+pub mod nuget_policy;
 pub mod organization_scan;
 pub mod package_coverage;
 pub mod pages;
 pub mod plan;
 pub mod prerequisites;
 pub mod profile;
+pub mod publication_state;
 pub mod publisher_form;
 pub mod publishers;
 pub mod publishing_state;
@@ -56,3 +60,12 @@ pub use model::{
     StepKind,
 };
 pub use plan::{build_plans, build_plans_for, build_plans_with, PlanOptions};
+
+mod nuget_workflow;
+
+mod nuget_migration;
+
+/// Owner-setup prerequisite diagnostics for bounded CI recovery.
+pub mod bootstrap_recovery;
+
+mod audit_config;

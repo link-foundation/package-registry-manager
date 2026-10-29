@@ -18,6 +18,8 @@ rust-version = "1.85"
 include = [
     "/src/**/*.rs",
     "/src/**/*.json",
+    "/src/nuget-publish.py",
+    "/src/nuget-page.mjs",
     "/examples/**/*.rs",
     "/README.md",
     "/LICENSE",

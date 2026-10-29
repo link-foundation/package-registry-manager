@@ -15,7 +15,10 @@ export const TRUSTED_REGISTRIES = Object.freeze([
 
 export const JOB_PATTERNS = new Map([
   ["rubygems", /\bgem\s+push\b|rubygems\/release-gem/],
-  ["nuget", /\bdotnet\s+nuget\s+push\b|\bnuget\s+push\b/],
+  [
+    "nuget",
+    /\bdotnet\s+nuget\s+push\b|PRM_NUGET_OIDC|\bnuget\s+push\b|PRM_NUGET_OIDC/,
+  ],
   ["jsr", /\bdeno\s+publish\b|\bjsr\s+publish\b/],
   ["docker-hub", /docker\/login-action|\bdocker\s+(?:login|push)\b/],
   ["maven-central", /\bmvn\s+(?:-\S+\s+)*deploy\b|\bgradle(?:w)?\s+publish\b/],
@@ -149,7 +152,7 @@ export function parseWorkflow(contents) {
 export async function detectPublisher(root, workflows, registry) {
   const result = await detectPublisherDetails(root, workflows, registry);
   if (
-    ["crates-io", "npm", "pypi"].includes(registry) &&
+    ["crates-io", "npm", "pypi", "nuget"].includes(registry) &&
     (result.workflow || result.candidates.length)
   ) {
     result.policy = await publishingPolicies(root, workflows, registry);

@@ -7,8 +7,6 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use package_registry_manager::approvals::TWO_FACTOR_HINT;
@@ -283,13 +281,12 @@ fn repository_transfer_failed_attach_preserves_old_publisher() {
 
 /// A registry where `pipeline-app` appears once the tool polls for the
 /// published version.
-fn bootstrap_registry() -> MockRegistry {
-    let published = Arc::new(AtomicBool::new(false));
+fn bootstrap_registry(state: &Path) -> MockRegistry {
+    let published = state.join("published");
     MockRegistry::start(move |path| {
-        if path.ends_with("/pipeline-app/0.1.0") {
-            published.store(true, Ordering::SeqCst);
-        }
-        (path.starts_with("/npm/pipeline-app/") && published.load(Ordering::SeqCst))
+        // Registry presence changes only after the fake npm upload succeeds,
+        // regardless of how many read-only preflight probes run first.
+        (path.starts_with("/npm/pipeline-app/") && published.exists())
             .then(|| r#"{"version":"0.1.0"}"#.to_owned())
     })
 }
@@ -300,7 +297,7 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
     let Some((repository, state)) = prepare(&temporary) else {
         return;
     };
-    let registry = bootstrap_registry();
+    let registry = bootstrap_registry(&state);
 
     let run = run_setup(&repository, &state, &registry);
     let commands = run.commands();
@@ -493,7 +490,7 @@ fn reruns_npm_publish_with_a_fresh_approval_link_once_one_expired() {
     let Some((repository, state)) = prepare(&temporary) else {
         return;
     };
-    let registry = bootstrap_registry();
+    let registry = bootstrap_registry(&state);
     let output = setup_command(
         &repository,
         &state,
@@ -679,7 +676,7 @@ fn signs_out_with_sign_out_and_removes_the_worktree_when_a_middle_step_fails() {
     let (_, stderr, commands) = failing_setup_with(
         &repository,
         &state,
-        &bootstrap_registry(),
+        &bootstrap_registry(&state),
         &["--no-browser", "--sign-out"],
         &[("FAKE_TRUST_GITHUB", "fail")],
     );

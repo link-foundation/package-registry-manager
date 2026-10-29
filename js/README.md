@@ -77,3 +77,8 @@ OIDC publication and verification that no workflow still uses the credentials.
 Saved crates.io API sessions run headlessly; sign-in opens a visible window only
 when user action is needed. Organization migration skips and reports scan errors
 while continuing for clean repositories.
+
+NuGet setup uses an explicit login profile, package owner and exact package IDs.
+Trusted publishing is preferred; existing provided fallback credentials are retained.
+See [audit and NuGet configuration](../docs/issue-73-requirements.md) for setup,
+identity decisions and the distinction between verified configuration and release.

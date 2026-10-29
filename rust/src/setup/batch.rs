@@ -60,6 +60,7 @@ pub async fn execute_plans_with(
     environment: Option<&str>,
     summary: bool,
 ) -> Result<()> {
+    crate::identity_conflicts::validate(plans)?;
     if plans.is_empty() {
         bail!("no publishable package manifests were found");
     }
@@ -310,7 +311,9 @@ pub async fn execute_plans_with(
         session.browser_headless = browser_headless;
         session.domains.clone_from(&domains);
         let result = session.run().await;
-        let deferred = session.cleanup(plans.len() > 1, false).await;
+        let deferred = session
+            .cleanup(plans.len() > 1 || !session.recovery_steps.is_empty(), false)
+            .await;
         browser = session.browser.take();
         browser_headless = session.browser_headless;
         let details = session
@@ -336,6 +339,8 @@ pub async fn execute_plans_with(
                 }
             } else if plan.steps.is_empty() {
                 "complete"
+            } else if session.values.contains_key("distribution_unverified") {
+                "unverified"
             } else {
                 "configured"
             };
@@ -355,6 +360,64 @@ pub async fn execute_plans_with(
         }
         if failure.is_some() && !options.repository_batch {
             break;
+        }
+    }
+    if failure.is_none() {
+        let changes: std::collections::BTreeSet<_> = sessions
+            .iter()
+            .filter(|(s, _)| s.values.contains_key("recovery_changed"))
+            .map(|(s, _)| {
+                (
+                    s.plan.repository.root.clone(),
+                    s.plan.oidc_publisher.as_ref().map(|p| p.workflow.clone()),
+                )
+            })
+            .collect();
+        let mut recovered = std::collections::BTreeSet::new();
+        for (index, (session, _)) in sessions.iter_mut().enumerate() {
+            let steps = std::mem::take(&mut session.recovery_steps);
+            if steps.is_empty() {
+                continue;
+            }
+            if changes.contains(&(
+                session.plan.repository.root.clone(),
+                session
+                    .plan
+                    .oidc_publisher
+                    .as_ref()
+                    .map(|p| p.workflow.clone()),
+            )) {
+                session
+                    .values
+                    .insert("verified_recovery_change".into(), "true".into());
+            }
+            session
+                .values
+                .insert("draining_recovery".into(), "true".into());
+            let key = (
+                session.plan.repository.root.clone(),
+                session.values.get("failed_run_id").cloned(),
+            );
+            for step in steps {
+                if step.id == "rerun-release" && !recovered.insert(key.clone()) {
+                    continue;
+                }
+                if step.when.as_ref().is_some_and(|when| !session.holds(when)) {
+                    continue;
+                }
+                if let Err(error) = session.run_step(&step).await {
+                    failure = Some(error);
+                    break;
+                }
+            }
+            if failure.is_some() {
+                break;
+            }
+            if session.values.contains_key("nuget_release_verified")
+                || session.values.contains_key("bootstrap_release_verified")
+            {
+                outcomes[index] = "verified".into();
+            }
         }
     }
     // One logout per registry/tool, including on failure. Short-lived crates.io

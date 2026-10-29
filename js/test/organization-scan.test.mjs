@@ -90,6 +90,7 @@ test("account scan uses gh-manager files and reports all four findings (#43)", a
       "published-without-trusted-publishing",
       "trusted-publisher-other-repository",
       "release-failing",
+      "package-identity-conflict",
     ]),
   );
   assert.ok(

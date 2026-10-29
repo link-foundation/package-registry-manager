@@ -69,6 +69,7 @@ pub fn inspect_repository_recovering(
 
     let workflows = read_workflows(&root)?;
     let ignore = read_ignore_list(&root)?;
+    let config = crate::audit_config::read(&root)?;
     let mut skipped = Vec::new();
     let ignored = |manifest: &str, skipped: &mut Vec<Skipped>| {
         ignored_by(&ignore, manifest).is_some_and(|pattern| {
@@ -139,6 +140,8 @@ pub fn inspect_repository_recovering(
             }
         }
     }
+    crate::audit_discovery::aliases(&root, &mut parsed)?;
+    crate::audit_config::apply(&mut parsed, &config, &workflows)?;
     let central = detect_publisher(&root, &workflows, Registry::MavenCentral);
     publishers.insert(Registry::MavenCentral, central);
     let mut counts = BTreeMap::new();
@@ -149,7 +152,18 @@ pub fn inspect_repository_recovering(
     }
     let mut packages = parsed
         .into_iter()
-        .filter(|item| kept(&workflows, &item.manifest, item.publishable, &mut skipped))
+        .filter(|item| {
+            if let Some(reason) = item.audit.get("discovery_skip").and_then(JsonValue::as_str) {
+                skipped.push(Skipped {
+                    manifest: item.manifest.clone(),
+                    reason: reason.into(),
+                });
+                false
+            } else {
+                crate::audit_config::opted_in(&config, &item.manifest)
+                    || kept(&workflows, &item.manifest, item.publishable, &mut skipped)
+            }
+        })
         .map(|item| {
             if counts.get(&item.registry).copied().unwrap_or(0) > 1
                 && TRUSTED_REGISTRIES.contains(&item.registry)
@@ -219,6 +233,7 @@ pub fn inspect_repository_recovering(
         skipped,
     };
     crate::repository_identity::inspect_manifest_repositories(&mut inspection);
+    crate::identity_conflicts::mark(&mut [&mut inspection]);
     Ok(inspection)
 }
 
@@ -233,7 +248,7 @@ fn kept(
     let Some(directory) = test_directory(manifest) else {
         return true;
     };
-    if !["docs", "experiments", "case-studies"].contains(&directory)
+    if !["docs", "experiments", "case-studies", "dev/log"].contains(&directory)
         && publishable
         && referenced_by_workflow(workflows, manifest)
     {
@@ -265,7 +280,7 @@ fn with_publisher(
     item.warnings.extend(publisher.warnings.iter().cloned());
     if matches!(
         item.registry,
-        Registry::CratesIo | Registry::Npm | Registry::PyPi
+        Registry::CratesIo | Registry::Npm | Registry::PyPi | Registry::NuGet
     ) && (publisher.workflow.is_some() || !publisher.candidates.is_empty())
     {
         let policy = crate::publishing_state::publishing_policy(root, workflows, item.registry);
@@ -338,6 +353,9 @@ fn is_manifest(path: &Path) -> bool {
             | "composer.json"
             | "jsr.json"
             | "deno.json"
+            | "CMakeLists.txt"
+            | "conanfile.py"
+            | "vcpkg.json"
     ) || matches!(
         path.extension().and_then(|extension| extension.to_str()),
         Some("csproj" | "fsproj" | "vbproj" | "gemspec")
@@ -383,12 +401,23 @@ fn parse_manifest(path: &Path, root: &Path) -> Result<Option<Package>> {
             relative,
         ))),
         "package.json" => parse_npm(contents, relative),
-        "Cargo.toml" => parse_cargo(contents, relative),
+        "Cargo.toml" => {
+            let mut item = parse_cargo(contents, relative)?;
+            if let Some(item) = item.as_mut().filter(|p| p.version.is_none()) {
+                item.version = crate::audit_discovery::cargo_version(root, path, contents);
+            }
+            Ok(item)
+        }
+        "CMakeLists.txt" | "conanfile.py" | "vcpkg.json" => Ok(Some(crate::audit_discovery::cpp(
+            root, path, relative, contents,
+        )?)),
         "pyproject.toml" => parse_pyproject(contents, relative),
         "setup.py" => Ok(Some(parse_setup_py(contents, relative))),
         "go.mod" => Ok(Some(parse_go(contents, relative))),
         "pom.xml" => Ok(Some(parse_maven(contents, relative))),
-        "build.gradle" | "build.gradle.kts" => Ok(Some(parse_gradle(contents, relative))),
+        "build.gradle" | "build.gradle.kts" => {
+            Ok(Some(crate::audit_discovery::gradle(contents, relative)))
+        }
         "composer.json" => parse_composer(contents, relative),
         _ if matches!(
             path.extension().and_then(|extension| extension.to_str()),
@@ -522,21 +551,6 @@ fn parse_maven(contents: &str, manifest: String) -> Package {
         Registry::MavenCentral,
         group.map_or_else(|| artifact.clone(), |group| format!("{group}:{artifact}")),
         xml_tag(contents, "version"),
-        manifest,
-    )
-}
-
-fn parse_gradle(contents: &str, manifest: String) -> Package {
-    let group = regex_capture(contents, r#"(?m)^\s*group\s*=\s*['\"]([^'\"]+)"#);
-    let artifact = regex_capture(
-        contents,
-        r#"(?m)^\s*(?:archivesBaseName|rootProject\.name)\s*=\s*['\"]([^'\"]+)"#,
-    )
-    .unwrap_or_else(|| "gradle-project".to_owned());
-    Package::new(
-        Registry::MavenCentral,
-        group.map_or_else(|| artifact.clone(), |group| format!("{group}:{artifact}")),
-        regex_capture(contents, r#"(?m)^\s*version\s*=\s*['\"]([^'\"]+)"#),
         manifest,
     )
 }

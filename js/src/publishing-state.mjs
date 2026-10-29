@@ -1,6 +1,20 @@
 /** Describe release authentication, independently from the last registry publication. */
 export function publishingPolicy(contents, registry, grantOverride) {
   const text = contents.join("\n");
+  if (registry === "nuget") {
+    const oidc =
+      (grantOverride ??
+        /id-token:\s*write|permissions:\s*write-all/.test(text)) &&
+      /NuGet\/login@/.test(text);
+    const fallback = /PRM_NUGET_FALLBACK:\s*\$\{\{\s*secrets\.[\w]+/.test(text);
+    return oidc && fallback && /continue-on-error:\s*true/.test(text)
+      ? "oidc-with-token-fallback"
+      : oidc
+        ? "oidc-only"
+        : /secrets\.[\w]+/.test(text)
+          ? "token-only"
+          : "authentication-unverified";
+  }
   const token =
     /secrets\.(?:CARGO_(?:REGISTRY_)?TOKEN|NPM_(?:AUTH_)?TOKEN|NODE_AUTH_TOKEN|PYPI_(?:API_)?TOKEN)/.test(
       text,
