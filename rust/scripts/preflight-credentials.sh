@@ -18,20 +18,23 @@
 #                once from a maintainer's machine:
 #                  package-registry-manager setup --registry <registry> --execute
 #   refused   -- the registry refused the credential (Docker Hub only: it is
-#                the one registry this workflow still reaches with a
-#                long-lived token).
+#                the one registry this preflight probes with a long-lived
+#                token).
 #   unknown   -- the probe got no verdict (timeout, 429, 5xx). Not a guess
 #                that the credential is broken -- but not a pass either.
 #   skipped   -- publishing to the registry is not configured.
 #
 # Registries:
-#   crates.io -- published with trusted publishing (rust-lang/crates-io-auth-action).
-#                There is no long-lived token left to probe: the short-lived
-#                token is minted by an OIDC exchange in the publishing job, the
-#                only job that holds `id-token: write`. The probe here is
+#   crates.io -- published with trusted publishing (rust-lang/crates-io-auth-action)
+#                first; the short-lived token is minted by an OIDC exchange in
+#                the publishing job, the only job that holds `id-token: write`.
+#                When that exchange fails, the publish step falls back to the
+#                CARGO_REGISTRY_TOKEN or CARGO_TOKEN secret (issue #62), which
+#                stays in that step and is not probed here. The probe here is
 #                whether the crate exists (GET /api/v1/crates/<name>).
-#   npm       -- published with npm trusted publishing (OIDC). Same reasoning:
-#                the probe is whether the package exists on the registry.
+#   npm       -- published with npm trusted publishing (OIDC) first, the
+#                NPM_TOKEN secret as the publish step's fallback. Same
+#                reasoning: the probe is whether the package exists.
 #   Docker Hub-- still a username + token. A login -- or a registry token
 #                endpoint -- proves authentication, not authorisation:
 #                auth.docker.io answers an anonymous pull,push request with 200
@@ -153,7 +156,7 @@ check_crates_io() {
   status=$(http_status -A "$CURL_USER_AGENT" "$CRATES_API/api/v1/crates/${crate_name}")
   case "$status" in
     200)
-      pass "${crate_name} exists on crates.io -- the release job publishes it with trusted publishing (OIDC, no long-lived token)"
+      pass "${crate_name} exists on crates.io -- the release job publishes it with trusted publishing (OIDC), falling back to the CARGO_REGISTRY_TOKEN or CARGO_TOKEN secret"
       crates_verdict='ok'
       ;;
     404)
@@ -189,7 +192,7 @@ check_npm() {
   status=$(http_status -H 'Accept: application/vnd.npm.install-v1+json' "$NPM_REGISTRY/${encoded}")
   case "$status" in
     200)
-      pass "${package_name} exists on npm -- the release job publishes it with trusted publishing (OIDC, no NPM_TOKEN)"
+      pass "${package_name} exists on npm -- the release job publishes it with trusted publishing (OIDC), falling back to the NPM_TOKEN secret"
       npm_verdict='ok'
       ;;
     404)

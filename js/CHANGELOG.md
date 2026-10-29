@@ -24,9 +24,16 @@ currently shares its release version with the Rust implementation.
   variables and secret, `packages: write`, and package linking (#5).
 - `setup --browser default|automated` chooses where sign-in and approval URLs
   open; `default`, the default, uses the user's default browser (#9).
+- An npm first publish stops before the sign-in when the packed tarball
+  contains repository development directories such as `.github/` or `tests/`,
+  which a package.json without a `files` allowlist lets in.
 
 ### Changed
 
+- `setup` stays signed in by default: the npm session token and the crates.io
+  sign-in in the automated profile are kept, so the next run (npm: within two
+  hours) skips the sign-in. `--sign-out` signs out at the end instead;
+  `--keep-session` is still accepted and is now the default.
 - npm web-auth URLs (`npm login`, `npm publish` 2FA, `npm trust`) open in the
   user's default browser (`open`, `xdg-open`, or the Windows URL handler),
   where they are usually already signed in. The automated browser profile is
@@ -35,7 +42,10 @@ currently shares its release version with the Rust implementation.
   outside any repository (`~/Library/Application Support` on macOS,
   `$XDG_STATE_HOME` or `~/.local/state` on Linux, `%LOCALAPPDATA%` on Windows,
   each followed by `package-registry-manager/browser-profile`) (#8).
-- `browser-commander` is required at `^0.22.0`, its latest release (#28).
+- `browser-commander` is required at `^0.34.0`, its latest release (#28). A
+  launch still names its channel (`chrome` by default), so the upstream switch
+  of channel-less launches to Chrome for Testing does not change which browser
+  opens.
 
 ### Fixed
 

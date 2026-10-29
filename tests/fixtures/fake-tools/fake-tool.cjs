@@ -123,7 +123,13 @@ if (tool === "npm") {
       size: 120,
       unpackedSize: 300,
       entryCount: 1,
-      files: [{ path: "package.json", size: 300 }],
+      files: [
+        { path: "package.json", size: 300 },
+        ...(process.env.FAKE_PACK_FILES ?? "")
+          .split(",")
+          .filter(Boolean)
+          .map((file) => ({ path: file, size: 10 })),
+      ],
     };
     console.log(
       JSON.stringify(

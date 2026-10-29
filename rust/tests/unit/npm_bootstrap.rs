@@ -3,7 +3,9 @@ use std::fs;
 use std::path::Path;
 
 use package_registry_manager::auth_urls::{node_options_with_shim, AuthUrlScanner};
-use package_registry_manager::npm_package::{lists_trusted_publisher, packed_entry, trust_created};
+use package_registry_manager::npm_package::{
+    development_directories, lists_trusted_publisher, packed_entry, trust_created,
+};
 use package_registry_manager::registry_state::Endpoints;
 use package_registry_manager::{
     build_plans_with, inspect_repository, Package, PlanMode, PlanOptions, Registry, SetupPlan,
@@ -274,4 +276,21 @@ fn reads_trusted_publishers_from_npm_trust_list_output() {
     assert!(!trust_created(
         "Establishing trust between a package and GitHub"
     ));
+}
+
+#[test]
+fn names_the_development_directories_a_tarball_would_publish() {
+    let packed = serde_json::json!({"files": [
+        {"path": "package.json"},
+        {"path": "js/src/index.js"},
+        {"path": "tests/cli.test.js"},
+        {"path": ".github/workflows/release.yml"},
+        {"path": "tests/unit/a.test.js"},
+        {"path": "test.js"},
+    ]});
+    assert_eq!(development_directories(&packed), [".github/", "tests/"]);
+    assert_eq!(
+        development_directories(&serde_json::json!({"files": [{"path": "lib/test/a.js"}]})),
+        Vec::<String>::new()
+    );
 }

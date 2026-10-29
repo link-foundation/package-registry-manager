@@ -93,6 +93,7 @@ struct Args {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)] // Parsed once per run; boxing would only add indirection.
 enum Commands {
     /// Discover publishable package manifests without changing the repository.
     Inspect,
@@ -164,10 +165,16 @@ enum Commands {
         #[arg(long)]
         manual: bool,
 
-        /// Stay signed in after setup: npm keeps its session token in npm's
-        /// user configuration until npm logout; crates.io keeps only the
-        /// automated profile's browser session.
+        /// Sign out at the end of setup: npm logout for the npm session this
+        /// run signed in, and removal of the crates.io sign-in it brought into
+        /// the automated profile. Without it the next run reuses both
+        /// sessions; npm ends its session token after two hours.
         #[arg(long)]
+        sign_out: bool,
+
+        /// Stay signed in after setup. This is the default; kept for scripts
+        /// that pass it.
+        #[arg(long, hide = true, conflicts_with = "sign_out")]
         keep_session: bool,
 
         #[arg(long, default_value = "chrome", help = browser_channel_help())]
@@ -418,7 +425,8 @@ async fn main() -> Result<()> {
             no_browser,
             open_with,
             manual,
-            keep_session,
+            sign_out,
+            keep_session: _,
             browser,
             browser_channel,
             browser_executable,
@@ -488,7 +496,7 @@ async fn main() -> Result<()> {
                     yes,
                     no_browser,
                     open_with: open_with.as_deref(),
-                    keep_session,
+                    keep_session: !sign_out,
                     verbose: args.verbose,
                     secret_name: args.secret_name.as_deref(),
                     repository_batch: false,

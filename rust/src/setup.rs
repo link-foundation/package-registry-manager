@@ -21,8 +21,8 @@ use crate::flows::CLEANUP_CONDITIONS;
 use crate::model::Registry;
 use crate::model::{CommandSpec, SetupPlan, SetupStep, StepKind};
 use crate::npm_package::{
-    lists_trusted_publisher, packed_entry, report_pack_warnings, trust_created, verify_bins,
-    PUBLISH_REJECTED,
+    development_directories, lists_trusted_publisher, packed_entry, report_pack_warnings,
+    trust_created, verify_bins, PUBLISH_REJECTED,
 };
 use crate::pages::{pages_change_warning, report_pages, PagesState, PAGES_CHANGES};
 use crate::plan::package_directory;
@@ -192,15 +192,18 @@ impl<'a> Session<'a> {
                 && step.when.as_deref().is_some_and(|when| self.holds(when))
             {
                 if step.id == "sign-out" && self.keeps_session(step) {
-                    println!("Keeping the npm session for reuse; run npm logout to revoke it.");
+                    println!(
+                        "Keeping the npm session for reuse; npm ends it after two hours, npm logout \
+                         sooner."
+                    );
                 } else {
                     deferred.push(step.clone());
                 }
             } else if step.id == "sign-out" && self.keeps_session(step) {
                 println!(
-                    "Keeping the npm session for reuse: its token stays in npm's user \
-                     configuration until you run npm logout, and the next run reuses it while \
-                     npm whoami succeeds."
+                    "Keeping the npm session for reuse: the next run within two hours skips the \
+                     sign-in while npm whoami succeeds. npm ends the session token after two \
+                     hours; npm logout ends it now."
                 );
             } else if step.when.as_deref().is_some_and(|when| self.holds(when)) {
                 println!("==> {}", step.title);
@@ -679,6 +682,15 @@ impl<'a> Session<'a> {
             json_text(&packed["unpackedSize"]),
             json_text(&packed["entryCount"])
         );
+        let development = development_directories(&packed);
+        if !development.is_empty() {
+            bail!(
+                "the package would publish repository development files ({}); add a \"files\" \
+                 allowlist to package.json, commit it to the published ref, and re-run. Nothing \
+                 was published.",
+                development.join(", ")
+            );
+        }
         let destination = self
             .values
             .get("pack_destination")

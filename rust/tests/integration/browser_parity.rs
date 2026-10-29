@@ -1,6 +1,7 @@
 use browser_commander::browser::real_browser::launch_real_browser;
 use browser_commander::{
-    connect_browser, measure_session_parity, ConnectOptions, MeasureParityOptions,
+    connect_browser, measure_session_parity, ConnectOptions, LaunchOptions, MeasureParityOptions,
+    KEEP_SESSION_COOKIES_SWITCH,
 };
 use package_registry_manager::automation::launch_options;
 use package_registry_manager::browser_options::BrowserOptions;
@@ -36,6 +37,16 @@ async fn launches_the_automated_profile_like_a_browser_started_by_hand() -> anyh
                 &session,
                 MeasureParityOptions {
                     attached: true,
+                    // The hand-started reference must be the same binary. A
+                    // launch that names neither a channel nor an executable
+                    // means Chrome for Testing since browser-commander 0.21.
+                    // browser-commander adds the one extra switch for a
+                    // persistent profile so its session cookies, and with
+                    // them sign-ins, survive a restart. PRM wants that, so it
+                    // counts as requested.
+                    launch: LaunchOptions::default()
+                        .executable_path(&launched.executable_path)
+                        .with_args(vec![KEEP_SESSION_COOKIES_SWITCH.to_owned()]),
                     ..MeasureParityOptions::default()
                 },
             ))
@@ -47,8 +58,9 @@ async fn launches_the_automated_profile_like_a_browser_started_by_hand() -> anyh
     launched.close().await?;
     let (webdriver, report) = measured??;
     assert_eq!(webdriver, Value::Bool(false));
-    assert!(
-        report.command_line.comparison.extra.is_empty(),
+    assert_eq!(
+        report.command_line.comparison.extra,
+        [KEEP_SESSION_COOKIES_SWITCH],
         "extra switches in {}",
         report.command_line.launched
     );

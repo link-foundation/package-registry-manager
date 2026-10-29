@@ -59,20 +59,20 @@ fn install_fake_tools(node: &Path, state: &Path) -> PathBuf {
     bin
 }
 
-struct Run {
-    stdout: String,
-    log: Vec<Value>,
+pub struct Run {
+    pub stdout: String,
+    pub log: Vec<Value>,
 }
 
 impl Run {
-    fn commands(&self) -> Vec<String> {
+    pub fn commands(&self) -> Vec<String> {
         step_commands(&self.log)
     }
 }
 
 /// The commands of the setup steps, without the prerequisite probes (node,
 /// npm, 2FA, and gh versions) that run before the first step.
-fn step_commands(log: &[Value]) -> Vec<String> {
+pub fn step_commands(log: &[Value]) -> Vec<String> {
     log.iter()
         .map(|entry| {
             entry["argv"]
@@ -144,11 +144,11 @@ pub fn setup_command(
         .expect("wait for package-registry-manager")
 }
 
-fn run_setup(repository: &Path, state: &Path, registry: &MockRegistry) -> Run {
+pub fn run_setup(repository: &Path, state: &Path, registry: &MockRegistry) -> Run {
     run_setup_with(repository, state, registry, &["--no-browser"])
 }
 
-fn run_setup_with(
+pub fn run_setup_with(
     repository: &Path,
     state: &Path,
     registry: &MockRegistry,
@@ -184,7 +184,7 @@ pub fn prepare(temporary: &TempDir) -> Option<(PathBuf, PathBuf)> {
 
 /// A registry where the package is published and trusted, so only the sign-in
 /// and the checks around it run.
-fn published_registry() -> MockRegistry {
+pub fn published_registry() -> MockRegistry {
     MockRegistry::start(|path| {
         path.starts_with("/npm/pipeline-app/")
             .then(|| r#"{"version":"0.1.0"}"#.to_owned())
@@ -281,47 +281,6 @@ fn repository_transfer_failed_attach_preserves_old_publisher() {
         .any(|arg| arg == "revoke")));
 }
 
-#[test]
-fn setup_all_reuses_the_npm_session_and_logs_out_after_the_last_package() {
-    let temporary = TempDir::new().unwrap();
-    let Some((repository, state)) = prepare(&temporary) else {
-        return;
-    };
-    let second = repository.join("second");
-    fs::create_dir_all(&second).unwrap();
-    fs::write(
-        second.join("package.json"),
-        r#"{"name":"second-package","version":"0.1.0"}"#,
-    )
-    .unwrap();
-    let workflow = repository.join(".github/workflows/release.yml");
-    let mut contents = fs::read_to_string(&workflow).unwrap();
-    contents = contents.replace(
-        "  docker-hub:",
-        "      - run: npm publish\n        working-directory: second\n  docker-hub:",
-    );
-    fs::write(workflow, contents).unwrap();
-    let registry = MockRegistry::start(|path| {
-        path.starts_with("/npm/")
-            .then(|| r#"{"version":"0.1.0"}"#.to_owned())
-    });
-    let run = run_setup_with(&repository, &state, &registry, &["--no-browser", "--all"]);
-    let npm: Vec<_> = run
-        .log
-        .iter()
-        .filter(|entry| entry["argv"][0] == "npm")
-        .filter_map(|entry| entry["argv"][1].as_str())
-        .collect();
-    assert_eq!(npm.iter().filter(|command| **command == "login").count(), 1);
-    assert_eq!(
-        npm.iter().filter(|command| **command == "logout").count(),
-        1
-    );
-    assert_eq!(npm.last(), Some(&"logout"));
-    assert!(run.stdout.contains("second-package: configured"));
-    assert!(!state.join("session").exists());
-}
-
 /// A registry where `pipeline-app` appears once the tool polls for the
 /// published version.
 fn bootstrap_registry() -> MockRegistry {
@@ -382,7 +341,6 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
             "npx -y npm@^11.10 trust github pipeline-app --repo acme/pipeline-app --file release.yml --allow-publish --yes --browser=false".to_owned(),
             "gh secret list --repo acme/pipeline-app --json name".to_owned(),
             "gh secret delete NPM_TOKEN --repo acme/pipeline-app".to_owned(),
-            "npm logout".to_owned(),
             format!("git worktree remove --force {worktree}"),
         ]
     );
@@ -449,7 +407,13 @@ fn runs_the_whole_npm_bootstrap_with_web_sign_in_and_resumes_safely() {
         "temporary files are removed"
     );
 
+    assert!(state.join("session").exists(), "still signed in");
+
+    // The kept session spares the resumed run a sign-in.
     let resumed = run_setup(&repository, &state, &registry).commands();
+    assert!(!resumed
+        .iter()
+        .any(|command| command.starts_with("npm login")));
     assert!(!resumed
         .iter()
         .any(|command| command.starts_with("npm publish")));
@@ -473,7 +437,7 @@ fn requests_a_fresh_login_link_when_npm_falls_back_to_its_username_prompt() {
         &repository,
         &state,
         &registry,
-        &["--no-browser"],
+        &["--no-browser", "--sign-out"],
         &[("FAKE_LEGACY_LOGIN", "2")],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -556,30 +520,6 @@ fn reruns_npm_publish_with_a_fresh_approval_link_once_one_expired() {
 }
 
 #[test]
-fn keeps_the_npm_session_with_keep_session() {
-    let temporary = TempDir::new().expect("create temporary directory");
-    let Some((repository, state)) = prepare(&temporary) else {
-        return;
-    };
-    let registry = published_registry();
-    let run = run_setup_with(
-        &repository,
-        &state,
-        &registry,
-        &["--no-browser", "--keep-session"],
-    );
-    assert!(!run.commands().iter().any(|command| command == "npm logout"));
-    assert!(
-        run.stdout
-            .lines()
-            .any(|line| line.starts_with("Keeping the npm session")),
-        "{}",
-        run.stdout
-    );
-    assert!(state.join("session").exists(), "still signed in");
-}
-
-#[test]
 fn opens_approval_links_in_the_application_chosen_with_open_with() {
     let temporary = TempDir::new().expect("create temporary directory");
     let Some((repository, state)) = prepare(&temporary) else {
@@ -634,19 +574,29 @@ fn rejects_open_with_together_with_no_browser() {
 
 /// A registry where `pipeline-app` is missing, for runs that stop before the
 /// first publish.
-fn missing_registry() -> MockRegistry {
+pub fn missing_registry() -> MockRegistry {
     MockRegistry::start(|_| None)
 }
 
 /// Runs a setup that must fail, returning its stdout, stderr, and step
 /// commands.
-fn failing_setup(
+pub fn failing_setup(
     repository: &Path,
     state: &Path,
     registry: &MockRegistry,
     env: &[(&str, &str)],
 ) -> (String, String, Vec<String>) {
-    let output = setup_command(repository, state, registry, &["--no-browser"], env);
+    failing_setup_with(repository, state, registry, &["--no-browser"], env)
+}
+
+fn failing_setup_with(
+    repository: &Path,
+    state: &Path,
+    registry: &MockRegistry,
+    options: &[&str],
+    env: &[(&str, &str)],
+) -> (String, String, Vec<String>) {
+    let output = setup_command(repository, state, registry, options, env);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(!output.status.success(), "{stdout}\n{stderr}");
@@ -721,16 +671,17 @@ fn reports_npm_pack_corrections_and_stops_when_a_bin_was_removed() {
 }
 
 #[test]
-fn signs_out_and_removes_the_worktree_when_a_middle_step_fails() {
+fn signs_out_with_sign_out_and_removes_the_worktree_when_a_middle_step_fails() {
     let temporary = TempDir::new().expect("create temporary directory");
     let Some((repository, state)) = prepare(&temporary) else {
         return;
     };
     // npm trust github fails, so verify-trusted-publisher fails (#24).
-    let (_, stderr, commands) = failing_setup(
+    let (_, stderr, commands) = failing_setup_with(
         &repository,
         &state,
         &bootstrap_registry(),
+        &["--no-browser", "--sign-out"],
         &[("FAKE_TRUST_GITHUB", "fail")],
     );
     assert!(

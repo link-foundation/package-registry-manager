@@ -407,7 +407,7 @@ export async function runCratesApiStep(session, step) {
     case "crates-sign-out":
       if (options.keepSession) {
         console.log(
-          `Keeping the ${domains.join(" / ")} sign-in in the automated profile (--keep-session); the next run reuses it. No token is kept.`,
+          `Keeping the ${domains.join(" / ")} sign-in in the automated profile; the next run reuses it. No token is kept.`,
         );
       } else if (page.clearCookies) {
         await page.clearCookies(domains);

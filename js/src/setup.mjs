@@ -107,14 +107,14 @@ export class SetupSession {
       ) {
         if (step.id === "sign-out" && this.keepsSession(step)) {
           console.log(
-            "Keeping the npm session for reuse; run npm logout to revoke it.",
+            "Keeping the npm session for reuse; npm ends it after two hours, npm logout sooner.",
           );
         } else {
           deferred.push(step);
         }
       } else if (step.id === "sign-out" && this.keepsSession(step)) {
         console.log(
-          "Keeping the npm session for reuse: its token stays in npm's user configuration until you run npm logout, and the next run reuses it while npm whoami succeeds.",
+          "Keeping the npm session for reuse: the next run within two hours skips the sign-in while npm whoami succeeds. npm ends the session token after two hours; npm logout ends it now.",
         );
       } else if (this.conditions.has(step.when) && step.kind === "api") {
         this.log(`==> ${step.title}`);
@@ -608,6 +608,12 @@ export class SetupSession {
     console.log(
       `  ${packed.filename}: ${packed.size} bytes packed, ${packed.unpackedSize} bytes unpacked, ${packed.entryCount} files`,
     );
+    const development = developmentDirectories(packed);
+    if (development.length > 0) {
+      throw new Error(
+        `the package would publish repository development files (${development.join(", ")}); add a "files" allowlist to package.json, commit it to the published ref, and re-run. Nothing was published.`,
+      );
+    }
     this.values.tarball = path.join(
       this.values.pack_destination,
       packed.filename,
@@ -880,6 +886,39 @@ export function packedEntry(output) {
     throw new Error("npm pack printed no package");
   }
   return packed;
+}
+
+/**
+ * Top-level repository directories of development files: CI, tests, and
+ * editor and build state, which belong in no published package.
+ */
+const DEVELOPMENT_DIRECTORIES = new Set([
+  ".changeset",
+  ".github",
+  ".husky",
+  ".idea",
+  ".vscode",
+  "__tests__",
+  "coverage",
+  "experiments",
+  "target",
+  "test",
+  "tests",
+]);
+
+/**
+ * The development directories a packed tarball contains, as `name/`, which
+ * a package.json without a `files` allowlist lets in.
+ */
+export function developmentDirectories(packed) {
+  const found = new Set();
+  for (const file of packed.files ?? []) {
+    const [top, ...rest] = String(file.path).split("/");
+    if (rest.length > 0 && DEVELOPMENT_DIRECTORIES.has(top)) {
+      found.add(`${top}/`);
+    }
+  }
+  return [...found].sort();
 }
 
 function reportPackWarnings(stderr) {

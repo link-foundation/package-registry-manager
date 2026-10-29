@@ -68,10 +68,12 @@ Setup options:
   --manual                        crates.io: create, use, and revoke the
                                   first-publish token by hand instead of
                                   through the crates.io API
-  --keep-session                  Stay signed in after setup: npm keeps its
-                                  session token in npm's user configuration
-                                  until npm logout; the shared browser profile
-                                  keeps registry sessions across packages
+  --sign-out                      Sign out at the end of setup: npm logout
+                                  for the npm session this run signed in, and
+                                  removal of the crates.io sign-in it brought
+                                  into the automated profile. Without it the
+                                  next run reuses both sessions; npm ends its
+                                  session token after two hours
   --browser <default|automated>   Open sign-in and approval pages in your
                                   default browser, or in the automated profile;
                                   npm reuses the automated profile
@@ -132,6 +134,7 @@ export async function main(args = process.argv.slice(2)) {
       yes: { type: "boolean", default: false },
       "no-browser": { type: "boolean", default: false },
       "open-with": { type: "string" },
+      "sign-out": { type: "boolean", default: false },
       "keep-session": { type: "boolean", default: false },
       manual: { type: "boolean", default: false },
       browser: { type: "string", default: "default" },
@@ -249,6 +252,9 @@ export async function main(args = process.argv.slice(2)) {
     if (values["open-with"] !== undefined && values["no-browser"]) {
       throw new Error("--open-with and --no-browser are mutually exclusive");
     }
+    if (values["sign-out"] && values["keep-session"]) {
+      throw new Error("--sign-out and --keep-session are mutually exclusive");
+    }
     if (!browserOptions.attach) {
       browserOptions.import ??= { browser: "auto", profile: null };
     }
@@ -276,7 +282,7 @@ export async function main(args = process.argv.slice(2)) {
             defaultBrowserProfile({ channel: browserOptions.channel }),
         ),
         openWith: nonEmpty(values["open-with"], "--open-with"),
-        keepSession: values["keep-session"],
+        keepSession: !values["sign-out"],
         planOptions: {
           workflow: values.workflow,
           publisherEnvironment: values.environment,
@@ -364,6 +370,9 @@ export async function main(args = process.argv.slice(2)) {
   if (values["open-with"] !== undefined && values["no-browser"]) {
     throw new Error("--open-with and --no-browser are mutually exclusive");
   }
+  if (values["sign-out"] && values["keep-session"]) {
+    throw new Error("--sign-out and --keep-session are mutually exclusive");
+  }
 
   const plans = buildPlans(inspection, registries, planOptions);
   const selected = values.all
@@ -381,7 +390,7 @@ export async function main(args = process.argv.slice(2)) {
       yes: values.yes,
       noBrowser: values["no-browser"],
       openWith: nonEmpty(values["open-with"], "--open-with"),
-      keepSession: values["keep-session"],
+      keepSession: !values["sign-out"],
       secretName: values["secret-name"],
       rotateToken,
       migrate: values.migrate,

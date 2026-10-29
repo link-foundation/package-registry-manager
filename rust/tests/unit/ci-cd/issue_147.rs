@@ -66,6 +66,12 @@ fn workflows_are_audited_by_zizmor() {
         workflows.contains("min-confidence: medium"),
         "the zizmor job must report medium-confidence findings, not only high ones"
     );
+    // The action audits `.` by default, which reaches the never-run legacy
+    // workflows under tests/fixtures and fails the gate on test data.
+    assert!(
+        workflows.contains("          inputs: .github\n"),
+        "the zizmor job must audit .github, not the fixtures under tests/"
+    );
 }
 
 /// Without the configuration the blanket `hash-pin` policy is not applied and

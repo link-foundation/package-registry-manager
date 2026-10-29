@@ -152,7 +152,7 @@ impl Session<'_> {
                 let names = domains.join(" / ");
                 if self.options.keep_session {
                     println!(
-                        "Keeping the {names} sign-in in the automated profile (--keep-session); the next run reuses it. No token is kept."
+                        "Keeping the {names} sign-in in the automated profile; the next run reuses it. No token is kept."
                     );
                 } else if self.automated().await?.clear_cookies(domains).await? {
                     println!("  Removed the {names} sign-in cookies from the automated profile.");

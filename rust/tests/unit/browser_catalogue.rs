@@ -80,7 +80,7 @@ fn launches_and_snapshots_every_supported_channel_and_alias() {
         })
         .unwrap();
         let launch = launch_options(&options, Path::new("/profile"), false, &[]);
-        assert_eq!(launch.channel, channel);
+        assert_eq!(launch.channel.as_deref(), Some(channel));
         assert_eq!(launch.migrate_from.unwrap().browser, "firefox");
         assert_eq!(
             snapshot_browser(channel),
