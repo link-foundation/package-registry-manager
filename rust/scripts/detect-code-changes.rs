@@ -26,6 +26,8 @@
 //! paths, so in a multi-language repository (`rust/Cargo.toml`) the `rust/`
 //! prefix is stripped before matching and files of other languages
 //! (for example `python/pyproject.toml`) are not treated as Rust changes.
+//! JavaScript source and dependency changes independently activate the shared
+//! test pipeline, which validates both implementations.
 //!
 //! Usage: rust-script scripts/detect-code-changes.rs
 //!
@@ -267,6 +269,25 @@ fn included_changed_files<'a>(prefix: &str, changed_files: &'a [String]) -> Vec<
         .collect()
 }
 
+fn has_code_changes(prefix: &str, changed_files: &[String]) -> bool {
+    let pattern = code_change_pattern();
+    included_changed_files(prefix, changed_files)
+        .iter()
+        .any(|file| pattern.is_match(file))
+        || changed_files.iter().any(|file| is_javascript_change(file))
+}
+
+fn is_javascript_change(file: &str) -> bool {
+    let Some(relative) = file.strip_prefix("js/") else {
+        return false;
+    };
+    !is_excluded_from_code_changes("", relative)
+        && (relative.ends_with(".mjs")
+            || relative.ends_with(".js")
+            || relative.ends_with(".cjs")
+            || matches!(relative, "package.json" | "package-lock.json"))
+}
+
 fn main() {
     println!("Detecting file changes for CI/CD...\n");
 
@@ -282,7 +303,8 @@ fn main() {
     }
     println!();
 
-    // Apply the ignore policy once, before computing any job-gating output.
+    // Compute Rust/shared job flags in package scope; JavaScript activates the
+    // shared test pipeline separately below.
     let prefix = path_prefix();
     if !prefix.is_empty() {
         println!("Multi-language layout detected, Rust package prefix: {prefix}\n");
@@ -316,18 +338,21 @@ fn main() {
 
     // Detect code changes (excluding docs, changelog.d, experiments, examples folders, and markdown files)
     println!("\nFiles considered as code changes:");
-    if included_files.is_empty() {
+    let code_files: Vec<_> = changed_files
+        .iter()
+        .filter(|file| !is_excluded_from_code_changes(&prefix, file) || is_javascript_change(file))
+        .collect();
+    if code_files.is_empty() {
         println!("  (none)");
     } else {
-        for file in &included_files {
+        for file in &code_files {
             println!("  {}", file);
         }
     }
     println!();
 
     // Check if any code files changed (.rs, .toml, Cargo.lock, .mjs, .yml, .yaml, or workflow files)
-    let code_pattern = code_change_pattern();
-    let code_changed = included_files.iter().any(|f| code_pattern.is_match(f));
+    let code_changed = has_code_changes(&prefix, &changed_files);
     set_output(
         "any-code-changed",
         if code_changed { "true" } else { "false" },
@@ -434,6 +459,29 @@ mod tests {
             assert!(is_manifest_or_lockfile_change(path));
             assert!(code_pattern.is_match(path));
             assert!(!is_excluded_from_code_changes("", path));
+        }
+    }
+
+    #[test]
+    fn javascript_only_changes_activate_the_test_pipeline() {
+        for file in [
+            "js/src/workflow-fallback.mjs",
+            "js/test/workflow-fallback.test.mjs",
+            "js/scripts/check.js",
+            "js/scripts/check.cjs",
+            "js/package.json",
+            "js/package-lock.json",
+        ] {
+            assert!(has_code_changes("rust/", &[file.into()]), "{file}");
+        }
+        for file in [
+            "js/README.md",
+            "js/docs/guide.mjs",
+            "js/experiments/repro.mjs",
+            "js/examples/demo.js",
+            "python/pyproject.toml",
+        ] {
+            assert!(!has_code_changes("rust/", &[file.into()]), "{file}");
         }
     }
 
