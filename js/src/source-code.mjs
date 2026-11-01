@@ -50,7 +50,7 @@ export function stripComments(contents, language = "shell") {
 export function commandPosition(prefix) {
   const segment = prefix.split(/[;&|]/).at(-1).trimStart();
   return (
-    /^(?:(?:npx|bunx|exec|sudo|env|time|command|pnpm\s+exec|yarn|\w+=\S*)\s+)*$/.test(
+    /^(?:(?:if|elif|then|else|do|while|until|!|npx|bunx|exec|sudo|env|time|command|pnpm\s+exec|yarn|\w+=\S*)\s+)*$/.test(
       segment,
     ) ||
     /(?:\$|shell)\s*`\s*$/.test(segment) ||

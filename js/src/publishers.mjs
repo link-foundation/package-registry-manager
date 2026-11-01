@@ -1,4 +1,4 @@
-import { publishingPolicy } from "./publishing-state.mjs";
+import { authenticationFacts, publishingPolicy } from "./publishing-state.mjs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { stripComments, commandPosition } from "./source-code.mjs";
@@ -21,7 +21,10 @@ export const JOB_PATTERNS = new Map([
   ],
   ["jsr", /\bdeno\s+publish\b|\bjsr\s+publish\b/],
   ["docker-hub", /docker\/login-action|\bdocker\s+(?:login|push)\b/],
-  ["maven-central", /\bmvn\s+(?:-\S+\s+)*deploy\b|\bgradle(?:w)?\s+publish\b/],
+  [
+    "maven-central",
+    /(?:\.\/|\b)mvnw?\s+(?:-\S+\s+)*deploy\b|(?:\.\/|\b)gradlew?\s+(?:-\S+\s+)*publish\b/,
+  ],
   ["vscode-marketplace", /\bvsce\s+publish\b/],
   ["open-vsx", /\bovsx\s+publish\b/],
   [
@@ -155,8 +158,25 @@ export async function detectPublisher(root, workflows, registry) {
     ["crates-io", "npm", "pypi", "nuget"].includes(registry) &&
     (result.workflow || result.candidates.length)
   ) {
-    result.policy = await publishingPolicies(root, workflows, registry);
-    if (result.policy !== "oidc-with-token-fallback") {
+    const { policy, gates } = await publishingPolicies(
+      root,
+      workflows,
+      registry,
+    );
+    result.policy = policy;
+    if (gates.length) {
+      result.gate = gates[0].gate;
+      if (gates.some((facts) => facts.passwordAlwaysToken)) {
+        result.warnings.push(
+          `the publish password expression \`vars.${result.gate.variable} == 'true' && '' || secrets.*\` always selects the token ('' is falsy in GitHub expressions); the variable cannot switch to OIDC`,
+        );
+      }
+    }
+    if (result.policy === "variable-gated-oidc-with-token-fallback") {
+      result.warnings.push(
+        `publishing selects OIDC only when the repository variable ${result.gate?.variable ?? "gate"} is 'true' and otherwise uses the token; register the trusted publisher, verify it, then set the variable`,
+      );
+    } else if (result.policy !== "oidc-with-token-fallback") {
       result.warnings.push(
         `publishing authentication is ${result.policy}; migrate to OIDC with token fallback`,
       );
@@ -173,6 +193,7 @@ async function publishingPolicies(root, workflows, registry) {
     ]),
   );
   const policies = [];
+  const gates = [];
   const visit = async (name, callerGrant, seen = new Set()) => {
     if (seen.has(name) || !parsed.has(name)) {
       return;
@@ -196,6 +217,13 @@ async function publishingPolicies(root, workflows, registry) {
       if (called) {
         await visit(called, grant, new Set([...seen, name]));
       } else if (await jobPublishes(root, workflow, job, registry)) {
+        const facts = authenticationFacts(
+          [...workflow.header, ...job.lines].join("\n"),
+          registry,
+        );
+        if (facts.gate) {
+          gates.push(facts);
+        }
         policies.push(
           publishingPolicy(
             [[...workflow.header, ...job.lines].join("\n")],
@@ -212,11 +240,13 @@ async function publishingPolicies(root, workflows, registry) {
     }
   }
   const unique = [...new Set(policies)];
-  return unique.length === 1
-    ? unique[0]
-    : unique.length
-      ? "mixed-authentication"
-      : "authentication-unverified";
+  const policy =
+    unique.length === 1
+      ? unique[0]
+      : unique.length
+        ? "mixed-authentication"
+        : "authentication-unverified";
+  return { policy, gates };
 }
 
 async function detectPublisherDetails(root, workflows, registry) {

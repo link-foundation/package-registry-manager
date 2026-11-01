@@ -238,7 +238,8 @@ export async function inspectRepository(repository, options = {}) {
         .map(async (item) => {
           const scoped =
             counts.get(item.registry) > 1 &&
-            TRUSTED_REGISTRIES.includes(item.registry)
+            (TRUSTED_REGISTRIES.includes(item.registry) ||
+              item.registry === "maven-central")
               ? new Map([
                   [
                     item.registry,
