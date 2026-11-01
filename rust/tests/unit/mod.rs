@@ -6,6 +6,7 @@ mod browser_profile;
 mod crates_api;
 mod credential_cycle;
 mod issue_39;
+mod links_notation_fixture;
 mod npm_bootstrap;
 mod nuget;
 mod pages;

@@ -149,11 +149,46 @@ pub fn cpp(root: &Path, manifest: &Path, relative: String, text: &str) -> Result
     } else {
         fs::read_to_string(manifest.with_file_name("CMakeLists.txt")).unwrap_or_default()
     };
-    let project = capture(&cmake, r"(?i)\bproject\s*\(\s*([\w.-]+)\s+VERSION\s+\d");
-    let project_version = capture(
-        &cmake,
-        r"(?i)\bproject\s*\(\s*[\w.-]+\s+VERSION\s+(\d+(?:\.\d+)+)",
-    );
+    let found =
+        Regex::new(r"(?i)\bproject\s*\(\s*([\w.-]+)\s+VERSION\s+(\d+(?:\.\d+)+|\$\{(\w+)\})")?
+            .captures(&cmake);
+    let project = found.as_ref().map(|found| found[1].to_owned());
+    let mut project_version = found
+        .as_ref()
+        .filter(|found| found.get(3).is_none())
+        .map(|found| found[2].to_owned());
+    let mut version_source = None;
+    if let Some(variable) = found.as_ref().and_then(|found| found.get(3)) {
+        let variable = variable.as_str();
+        // `file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" VAR)` is resolved by
+        // reading that one sibling file; nothing in the CMake file is executed.
+        let read = Regex::new(&format!(
+            r#"(?i)\bfile\s*\(\s*READ\s+"?\$\{{CMAKE_CURRENT_(?:SOURCE|LIST)_DIR\}}/([\w.-]+)"?\s+{variable}\s*\)"#
+        ))?
+        .captures(&cmake);
+        let literal = Regex::new(&format!(
+            r#"(?i)\bset\s*\(\s*{variable}\s+"?(\d+(?:\.\d+)+)"?\s*\)"#
+        ))?
+        .captures(&cmake);
+        if let Some(read) = read {
+            match fs::read_to_string(manifest.with_file_name(&read[1])) {
+                Ok(value) => {
+                    let value = value.trim();
+                    if Regex::new(r"^\d+(?:\.\d+)+$")?.is_match(value) {
+                        project_version = Some(value.to_owned());
+                        version_source = Some(match relative.rsplit_once('/') {
+                            Some((directory, _)) => format!("{directory}/{}", &read[1]),
+                            None => read[1].to_owned(),
+                        });
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        } else if let Some(literal) = literal {
+            project_version = Some(literal[1].to_owned());
+        }
+    }
     let registry = match filename {
         "vcpkg.json" => Registry::Vcpkg,
         "conanfile.py" => Registry::Conan,
@@ -192,7 +227,7 @@ pub fn cpp(root: &Path, manifest: &Path, relative: String, text: &str) -> Result
         item.publishable = false;
     }
     let source = manifest.with_file_name("CMakeLists.txt");
-    item.audit.insert("distribution".into(), json!({"version_source":if project.is_some(){source.strip_prefix(root).unwrap_or(&source).to_string_lossy().into_owned()}else{item.manifest.clone()},"provider_status":"unverified"}));
+    item.audit.insert("distribution".into(), json!({"version_source":if let Some(source)=version_source{source}else if project.is_some(){source.strip_prefix(root).unwrap_or(&source).to_string_lossy().into_owned()}else{item.manifest.clone()},"provider_status":"unverified"}));
     if registry == Registry::Conan {
         item.audit.get_mut("distribution").expect("inserted")["remote_required"] =
             json!("CONAN_REMOTE_URL");

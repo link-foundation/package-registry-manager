@@ -117,6 +117,26 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
         SetupStep::new(id, title, StepKind::Check, description).command(program, args)
     };
     if (options.migrate || options.add_publish_job)
+        && package.publishing_policy.as_deref() == Some("variable-gated-oidc-with-token-fallback")
+    {
+        // The workflow already tries OIDC first and keeps the token fallback; only
+        // the opt-in repository variable is off. Never rewrite the workflow.
+        let gate = package
+            .authentication_gate
+            .as_ref()
+            .map(|gate| gate.variable.as_str());
+        return base_plan(inspection, package, vec![SetupStep::new(
+            "enable-oidc-variable",
+            &format!("Register trust, then set {} to true", gate.unwrap_or("the OIDC opt-in variable")),
+            StepKind::Manual,
+            format!(
+                "The workflow exchanges OIDC only when {} is 'true' and otherwise keeps the existing token. Register the trusted publisher for {}, set the variable, and verify the next release selected OIDC; the token fallback is retained.",
+                gate.unwrap_or("its repository variable"),
+                package.workflow.as_deref().unwrap_or("the caller workflow")
+            ),
+        ).confirmed()]);
+    }
+    if (options.migrate || options.add_publish_job)
         && matches!(
             package.registry,
             Registry::CratesIo | Registry::Npm | Registry::PyPi | Registry::NuGet
@@ -161,21 +181,25 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
             if package.workflow.is_none() && options.workflow.is_none() { return SetupPlan { skipped_reason: Some(format!("no workflow publishes {} to {}; pass --workflow <file> for an explicit setup target",package.name,package.registry)), ..base_plan(inspection,package,Vec::new()) }; }
             crate::extra_flows::token_flow(package)
         },
-        Registry::Packagist => vec![
-                check(
+        Registry::Packagist => {
+            let mut steps = vec![check(
                     "validate-package",
                     "Validate Composer metadata",
                     "Strictly validate composer.json before submitting it.",
                     "composer",
                     &["validate", "--strict"],
-                ),
-                browser(
+                )];
+            if package.exists_on_registry != Some(true) {
+                steps.push(browser(
                     "submit-repository",
                     "Submit the repository to Packagist",
                     "Sign in and submit the public VCS repository URL. Packagist reads package versions from tags.",
                     "https://packagist.org/packages/submit"
-                ),
-        ],
+                ));
+            }
+            steps.extend(crate::extra_flows::packagist_steps(package));
+            steps
+        }
     };
 
     base_plan(inspection, package, steps)

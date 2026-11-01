@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- xunit v3 test projects are self-executing: each one builds into its own
+         test host, so it has to be an Exe rather than a library. -->
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Link.Foundation.Links.Notation.Tests</RootNamespace>
+    <NoWarn>$(NoWarn);CS8981;CS1591;CS1584;CS1658</NoWarn>
+  </PropertyGroup>
+  
+  <ItemGroup>
+    <!-- Microsoft.NET.Test.Sdk, xunit.runner.visualstudio and coverlet.collector
+         are all VSTest components; under Microsoft.Testing.Platform xunit.v3
+         provides the runner and none of them are used. -->
+    <PackageReference Include="xunit.v3" Version="4.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Link.Foundation.Links.Notation\Link.Foundation.Links.Notation.csproj" />
+    <None Include="../../parity/text-fixtures.json" Link="Protocol/text-fixtures.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../docs/protocol/binary-links-notation-vectors.txt" Link="Protocol/binary-links-notation-vectors.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../docs/protocol/invalid-reference-literals.txt" Link="Protocol/invalid-reference-literals.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../docs/protocol/reference-literals.txt" Link="Protocol/reference-literals.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

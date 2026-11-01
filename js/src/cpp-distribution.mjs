@@ -22,9 +22,44 @@ export async function cppDistribution(
     }
   }
   const project =
-    /\bproject\s*\(\s*([\w.-]+)\s+VERSION\s+(\d+(?:\.\d+)+)/i.exec(cmake);
+    /\bproject\s*\(\s*([\w.-]+)\s+VERSION\s+(\d+(?:\.\d+)+|\$\{(\w+)\})/i.exec(
+      cmake,
+    );
   let name = project?.[1];
-  let version = project?.[2];
+  let version = project?.[3] ? null : project?.[2];
+  let versionSource = null;
+  if (project?.[3]) {
+    // `file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" VAR)` is resolved by
+    // reading that one sibling file; nothing in the CMake file is executed.
+    const read = new RegExp(
+      `\\bfile\\s*\\(\\s*READ\\s+"?\\$\\{CMAKE_CURRENT_(?:SOURCE|LIST)_DIR\\}/([\\w.-]+)"?\\s+${project[3]}\\s*\\)`,
+      "i",
+    ).exec(cmake);
+    const literal = new RegExp(
+      `\\bset\\s*\\(\\s*${project[3]}\\s+"?(\\d+(?:\\.\\d+)+)"?\\s*\\)`,
+      "i",
+    ).exec(cmake);
+    if (read) {
+      try {
+        const value = (
+          await readFile(path.join(path.dirname(manifestPath), read[1]), "utf8")
+        ).trim();
+        if (/^\d+(?:\.\d+)+$/.test(value)) {
+          version = value;
+          versionSource = path.posix.join(
+            path.posix.dirname(manifest),
+            read[1],
+          );
+        }
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+      }
+    } else if (literal) {
+      version = literal[1];
+    }
+  }
   const registry =
     filename === "vcpkg.json"
       ? "vcpkg"
@@ -62,9 +97,11 @@ export async function cppDistribution(
     manifest,
     publishable: true,
     distribution: {
-      version_source: project
-        ? path.posix.join(path.posix.dirname(manifest), "CMakeLists.txt")
-        : manifest,
+      version_source:
+        versionSource ??
+        (project
+          ? path.posix.join(path.posix.dirname(manifest), "CMakeLists.txt")
+          : manifest),
       provider_status: "unverified",
       ...(registry === "conan"
         ? {

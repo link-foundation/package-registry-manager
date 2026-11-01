@@ -1,0 +1,148 @@
+[
+  {
+    "registry": "npm",
+    "name": "links-notation",
+    "version": "0.27.1",
+    "manifest": "js/package.json",
+    "publishable": true,
+    "workflow": "js.yml",
+    "workflow_jobs": [
+      "release"
+    ],
+    "workflow_callees": [
+      "release.yml -> publish-js.yml -> publishToNpm"
+    ],
+    "publishing_policy": "oidc-with-token-fallback"
+  },
+  {
+    "registry": "crates-io",
+    "name": "links-notation-benchmark",
+    "version": "0.1.0",
+    "manifest": "rust/links-notation-benchmark/Cargo.toml",
+    "publishable": false,
+    "workflow": null,
+    "workflow_jobs": [],
+    "workflow_callees": [],
+    "publishing_policy": null
+  },
+  {
+    "registry": "crates-io",
+    "name": "links-notation-macro",
+    "version": "0.1.2",
+    "manifest": "rust/links-notation-macro/Cargo.toml",
+    "publishable": true,
+    "workflow": "js.yml",
+    "workflow_jobs": [
+      "release"
+    ],
+    "workflow_callees": [
+      "release.yml -> publish-rust.yml -> publishToCratesIO"
+    ],
+    "publishing_policy": "variable-gated-oidc-with-token-fallback"
+  },
+  {
+    "registry": "crates-io",
+    "name": "links-notation",
+    "version": "0.27.1",
+    "manifest": "rust/links-notation/Cargo.toml",
+    "publishable": true,
+    "workflow": "js.yml",
+    "workflow_jobs": [
+      "release"
+    ],
+    "workflow_callees": [
+      "release.yml -> publish-rust.yml -> publishToCratesIO"
+    ],
+    "publishing_policy": "variable-gated-oidc-with-token-fallback"
+  },
+  {
+    "registry": "pypi",
+    "name": "links-notation",
+    "version": "0.27.1",
+    "manifest": "python/pyproject.toml",
+    "publishable": true,
+    "workflow": "js.yml",
+    "workflow_jobs": [
+      "release"
+    ],
+    "workflow_callees": [
+      "release.yml -> publish-python.yml -> publishToPyPI"
+    ],
+    "publishing_policy": "token-only"
+  },
+  {
+    "registry": "go-modules",
+    "name": "github.com/link-foundation/links-notation/go",
+    "version": "v0.27.1",
+    "manifest": "go/go.mod",
+    "publishable": true,
+    "workflow": "js.yml",
+    "workflow_jobs": [
+      "release"
+    ],
+    "workflow_callees": [
+      "release.yml -> publish-go.yml -> publishRelease"
+    ],
+    "publishing_policy": null
+  },
+  {
+    "registry": "nuget",
+    "name": "Link.Foundation.Links.Notation",
+    "version": "0.27.1",
+    "manifest": "csharp/Link.Foundation.Links.Notation/Link.Foundation.Links.Notation.csproj",
+    "publishable": true,
+    "workflow": "js.yml",
+    "workflow_jobs": [
+      "release"
+    ],
+    "workflow_callees": [
+      "release.yml -> publish-csharp.yml -> pushToNuget"
+    ],
+    "publishing_policy": "token-only"
+  },
+  {
+    "registry": "maven-central",
+    "name": "io.github.link-foundation:links-notation",
+    "version": "0.27.1",
+    "manifest": "java/pom.xml",
+    "publishable": true,
+    "workflow": "js.yml",
+    "workflow_jobs": [
+      "release"
+    ],
+    "workflow_callees": [
+      "release.yml -> publish-java.yml -> publishToMavenCentral"
+    ],
+    "publishing_policy": null
+  },
+  {
+    "registry": "packagist",
+    "name": "link-foundation/links-notation",
+    "version": "0.27.1",
+    "manifest": "composer.json",
+    "publishable": true,
+    "workflow": "js.yml",
+    "workflow_jobs": [
+      "release"
+    ],
+    "workflow_callees": [
+      "release.yml -> publish-php.yml -> publishToPackagist"
+    ],
+    "publishing_policy": null
+  },
+  {
+    "registry": "cmake",
+    "name": "links_notation",
+    "version": "0.27.1",
+    "manifest": "cpp/CMakeLists.txt",
+    "publishable": true,
+    "workflow": "js.yml",
+    "workflow_jobs": [
+      "release"
+    ],
+    "workflow_callees": [
+      "release.yml -> publish-cpp.yml -> publishRelease"
+    ],
+    "publishing_policy": null
+  }
+]

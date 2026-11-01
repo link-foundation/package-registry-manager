@@ -1,7 +1,7 @@
 //! Job-aware detection of the workflow that publishes to a registry, so the
 //! trusted publisher names the workflow file CI actually publishes from.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
@@ -10,6 +10,7 @@ use regex::Regex;
 use serde_json::Value as JsonValue;
 
 use crate::model::Registry;
+use crate::publishing_state::{publishing_policies, AuthenticationGate};
 use crate::source_code::{command_position, strip_comments};
 use crate::workflows::Workflow;
 
@@ -29,8 +30,18 @@ pub const TRUSTED_REGISTRIES: [Registry; 6] = [
 const SCRIPT_WINDOW: usize = 12;
 const MAX_SCRIPT_BYTES: u64 = 1024 * 1024;
 
-fn regex(pattern: &str) -> Regex {
-    Regex::new(pattern).expect("static pattern must compile")
+/// Compile a static (or repeatedly built) pattern once per process; compiled
+/// regexes share their program, so clones are cheap.
+pub(crate) fn regex(pattern: &str) -> Regex {
+    static CACHE: LazyLock<std::sync::Mutex<std::collections::HashMap<String, Regex>>> =
+        LazyLock::new(Default::default);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache
+        .entry(pattern.to_owned())
+        .or_insert_with(|| Regex::new(pattern).expect("static pattern must compile"))
+        .clone()
 }
 
 static NPM_JOB: LazyLock<Regex> = LazyLock::new(|| {
@@ -82,8 +93,9 @@ static NUGET_JOB: LazyLock<Regex> = LazyLock::new(|| {
     regex(r"\bdotnet\s+nuget\s+push\b|PRM_NUGET_OIDC|\bnuget\s+push\b|PRM_NUGET_OIDC")
 });
 static JSR_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:deno|jsr)\s+publish\b"));
-static MAVEN_JOB: LazyLock<Regex> =
-    LazyLock::new(|| regex(r"\bmvn\s+(?:-\S+\s+)*deploy\b|\bgradle(?:w)?\s+publish\b"));
+static MAVEN_JOB: LazyLock<Regex> = LazyLock::new(|| {
+    regex(r"(?:\./|\b)mvnw?\s+(?:-\S+\s+)*deploy\b|(?:\./|\b)gradlew?\s+(?:-\S+\s+)*publish\b")
+});
 static VSCE_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\bvsce\s+publish\b"));
 static OVSX_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\bovsx\s+publish\b"));
 static CHROME_JOB: LazyLock<Regex> =
@@ -98,6 +110,29 @@ static OVSX_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\bovsx\b"));
 static MAVEN_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:mvn|gradle)\b"));
 static PUSH_ARGUMENT: LazyLock<Regex> = LazyLock::new(|| regex(r#"["'`]push["'`]"#));
 static DEPLOY_ARGUMENT: LazyLock<Regex> = LazyLock::new(|| regex(r#"["'`]deploy["'`]"#));
+
+static PACKAGIST_EVIDENCE: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"packagist\.org/api/(?:update|create)-package"));
+static GO_EVIDENCE: LazyLock<Regex> = LazyLock::new(|| {
+    regex(r"\bgh\s+release\s+create\b|\bgit\s+push\b[^\n]*\btags?\b|proxy\.golang\.org")
+});
+static CMAKE_EVIDENCE: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"\bgh\s+release\s+(?:create|upload)\b"));
+
+/// Registries without an upload command.
+///
+/// A release is a tag, a GitHub release
+/// asset or a registry update hook. The evidence is matched anywhere in the
+/// job's executable lines, as the URL is usually an argument.
+#[must_use]
+pub fn release_evidence(registry: Registry) -> Option<&'static Regex> {
+    match registry {
+        Registry::Packagist => Some(&PACKAGIST_EVIDENCE),
+        Registry::GoModules => Some(&GO_EVIDENCE),
+        Registry::Cmake => Some(&CMAKE_EVIDENCE),
+        _ => None,
+    }
+}
 
 fn job_pattern(registry: Registry) -> Option<&'static Regex> {
     match registry {
@@ -209,6 +244,12 @@ pub struct Publisher {
     pub candidates: Vec<String>,
     /// Findings to show next to the package, such as a missing `id-token`.
     pub warnings: Vec<String>,
+    /// Reusable-workflow chains ending in each callee job that publishes.
+    pub callees: Vec<String>,
+    /// Authentication policy of the publishing jobs, for OIDC registries.
+    pub policy: Option<String>,
+    /// Repository variable that selects OIDC, when one gates it.
+    pub gate: Option<AuthenticationGate>,
 }
 
 /// A long-lived registry token secret that a workflow reads.
@@ -275,6 +316,7 @@ pub fn parse_workflow(contents: &str) -> ParsedWorkflow {
 struct Found {
     workflow: String,
     job: String,
+    callees: Vec<String>,
     id_token: bool,
     environment: Option<String>,
 }
@@ -283,6 +325,44 @@ struct Found {
 /// the trusted publisher names the workflow CI actually publishes from.
 #[must_use]
 pub fn detect_publisher(root: &Path, workflows: &[Workflow], registry: Registry) -> Publisher {
+    let mut result = detect_publisher_details(root, workflows, registry);
+    if matches!(
+        registry,
+        Registry::CratesIo | Registry::Npm | Registry::PyPi | Registry::NuGet
+    ) && (result.workflow.is_some() || !result.candidates.is_empty())
+    {
+        let (policy, gates) = publishing_policies(root, workflows, registry);
+        if let Some(first) = gates.first() {
+            result.gate.clone_from(&first.gate);
+            if gates.iter().any(|facts| facts.password_always_token) {
+                let variable = result
+                    .gate
+                    .as_ref()
+                    .map_or("", |gate| gate.variable.as_str());
+                result.warnings.push(format!(
+                    "the publish password expression `vars.{variable} == 'true' && '' || secrets.*` always selects the token ('' is falsy in GitHub expressions); the variable cannot switch to OIDC"
+                ));
+            }
+        }
+        if policy == "variable-gated-oidc-with-token-fallback" {
+            let variable = result
+                .gate
+                .as_ref()
+                .map_or("gate", |gate| gate.variable.as_str());
+            result.warnings.push(format!(
+                "publishing selects OIDC only when the repository variable {variable} is 'true' and otherwise uses the token; register the trusted publisher, verify it, then set the variable"
+            ));
+        } else if policy != "oidc-with-token-fallback" {
+            result.warnings.push(format!(
+                "publishing authentication is {policy}; migrate to OIDC with token fallback"
+            ));
+        }
+        result.policy = Some(policy);
+    }
+    result
+}
+
+fn detect_publisher_details(root: &Path, workflows: &[Workflow], registry: Registry) -> Publisher {
     let parsed_workflows = workflows
         .iter()
         .map(|workflow| (workflow.name.as_str(), parse_workflow(&workflow.contents)))
@@ -302,7 +382,8 @@ pub fn detect_publisher(root: &Path, workflows: &[Workflow], registry: Registry)
                 .lines
                 .iter()
                 .find_map(|line| LOCAL_WORKFLOW.captures(line))
-                .and_then(|captures| parsed_workflows.get(&captures[1]));
+                .and_then(|captures| parsed_workflows.get_key_value(&captures[1]));
+            let mut chain = Vec::new();
             let environments = callee.map_or_else(
                 || {
                     if job_publishes(root, parsed, job, registry) {
@@ -314,13 +395,14 @@ pub fn detect_publisher(root: &Path, workflows: &[Workflow], registry: Registry)
                         Vec::new()
                     }
                 },
-                |callee| {
+                |(&name, _)| {
                     called_environments(
                         root,
                         &parsed_workflows,
-                        callee,
+                        name,
                         registry,
-                        &mut BTreeSet::from([workflow.name.as_str()]),
+                        &[workflow.name.as_str()],
+                        &mut chain,
                     )
                 },
             );
@@ -332,6 +414,7 @@ pub fn detect_publisher(root: &Path, workflows: &[Workflow], registry: Registry)
                 found.push(Found {
                     workflow: workflow.name.clone(),
                     job: job.name.clone(),
+                    callees: chain.clone(),
                     id_token: grants_id_token(
                         child_block(&job.lines, indent, "permissions").as_ref(),
                     )
@@ -407,6 +490,7 @@ fn described(workflow: &str, found: &[&Found]) -> Publisher {
     }
     Publisher {
         workflow: Some(workflow.to_owned()),
+        callees: unique(jobs.iter().flat_map(|item| item.callees.iter().cloned())),
         jobs: unique(jobs.iter().map(|item| item.job.clone())),
         environment: if environments.len() == 1 {
             environments.into_iter().next().flatten()
@@ -415,6 +499,7 @@ fn described(workflow: &str, found: &[&Found]) -> Publisher {
         },
         candidates: Vec::new(),
         warnings,
+        ..Publisher::default()
     }
 }
 
@@ -428,13 +513,22 @@ fn unique<T: PartialEq>(items: impl IntoIterator<Item = T>) -> Vec<T> {
     result
 }
 
-fn called_environments<'a>(
+fn called_environments(
     root: &Path,
-    workflows: &BTreeMap<&'a str, ParsedWorkflow>,
-    parsed: &ParsedWorkflow,
+    workflows: &BTreeMap<&str, ParsedWorkflow>,
+    name: &str,
     registry: Registry,
-    visited: &mut BTreeSet<&'a str>,
+    visited: &[&str],
+    chain: &mut Vec<String>,
 ) -> Vec<Option<String>> {
+    if visited.contains(&name) {
+        return Vec::new();
+    }
+    let Some(parsed) = workflows.get(name) else {
+        return Vec::new();
+    };
+    let mut seen = visited.to_vec();
+    seen.push(name);
     let mut environments = Vec::new();
     for job in &parsed.jobs {
         if let Some(captures) = job
@@ -442,15 +536,17 @@ fn called_environments<'a>(
             .iter()
             .find_map(|line| LOCAL_WORKFLOW.captures(line))
         {
-            if let Some((&name, callee)) = workflows.get_key_value(&captures[1]) {
-                if visited.insert(name) {
-                    environments.extend(called_environments(
-                        root, workflows, callee, registry, visited,
-                    ));
-                    visited.remove(name);
-                }
-            }
+            environments.extend(called_environments(
+                root,
+                workflows,
+                &captures[1],
+                registry,
+                &seen,
+                chain,
+            ));
         } else if job_publishes(root, parsed, job, registry) {
+            // Exact reusable-workflow identity: each callee job that publishes.
+            chain.push(format!("{} -> {}", seen[1..].join(" -> "), job.name));
             environments.push(environment_name(
                 child_block(&job.lines, child_indent(&job.lines), "environment").as_ref(),
             ));
@@ -501,10 +597,13 @@ pub fn token_secret_warning(registry: Registry, secret: &TokenSecret) -> String 
 /// Detect publication in one job, including referenced scripts.
 #[must_use]
 pub fn job_publishes(root: &Path, parsed: &ParsedWorkflow, job: &Job, registry: Registry) -> bool {
+    let executable = executable_lines(&job.lines);
+    if let Some(evidence) = release_evidence(registry) {
+        return evidence.is_match(&executable.join("\n"));
+    }
     let Some(pattern) = job_pattern(registry) else {
         return false;
     };
-    let executable = executable_lines(&job.lines);
     if publishing_line(&executable, pattern) {
         return true;
     }
@@ -580,13 +679,22 @@ pub(crate) fn only_called(header: &[String]) -> bool {
     !triggers.is_empty() && triggers.iter().all(|trigger| *trigger == "workflow_call")
 }
 
+static USES_PREFIX: LazyLock<Regex> =
+    LazyLock::new(|| regex(r#"^\s*-?\s*uses\s*:\s*['"]?[\w./-]*$"#));
+static RUN_LINE: LazyLock<Regex> = LazyLock::new(|| regex(r"^\s*-?\s*run\s*:\s*(.*)$"));
+static USES_LINE: LazyLock<Regex> = LazyLock::new(|| regex(r"^\s*-?\s*uses\s*:"));
+static BLOCK_SCALAR: LazyLock<Regex> = LazyLock::new(|| regex(r"^[|>][-+\d]*$"));
+static DECLARATION: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:const|let|var)\s+(\w+)\s*="));
+static SPAWN_CALL: LazyLock<Regex> = LazyLock::new(|| {
+    regex(r"(?:exec|spawn|run|Command::new|subprocess|system|(?:npm|pnpm|yarn)\s*\(\s*\[)")
+});
+
 fn publishing_line(lines: &[String], pattern: &Regex) -> bool {
     lines.iter().any(|line| {
         !line.contains("--dry-run")
             && pattern.find_iter(line).any(|found| {
                 command_position(&line[..found.start()])
-                    || regex(r#"^\s*-?\s*uses\s*:\s*['"]?[\w./-]*$"#)
-                        .is_match(&line[..found.start()])
+                    || USES_PREFIX.is_match(&line[..found.start()])
             })
     })
 }
@@ -596,7 +704,6 @@ fn publishing_line(lines: &[String], pattern: &Regex) -> bool {
 pub fn executable_lines(lines: &[String]) -> Vec<String> {
     let mut result = Vec::new();
     let mut block_indent = None;
-    let run = regex(r"^\s*-?\s*run\s*:\s*(.*)$");
     for line in lines {
         let indent = indent_of(line);
         if block_indent.is_some_and(|level| line.trim().is_empty() || indent > level) {
@@ -604,13 +711,13 @@ pub fn executable_lines(lines: &[String]) -> Vec<String> {
             continue;
         }
         block_indent = None;
-        if regex(r"^\s*-?\s*uses\s*:").is_match(line) {
+        if USES_LINE.is_match(line) {
             result.push(line.clone());
         }
-        let Some(captures) = run.captures(line) else {
+        let Some(captures) = RUN_LINE.captures(line) else {
             continue;
         };
-        if regex(r"^[|>][-+\d]*$").is_match(&captures[1]) {
+        if BLOCK_SCALAR.is_match(&captures[1]) {
             block_indent = Some(
                 indent
                     + if line.trim_start().starts_with('-') {
@@ -647,11 +754,10 @@ fn script_publishes(lines: &[String], registry: Registry) -> bool {
     }) {
         return true;
     }
-    let declaration = regex(r"\b(?:const|let|var)\s+(\w+)\s*=");
     let commands: Vec<_> = lines
         .iter()
         .filter_map(|line| {
-            let captures = declaration.captures(line)?;
+            let captures = DECLARATION.captures(line)?;
             pattern.is_match(line).then(|| captures[1].to_owned())
         })
         .collect();
@@ -668,7 +774,7 @@ fn script_publishes(lines: &[String], registry: Registry) -> bool {
     let variables: Vec<_> = lines
         .iter()
         .filter_map(|line| {
-            let captures = declaration.captures(line)?;
+            let captures = DECLARATION.captures(line)?;
             program.is_match(line).then(|| captures[1].to_owned())
         })
         .collect();
@@ -678,10 +784,7 @@ fn script_publishes(lines: &[String], registry: Registry) -> bool {
                 let nearby = lines[index..(index + 3).min(lines.len())].join("\n");
                 regex(&format!(r"\b{name}\b")).is_match(&nearby)
             }))
-            && regex(
-                r"(?:exec|spawn|run|Command::new|subprocess|system|(?:npm|pnpm|yarn)\s*\(\s*\[)",
-            )
-            .is_match(line)
+            && SPAWN_CALL.is_match(line)
             && lines[index..(index + SCRIPT_WINDOW).min(lines.len())]
                 .iter()
                 .any(|nearby| subcommand.is_match(nearby))

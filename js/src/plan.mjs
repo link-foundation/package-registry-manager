@@ -8,7 +8,7 @@ import {
   pypiFlow,
 } from "./flows.mjs";
 import { credentialPolicy } from "./credential-cycle.mjs";
-import { trustedFlow, tokenFlow } from "./extra-flows.mjs";
+import { packagistSteps, trustedFlow, tokenFlow } from "./extra-flows.mjs";
 import { bootstrapRef } from "./bootstrap-reference.mjs";
 import { pagesSteps } from "./pages.mjs";
 import { planPrerequisites } from "./prerequisites.mjs";
@@ -73,6 +73,22 @@ function buildPlan(inspection, packageInfo, options) {
     };
   }
   const command = (program, args) => ({ program, args });
+  if (
+    (options.migrate || options.addPublishJob) &&
+    packageInfo.publishing_policy === "variable-gated-oidc-with-token-fallback"
+  ) {
+    // The workflow already tries OIDC first and keeps the token fallback; only
+    // the opt-in repository variable is off. Never rewrite the workflow.
+    return basePlan(inspection, packageInfo, [
+      {
+        id: "enable-oidc-variable",
+        title: `Register trust, then set ${packageInfo.authentication_gate?.variable ?? "the OIDC opt-in variable"} to true`,
+        kind: "manual",
+        confirm: true,
+        description: `The workflow exchanges OIDC only when ${packageInfo.authentication_gate?.variable ?? "its repository variable"} is 'true' and otherwise keeps the existing token. Register the trusted publisher for ${packageInfo.workflow ?? "the caller workflow"}, set the variable, and verify the next release selected OIDC; the token fallback is retained.`,
+      },
+    ]);
+  }
   if (
     (options.migrate || options.addPublishJob) &&
     ["crates-io", "npm", "pypi", "nuget"].includes(packageInfo.registry) &&
@@ -159,12 +175,17 @@ function buildPlan(inspection, packageInfo, options) {
           "Strictly validate composer.json before submitting it.",
           command("composer", ["validate", "--strict"]),
         ),
-        browser(
-          "submit-repository",
-          "Submit the repository to Packagist",
-          "Sign in and submit the public VCS repository URL. Packagist reads package versions from tags.",
-          "https://packagist.org/packages/submit",
-        ),
+        ...(packageInfo.exists_on_registry !== true
+          ? [
+              browser(
+                "submit-repository",
+                "Submit the repository to Packagist",
+                "Sign in and submit the public VCS repository URL. Packagist reads package versions from tags.",
+                "https://packagist.org/packages/submit",
+              ),
+            ]
+          : []),
+        ...packagistSteps(packageInfo),
       ];
       break;
     default:

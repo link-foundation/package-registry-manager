@@ -1,0 +1,103 @@
+name: rust
+
+on:
+  workflow_call:
+    inputs:
+      verbose:
+        description: "Print extra diagnostics (never secret values)"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_JOBS: "2"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  CI_VERBOSE: ${{ inputs.verbose && 'true' || vars.CI_VERBOSE || 'false' }}
+
+defaults:
+  run:
+    working-directory: rust
+
+jobs:
+  lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    concurrency:
+      group: ci-rust-${{ github.ref }}-lint
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # Replaces three hand-rolled actions/cache steps. Those keyed only on
+      # Cargo.lock, had no restore-keys (so any lockfile edit was a total
+      # miss), and cached `target` without the compiler version in the key,
+      # which silently poisons the cache across toolchain updates.
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2.9.2
+        with:
+          workspaces: rust
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    name: test (${{ matrix.toolchain }})
+    needs: [lint]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, "1.87.0"]
+    concurrency:
+      group: ci-rust-${{ github.ref }}-test-${{ matrix.toolchain }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2.9.2
+        with:
+          workspaces: rust
+      - name: Build
+        run: cargo build --release
+      - name: Test
+        run: cargo test
+      - name: Test without the optional macro
+        run: cargo test -p links-notation --no-default-features
+
+  msrv-rejection:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    concurrency:
+      group: ci-rust-${{ github.ref }}-msrv-rejection
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Rust below the MSRV
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.86.0"
+      - name: Verify Cargo reports the required Rust version
+        run: bash ../experiments/issue-334/check-msrv.sh

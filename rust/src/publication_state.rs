@@ -15,6 +15,19 @@ static GO_VERSION: LazyLock<regex::Regex> = LazyLock::new(|| {
 });
 
 // Proxy responses require canonical SemVer, with only +incompatible metadata.
+/// `encodeURIComponent`: everything but unreserved characters is percent-encoded.
+fn encode_component(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
+                (byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
 fn canonical_go_version(version: &str) -> bool {
     GO_VERSION.captures(version).is_some_and(|parts| {
         parts.get(1).is_none_or(|pre| {
@@ -109,7 +122,19 @@ pub async fn evidence(
             .as_array()
             .and_then(|v| v.last())
             .unwrap_or(&Value::Null),
-        Registry::Packagist => &doc["packages"][&item.name][0]["version"],
+        Registry::Packagist => {
+            // p2/<name>.json carries tagged stable releases only (dev branches live
+            // in ~dev.json), so a match is an exact stable tag read back from Packagist.
+            let expected = item.version.as_deref().map(|v| v.trim_start_matches('v'));
+            if let Some(tag) = doc["packages"][&item.name].as_array().and_then(|tags| {
+                tags.iter()
+                    .filter_map(|tag| tag["version"].as_str())
+                    .find(|tag| Some(tag.strip_prefix('v').unwrap_or(tag)) == expected)
+            }) {
+                out.insert("stable_tag".into(), json!(tag));
+            }
+            &doc["packages"][&item.name][0]["version"]
+        }
         Registry::Jsr => &doc["latest"],
         _ => &Value::Null,
     };
@@ -365,6 +390,54 @@ impl RegistryClient {
                         "registry_state_reason".into(),
                         json!("Go proxy tagged-version list returned invalid metadata"),
                     );
+                }
+            }
+            // Exact module version: the proxy serves @v/<version>.info only once the
+            // tag has been fetched, independent of @latest or a stale list cache.
+            if let Some(version) = item.version.as_deref().filter(|v| canonical_go_version(v)) {
+                let evidence = format!("{base}/{module}/@v/{}.info", encode_component(version));
+                let found = match self.publication_text(&evidence).await {
+                    Ok(None) => Some(None),
+                    Ok(Some(text)) => serde_json::from_str::<Value>(&text)
+                        .ok()
+                        .map(|doc| doc["Version"].as_str().map(str::to_owned)),
+                    Err(()) => None,
+                };
+                state
+                    .audit
+                    .insert("version_evidence_url".into(), json!(evidence));
+                match found {
+                    Some(None) => {
+                        let outdated = older(
+                            version,
+                            state
+                                .audit
+                                .get("latest_version")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default(),
+                        );
+                        state
+                            .audit
+                            .insert("manifest_version_exists".into(), json!(false));
+                        state.audit.insert(
+                            "version_state".into(),
+                            json!(if outdated {
+                                "stale-manifest-version"
+                            } else {
+                                "manifest-version-absent"
+                            }),
+                        );
+                    }
+                    Some(Some(found)) if found == version => {
+                        state
+                            .audit
+                            .insert("manifest_version_exists".into(), json!(true));
+                    }
+                    _ => {
+                        state
+                            .audit
+                            .insert("version_state".into(), json!("manifest-version-unknown"));
+                    }
                 }
             }
         }

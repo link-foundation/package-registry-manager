@@ -262,9 +262,9 @@ dependencies = [
 
 [[package]]
 name = "browser-commander"
-version = "0.22.0"
+version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0645051512262ddeb304a82a59ed2bee5b2889e5e513d0097237986d0457c15a"
+checksum = "1ddbbe088160a59a95f9170eeccfc35aa4002bd5c01907c8b5a7bd2e10df5f05"
 dependencies = [
  "aes",
  "aes-gcm",

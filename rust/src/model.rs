@@ -137,6 +137,16 @@ impl FromStr for Registry {
     }
 }
 
+/// Repository variable that selects OIDC for a publishing job.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthenticationGate {
+    pub variable: String,
+    pub value: String,
+    /// Set when the expression can never select OIDC.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ineffective: bool,
+}
+
 /// A package discovered in a repository, with its registry state when probed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Package {
@@ -161,6 +171,12 @@ pub struct Package {
     /// The jobs of `workflow` that publish this package.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflow_jobs: Vec<String>,
+    /// Reusable-workflow chains ending in the callee jobs that publish.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflow_callees: Vec<String>,
+    /// Repository variable that selects OIDC in the publishing job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authentication_gate: Option<AuthenticationGate>,
     /// The GitHub environment of the publishing jobs, when they share one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
@@ -168,6 +184,9 @@ pub struct Package {
     /// choose one; `--workflow` picks the trusted publisher among them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflow_candidates: Vec<String>,
+    /// Credentials a registry without OIDC publishing requires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_requirements: Option<serde_json::Value>,
     /// Long-lived registry token secrets that workflows still read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub token_secrets: Vec<String>,
@@ -224,8 +243,11 @@ impl Package {
             warnings: Vec::new(),
             workflow: None,
             workflow_jobs: Vec::new(),
+            workflow_callees: Vec::new(),
+            authentication_gate: None,
             environment: None,
             workflow_candidates: Vec::new(),
+            credential_requirements: None,
             token_secrets: Vec::new(),
             publishing_policy: None,
             registry_http_status: None,
@@ -316,6 +338,9 @@ pub struct SetupStep {
     /// Ask before running, because the step publishes or changes secrets.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub confirm: bool,
+    /// Structured registry facts, such as `secrets`, `oidc`, `state` or `namespace`.
+    #[serde(default, flatten)]
+    pub details: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl SetupStep {
@@ -332,7 +357,15 @@ impl SetupStep {
             when: None,
             cwd: None,
             confirm: false,
+            details: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Attach a structured registry fact.
+    #[must_use]
+    pub fn detail(mut self, key: &str, value: serde_json::Value) -> Self {
+        self.details.insert(key.to_owned(), value);
+        self
     }
 
     /// Attach an exact argument vector.

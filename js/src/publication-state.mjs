@@ -67,9 +67,15 @@ export async function versionEvidence(item, document, url, options, getJson) {
       state.latest_version = versions?.at(-1);
       break;
     case "packagist":
+      // p2/<name>.json carries tagged stable releases only (dev branches live
+      // in ~dev.json), so a match is an exact stable tag read back from Packagist.
       versions = document.packages?.[item.name]?.map((value) =>
         value.version.replace(/^v/, ""),
       );
+      state.stable_tag = document.packages?.[item.name]?.find(
+        (value) =>
+          value.version.replace(/^v/, "") === expected?.replace(/^v/, ""),
+      )?.version;
       state.latest_version = document.packages?.[item.name]?.[0]?.version;
       break;
     case "jsr":
@@ -238,6 +244,33 @@ export async function distributionState(item, options, base) {
     } catch {
       /* Non-JSON is unknown. */
     }
+    // Exact module version: the proxy serves @v/<version>.info only once the
+    // tag has been fetched, independent of @latest or a stale list cache.
+    let exact = {};
+    if (item.version && canonicalGoVersion(item.version)) {
+      const evidence = `${base}/${module}/@v/${encodeURIComponent(item.version)}.info`;
+      const info = await read(evidence);
+      let found;
+      try {
+        found = info === null ? null : JSON.parse(info)?.Version;
+      } catch {
+        found = undefined;
+      }
+      exact =
+        found === null
+          ? { version_evidence_url: evidence, manifest_version_exists: false }
+          : found === item.version
+            ? { version_evidence_url: evidence, manifest_version_exists: true }
+            : {
+                version_evidence_url: evidence,
+                version_state: "manifest-version-unknown",
+              };
+      if (exact.manifest_version_exists === false) {
+        exact.version_state = olderVersion(item.version, version)
+          ? "stale-manifest-version"
+          : "manifest-version-absent";
+      }
+    }
     return {
       registry_evidence_url: url,
       ...((!version && !(list === null && latest === null)) ||
@@ -256,6 +289,7 @@ export async function distributionState(item, options, base) {
       ...(validList && tags.length === 0 && version
         ? { version_state: "no-tagged-release" }
         : {}),
+      ...exact,
     };
   }
   return {

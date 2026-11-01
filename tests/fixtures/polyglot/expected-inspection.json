@@ -65,6 +65,34 @@
       "version": "1.2.3",
       "manifest": "java/pom.xml",
       "publishable": true,
+      "credential_requirements": {
+        "oidc": "unsupported",
+        "oidc_note": "Sonatype Central Portal has no OIDC trusted publishing; publish with a Central user-token pair and a GPG signing key.",
+        "namespace": "verified Central Portal namespace matching the groupId",
+        "storage": "memory-or-encrypted-github-secret",
+        "secrets": [
+          {
+            "role": "central-username",
+            "secret": "CENTRAL_USERNAME",
+            "referenced": false
+          },
+          {
+            "role": "central-token",
+            "secret": "CENTRAL_TOKEN",
+            "referenced": false
+          },
+          {
+            "role": "gpg-private-key",
+            "secret": "GPG_PRIVATE_KEY",
+            "referenced": false
+          },
+          {
+            "role": "gpg-passphrase",
+            "secret": "GPG_PASSPHRASE",
+            "referenced": false
+          }
+        ]
+      },
       "warnings": [
         "no workflow publishes com.acme:widgets to maven-central; CI releases will not reach it"
       ]
@@ -74,7 +102,26 @@
       "name": "acme/widgets",
       "version": "1.2.3",
       "manifest": "php/composer.json",
-      "publishable": true
+      "publishable": true,
+      "credential_requirements": {
+        "oidc": "unsupported",
+        "oidc_note": "Public packagist.org has no OIDC publishing (Private Packagist OIDC is a separate product); releases come from tags via the GitHub hook or the update-package API.",
+        "storage": "memory-or-encrypted-github-secret",
+        "secrets": [
+          {
+            "role": "packagist-username",
+            "secret": "PACKAGIST_USERNAME",
+            "referenced": false,
+            "optional": true
+          },
+          {
+            "role": "packagist-api-token",
+            "secret": "PACKAGIST_TOKEN",
+            "referenced": false,
+            "optional": true
+          }
+        ]
+      }
     },
     {
       "registry": "docker-hub",

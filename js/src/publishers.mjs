@@ -1,4 +1,4 @@
-import { publishingPolicy } from "./publishing-state.mjs";
+import { authenticationFacts, publishingPolicy } from "./publishing-state.mjs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { stripComments, commandPosition } from "./source-code.mjs";
@@ -21,7 +21,10 @@ export const JOB_PATTERNS = new Map([
   ],
   ["jsr", /\bdeno\s+publish\b|\bjsr\s+publish\b/],
   ["docker-hub", /docker\/login-action|\bdocker\s+(?:login|push)\b/],
-  ["maven-central", /\bmvn\s+(?:-\S+\s+)*deploy\b|\bgradle(?:w)?\s+publish\b/],
+  [
+    "maven-central",
+    /(?:\.\/|\b)mvnw?\s+(?:-\S+\s+)*deploy\b|(?:\.\/|\b)gradlew?\s+(?:-\S+\s+)*publish\b/,
+  ],
   ["vscode-marketplace", /\bvsce\s+publish\b/],
   ["open-vsx", /\bovsx\s+publish\b/],
   [
@@ -40,6 +43,20 @@ export const JOB_PATTERNS = new Map([
     "pypi",
     /pypa\/gh-action-pypi-publish|\b(?:python(?:3(?:\.\d+)?)?\s+-m\s+)?twine\s+upload\b|\b(?:uv|poetry|hatch|flit|pdm)\s+publish\b/,
   ],
+]);
+
+/**
+ * Registries without an upload command: a release is a tag, a GitHub release
+ * asset or a registry update hook. The evidence is matched anywhere in the
+ * job's executable lines, as the URL is usually an argument.
+ */
+export const RELEASE_EVIDENCE = new Map([
+  ["packagist", /packagist\.org\/api\/(?:update|create)-package/],
+  [
+    "go-modules",
+    /\bgh\s+release\s+create\b|\bgit\s+push\b[^\n]*\btags?\b|proxy\.golang\.org/,
+  ],
+  ["cmake", /\bgh\s+release\s+(?:create|upload)\b/],
 ]);
 
 // Scripts usually pass the subcommand as a separate argument, as in
@@ -155,8 +172,25 @@ export async function detectPublisher(root, workflows, registry) {
     ["crates-io", "npm", "pypi", "nuget"].includes(registry) &&
     (result.workflow || result.candidates.length)
   ) {
-    result.policy = await publishingPolicies(root, workflows, registry);
-    if (result.policy !== "oidc-with-token-fallback") {
+    const { policy, gates } = await publishingPolicies(
+      root,
+      workflows,
+      registry,
+    );
+    result.policy = policy;
+    if (gates.length) {
+      result.gate = gates[0].gate;
+      if (gates.some((facts) => facts.passwordAlwaysToken)) {
+        result.warnings.push(
+          `the publish password expression \`vars.${result.gate.variable} == 'true' && '' || secrets.*\` always selects the token ('' is falsy in GitHub expressions); the variable cannot switch to OIDC`,
+        );
+      }
+    }
+    if (result.policy === "variable-gated-oidc-with-token-fallback") {
+      result.warnings.push(
+        `publishing selects OIDC only when the repository variable ${result.gate?.variable ?? "gate"} is 'true' and otherwise uses the token; register the trusted publisher, verify it, then set the variable`,
+      );
+    } else if (result.policy !== "oidc-with-token-fallback") {
       result.warnings.push(
         `publishing authentication is ${result.policy}; migrate to OIDC with token fallback`,
       );
@@ -173,6 +207,7 @@ async function publishingPolicies(root, workflows, registry) {
     ]),
   );
   const policies = [];
+  const gates = [];
   const visit = async (name, callerGrant, seen = new Set()) => {
     if (seen.has(name) || !parsed.has(name)) {
       return;
@@ -196,6 +231,13 @@ async function publishingPolicies(root, workflows, registry) {
       if (called) {
         await visit(called, grant, new Set([...seen, name]));
       } else if (await jobPublishes(root, workflow, job, registry)) {
+        const facts = authenticationFacts(
+          [...workflow.header, ...job.lines].join("\n"),
+          registry,
+        );
+        if (facts.gate) {
+          gates.push(facts);
+        }
         policies.push(
           publishingPolicy(
             [[...workflow.header, ...job.lines].join("\n")],
@@ -212,11 +254,13 @@ async function publishingPolicies(root, workflows, registry) {
     }
   }
   const unique = [...new Set(policies)];
-  return unique.length === 1
-    ? unique[0]
-    : unique.length
-      ? "mixed-authentication"
-      : "authentication-unverified";
+  const policy =
+    unique.length === 1
+      ? unique[0]
+      : unique.length
+        ? "mixed-authentication"
+        : "authentication-unverified";
+  return { policy, gates };
 }
 
 async function detectPublisherDetails(root, workflows, registry) {
@@ -242,6 +286,7 @@ async function detectPublisherDetails(root, workflows, registry) {
         job.lines.find((line) => LOCAL_WORKFLOW.test(line)) ?? "",
       )?.[1];
       const callee = called ? parsedWorkflows.get(called) : null;
+      const chain = [];
       const environments = callee
         ? await calledEnvironments(
             root,
@@ -249,6 +294,7 @@ async function detectPublisherDetails(root, workflows, registry) {
             called,
             registry,
             new Set([workflow.name]),
+            chain,
           )
         : (await jobPublishes(root, parsed, job, registry))
           ? [
@@ -265,6 +311,7 @@ async function detectPublisherDetails(root, workflows, registry) {
         found.push({
           workflow: workflow.name,
           job: job.name,
+          callees: chain,
           idToken:
             grantsIdToken(childBlock(job.lines, indent, "permissions")) ??
             workflowGrant ??
@@ -323,8 +370,10 @@ function described(workflow, found) {
       `the publishing jobs in ${workflow} use different environments (${environments.map((item) => item ?? "none").join(", ")}); pass --environment <name> to choose one`,
     );
   }
+  const callees = [...new Set(jobs.flatMap((item) => item.callees ?? []))];
   return {
     workflow,
+    ...(callees.length ? { callees } : {}),
     jobs: [...new Set(jobs.map((item) => item.job))],
     environment: environments.length === 1 ? environments[0] : null,
     candidates: [],
@@ -372,7 +421,14 @@ export function registryTokenSecrets(registry) {
   return TOKEN_SECRETS.get(registry) ?? [];
 }
 
-async function calledEnvironments(root, workflows, name, registry, visited) {
+async function calledEnvironments(
+  root,
+  workflows,
+  name,
+  registry,
+  visited,
+  chain = [],
+) {
   if (visited.has(name)) {
     return [];
   }
@@ -392,9 +448,12 @@ async function calledEnvironments(root, workflows, name, registry, visited) {
           LOCAL_WORKFLOW.exec(called)[1],
           registry,
           seen,
+          chain,
         )),
       );
     } else if (await jobPublishes(root, parsed, job, registry)) {
+      // Exact reusable-workflow identity: each callee job that publishes.
+      chain.push(`${[...seen].slice(1).join(" -> ")} -> ${job.name}`);
       environments.push(
         environmentName(
           childBlock(job.lines, childIndent(job.lines), "environment"),
@@ -409,6 +468,10 @@ async function calledEnvironments(root, workflows, name, registry, visited) {
 export async function jobPublishes(root, parsed, job, registry) {
   const pattern = JOB_PATTERNS.get(registry);
   const executable = executableLines(job.lines);
+  const evidence = RELEASE_EVIDENCE.get(registry);
+  if (evidence) {
+    return evidence.test(executable.join("\n"));
+  }
   if (publishingLine(executable, pattern)) {
     return true;
   }

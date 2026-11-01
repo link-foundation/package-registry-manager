@@ -16,6 +16,23 @@ export function packageWorkflows(workflows, packageInfo) {
       )
       .filter(Boolean)
       .at(-1);
+  // A step running in a parent directory publishes this package only when
+  // it names it, as in `cargo publish -p name` or a shell function invoked
+  // with the name, or reads its manifest by path.
+  const ancestor = (cwd, child) =>
+    child !== cwd && (cwd === "." || child.startsWith(`${cwd}/`));
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const namesPackage = (text, cwd) => {
+    const relative =
+      cwd === "."
+        ? packageInfo.manifest
+        : packageInfo.manifest.slice(cwd.length + 1);
+    return [packageInfo.name, relative]
+      .filter(Boolean)
+      .some((token) =>
+        new RegExp(`(?<![\\w./-])${escape(token)}(?![\\w-])`).test(text),
+      );
+  };
   return workflows.map((workflow) => {
     const parsed = parseWorkflow(workflow.contents);
     const jobs = parsed.jobs.flatMap((job) => {
@@ -24,11 +41,10 @@ export function packageWorkflows(workflows, packageInfo) {
         const called = job.lines.some((line) =>
           /^\s*uses\s*:\s*["']?\.\/\.github\/workflows\//.test(line),
         );
-        const cwd = working(job.lines) ?? working(parsed.header) ?? ".";
-        return called &&
-          cwd.replace(/^\.\//, "").replace(/\/$/, "") === directory
-          ? [`  ${job.name}:\n${job.lines.join("\n")}`]
-          : [];
+        // A reusable-workflow caller has no steps or working directory of its
+        // own; it carries the OIDC identity of whatever its callee publishes,
+        // and the callee is scoped separately.
+        return called ? [`  ${job.name}:\n${job.lines.join("\n")}`] : [];
       }
       const prefix = job.lines.slice(0, start + 1);
       const blocks = [];
@@ -67,12 +83,20 @@ export function packageWorkflows(workflows, packageInfo) {
           (working(block) ?? cd ?? inferred ?? fallback)
             .replace(/^\.\//, "")
             .replace(/\/$/, "") || ".";
-        return cwd === directory;
+        return (
+          cwd === directory ||
+          (ancestor(cwd, directory) && namesPackage(text, cwd))
+        );
       });
+      // Action-only steps (authentication exchanges such as
+      // crates-io-auth-action) belong to the job that publishes this package.
+      const kept = blocks.filter(
+        (block) =>
+          matching.includes(block) ||
+          !block.some((line) => /^\s*-?\s*run\s*:/.test(line)),
+      );
       return matching.length
-        ? [
-            `  ${job.name}:\n${prefix.join("\n")}\n${matching.flat().join("\n")}`,
-          ]
+        ? [`  ${job.name}:\n${prefix.join("\n")}\n${kept.flat().join("\n")}`]
         : [];
     });
     return {

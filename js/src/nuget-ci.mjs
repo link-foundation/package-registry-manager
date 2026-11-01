@@ -3,6 +3,37 @@ import { repositorySlug } from "./repository-identity.mjs";
 import { AUTH_FAILURE_PATTERNS } from "./publishing-policy.mjs";
 import { fileURLToPath } from "node:url";
 
+/** Job names (or reusable-call segments) whose skip would hide the release. */
+export function requiredJobs(pkg = {}) {
+  return [
+    ...(pkg.workflow_jobs ?? []),
+    ...(pkg.workflow_callees ?? []).map((chain) => chain.split(" -> ").at(-1)),
+  ].filter(Boolean);
+}
+
+/**
+ * Failed or cancelled jobs always block. A skipped job blocks only when it is a
+ * required release job (or when the required set is unknown); PR-only reviews
+ * and unchanged-component jobs legitimately skip on a push to main.
+ */
+export function unmetJobs(jobs, required) {
+  const isRequired = (job) =>
+    !required.length ||
+    job.name.split(" / ").some((segment) => required.includes(segment.trim()));
+  const unmet = jobs.filter(
+    (job) =>
+      !["success", "skipped"].includes(job.conclusion) ||
+      (job.conclusion === "skipped" && isRequired(job)),
+  );
+  if (
+    required.length &&
+    !jobs.some((job) => isRequired(job) && job.conclusion === "success")
+  ) {
+    unmet.push({ name: required.join(", "), conclusion: "missing" });
+  }
+  return unmet;
+}
+
 /** Fresh main-revision CI, actual method and exact public consumers are separate gates. */
 export async function verifyNugetRelease(session) {
   const github = session.options.github ?? githubServices(session.options);
@@ -116,7 +147,7 @@ export async function verifyNugetRelease(session) {
     run.status !== "completed" ||
     run.conclusion !== "success" ||
     !jobs.length ||
-    jobs.some((job) => job.conclusion !== "success")
+    unmetJobs(jobs, requiredJobs(session.plan.package)).length
   ) {
     throw new Error(
       `NuGet current-main pipeline has incomplete gates: ${run.html_url}`,
