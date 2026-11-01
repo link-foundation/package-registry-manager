@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "@link-foundation/gh-manager": "https://codeload.github.com/link-foundation/gh-manager/tar.gz/0b3ceb1590be7eb0340ae088730698b5ae9bebfc",
-    "browser-commander": "^0.34.0",
+    "browser-commander": "^0.34.1",
     "command-stream": "^2.6.0",
     "playwright": "^1.63.0",
     "selenium-webdriver": "^4.50.0"
