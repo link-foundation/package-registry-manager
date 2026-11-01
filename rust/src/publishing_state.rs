@@ -13,16 +13,27 @@ use std::{
     path::Path,
 };
 fn rx(pattern: &str) -> Regex {
-    Regex::new(pattern).expect("static pattern")
+    crate::publishers::regex(pattern)
 }
 /// Report missing OIDC or fallback, independently of last release provenance.
 #[must_use]
 pub fn publishing_policy(root: &Path, workflows: &[Workflow], registry: Registry) -> String {
+    publishing_policies(root, workflows, registry).0
+}
+/// The policy of every publishing job, with the authentication facts of the
+/// jobs whose OIDC exchange a repository variable gates.
+#[must_use]
+pub fn publishing_policies(
+    root: &Path,
+    workflows: &[Workflow],
+    registry: Registry,
+) -> (String, Vec<AuthenticationFacts>) {
     let parsed: BTreeMap<_, _> = workflows
         .iter()
         .map(|workflow| (workflow.name.clone(), parse_workflow(&workflow.contents)))
         .collect();
     let mut policies = BTreeSet::new();
+    let mut gates = Vec::new();
     for workflow in workflows {
         if !only_called(&parsed[&workflow.name].header) {
             visit(
@@ -32,17 +43,18 @@ pub fn publishing_policy(root: &Path, workflows: &[Workflow], registry: Registry
                 registry,
                 None,
                 &mut BTreeSet::new(),
-                &mut policies,
+                &mut (&mut policies, &mut gates),
             );
         }
     }
-    if policies.len() == 1 {
+    let policy = if policies.len() == 1 {
         policies.first().expect("one policy").to_string()
     } else if policies.is_empty() {
         "authentication-unverified".into()
     } else {
         "mixed-authentication".into()
-    }
+    };
+    (policy, gates)
 }
 fn visit(
     root: &Path,
@@ -51,7 +63,7 @@ fn visit(
     registry: Registry,
     caller: Option<bool>,
     seen: &mut BTreeSet<String>,
-    policies: &mut BTreeSet<&'static str>,
+    found: &mut (&mut BTreeSet<&'static str>, &mut Vec<AuthenticationFacts>),
 ) {
     if !seen.insert(name.into()) {
         return;
@@ -78,7 +90,7 @@ fn visit(
                 registry,
                 Some(grant),
                 &mut seen.clone(),
-                policies,
+                found,
             );
         } else if job_publishes(root, workflow, job, registry) {
             let text = workflow
@@ -88,7 +100,11 @@ fn visit(
                 .cloned()
                 .collect::<Vec<_>>()
                 .join("\n");
-            policies.insert(policy(&text, registry, grant));
+            let facts = authentication_facts(&text, registry);
+            if facts.gate.is_some() {
+                found.1.push(facts);
+            }
+            found.0.insert(policy(&text, registry, grant));
         }
     }
 }
@@ -122,7 +138,20 @@ pub(crate) fn policy(text: &str, registry: Registry, grant: bool) -> &'static st
         } else {
             text.contains("outcome == 'failure'")
         };
-    if oidc && token && fallback {
+    let facts = authentication_facts(text, registry);
+    if facts.password_always_token {
+        // `vars.FLAG == 'true' && '' || secrets.TOKEN` always yields the token:
+        // '' is falsy in GitHub expressions, so the flag never selects OIDC.
+        return if token {
+            "token-only"
+        } else {
+            "authentication-unverified"
+        };
+    }
+    if grant && token && facts.gate.is_some() && facts.shell_fallback {
+        return "variable-gated-oidc-with-token-fallback";
+    }
+    if oidc && token && (fallback || facts.npm_native) {
         "oidc-with-token-fallback"
     } else if oidc {
         "oidc-only"
@@ -131,4 +160,77 @@ pub(crate) fn policy(text: &str, registry: Registry, grant: bool) -> &'static st
     } else {
         "authentication-unverified"
     }
+}
+
+pub use crate::model::AuthenticationGate;
+/// Actual credential-selection semantics of a publishing job.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AuthenticationFacts {
+    pub gate: Option<AuthenticationGate>,
+    pub shell_fallback: bool,
+    pub password_always_token: bool,
+    pub npm_native: bool,
+}
+/// Actual credential-selection semantics of a publishing job, kept apart from
+/// publisher registration and historical trusted uploads.
+#[must_use]
+pub fn authentication_facts(text: &str, registry: Registry) -> AuthenticationFacts {
+    let mut facts = AuthenticationFacts::default();
+    let steps: Vec<&str> = split_steps(text);
+    let auth = steps.iter().find(|step| match registry {
+        Registry::CratesIo => step.contains("crates-io-auth-action@"),
+        Registry::NuGet => step.contains("NuGet/login@"),
+        _ => false,
+    });
+    if let Some(gate) =
+        auth.and_then(|step| rx(r#"\bif:.*\bvars\.(\w+)\s*==\s*['"]true['"]"#).captures(step))
+    {
+        facts.gate = Some(AuthenticationGate {
+            variable: gate[1].to_string(),
+            value: "true".into(),
+            ineffective: false,
+        });
+    }
+    facts.shell_fallback = rx(r"\$\{\w*OIDC\w*:-\$\w+\}").is_match(text);
+    if registry == Registry::PyPi {
+        let password = rx(r"(?m)^\s*password\s*:\s*(.+)$")
+            .captures(text)
+            .map_or(String::new(), |found| found[1].to_string());
+        if let Some(flag) = rx(r#"vars\.(\w+)\s*==\s*['"]true['"]\s*&&\s*''\s*\|\|\s*secrets\.\w+"#)
+            .captures(&password)
+        {
+            facts.password_always_token = true;
+            facts.gate = Some(AuthenticationGate {
+                variable: flag[1].to_string(),
+                value: "true".into(),
+                ineffective: true,
+            });
+        }
+    }
+    if registry == Registry::Npm {
+        // npm 11.5.1+ tries the OIDC exchange itself and falls back to the
+        // configured token, so a job with both needs no separate fallback step.
+        facts.npm_native = steps.iter().any(|step| {
+            rx(r"\bnpm\s+publish\b").is_match(step)
+                && rx(r"NODE_AUTH_TOKEN\s*:\s*\$\{\{\s*secrets\.").is_match(step)
+        });
+    }
+    facts
+}
+/// Split text before each line that starts a YAML sequence item, as the JS
+/// lookahead split `/(?=^[ \t]*- )/m` does.
+fn split_steps(text: &str) -> Vec<&str> {
+    let starts: Vec<usize> = rx(r"(?m)^[ \t]*- ")
+        .find_iter(text)
+        .map(|found| found.start())
+        .filter(|start| *start > 0)
+        .collect();
+    let mut parts = Vec::new();
+    let mut from = 0;
+    for start in starts {
+        parts.push(&text[from..start]);
+        from = start;
+    }
+    parts.push(&text[from..]);
+    parts
 }

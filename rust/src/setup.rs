@@ -47,6 +47,7 @@ mod release_session;
 mod repository_session;
 mod token_inventory;
 pub use batch::{execute_plan, execute_plans, execute_plans_with};
+pub use nuget_ci::{required_jobs, unmet_jobs};
 pub use token_inventory::read_account_token_inventory;
 
 const PREFILLED_FORMS: [&str; 2] = ["configure-trusted-publisher", "create-pending-publisher"];

@@ -14,6 +14,7 @@ pub mod crates_api;
 pub mod crates_tokens;
 pub mod credential_browser;
 pub mod credential_cycle;
+pub mod credential_requirements;
 pub mod default_browser;
 pub mod discovery;
 pub mod extra_flows;
@@ -63,7 +64,7 @@ pub use plan::{build_plans, build_plans_for, build_plans_with, PlanOptions};
 
 mod nuget_workflow;
 
-mod nuget_migration;
+pub mod nuget_migration;
 
 /// Owner-setup prerequisite diagnostics for bounded CI recovery.
 pub mod bootstrap_recovery;

@@ -11,7 +11,8 @@ use crate::containers::{container_packages, CONTAINER_FILES};
 use crate::model::{Inspection, Package, Registry, RepositoryInfo, Skipped};
 use crate::pages::pages_workflow;
 use crate::publishers::{
-    detect_publisher, token_secret_warning, token_secrets, Publisher, TRUSTED_REGISTRIES,
+    detect_publisher, release_evidence, token_secret_warning, token_secrets, Publisher,
+    TRUSTED_REGISTRIES,
 };
 use crate::skips::{
     ignore_reason, ignored_by, read_ignore_list, referenced_by_workflow, test_directory,
@@ -142,11 +143,16 @@ pub fn inspect_repository_recovering(
     }
     crate::audit_discovery::aliases(&root, &mut parsed)?;
     crate::audit_config::apply(&mut parsed, &config, &workflows)?;
-    let central = detect_publisher(&root, &workflows, Registry::MavenCentral);
-    publishers.insert(Registry::MavenCentral, central);
+    for registry in SCOPED_REGISTRIES {
+        publishers.insert(registry, detect_publisher(&root, &workflows, registry));
+    }
+    canonical_composer(&mut parsed);
     let mut counts = BTreeMap::new();
     for item in &parsed {
-        if test_directory(&item.manifest).is_none() {
+        // JS skip records carry no registry, except Packagist development copies.
+        let uncounted =
+            item.audit.contains_key("discovery_skip") && item.registry != Registry::Packagist;
+        if test_directory(&item.manifest).is_none() && !uncounted {
             *counts.entry(item.registry).or_insert(0_usize) += 1;
         }
     }
@@ -165,18 +171,46 @@ pub fn inspect_repository_recovering(
             }
         })
         .map(|item| {
-            if counts.get(&item.registry).copied().unwrap_or(0) > 1
-                && TRUSTED_REGISTRIES.contains(&item.registry)
+            let scope = item
+                .audit
+                .get("publisher_scope")
+                .and_then(JsonValue::as_str)
+                .map(str::to_owned);
+            if let Some(scope) = scope {
+                let mut scoped = item.clone();
+                scoped.manifest = scope;
+                let scoped = crate::package_coverage::package_workflows(&workflows, &scoped);
+                let publisher = detect_publisher(&root, &scoped, item.registry);
+                let publishers = BTreeMap::from([(item.registry, publisher)]);
+                with_publisher(item, &workflows, &publishers)
+            } else if (counts.get(&item.registry).copied().unwrap_or(0) > 1
+                && TRUSTED_REGISTRIES.contains(&item.registry))
+                || SCOPED_REGISTRIES.contains(&item.registry)
             {
                 let scoped = crate::package_coverage::package_workflows(&workflows, &item);
                 let publisher = detect_publisher(&root, &scoped, item.registry);
                 let publishers = BTreeMap::from([(item.registry, publisher)]);
-                with_publisher(&root, item, &workflows, &publishers)
+                with_publisher(item, &workflows, &publishers)
             } else {
-                with_publisher(&root, item, &workflows, &publishers)
+                with_publisher(item, &workflows, &publishers)
             }
         })
         .collect::<Vec<_>>();
+    packages.retain(|item| {
+            let Some(kind) = internal_workload(item) else {
+                return true;
+            };
+            if crate::audit_config::opted_in(&config, &item.manifest) {
+                return true;
+            }
+            skipped.push(Skipped {
+                manifest: item.manifest.clone(),
+                reason: format!(
+                    "internal {kind} workload: no workflow publishes it and no source decision lists it under \"publish\""
+                ),
+            });
+            false
+        });
     let dockerfiles = dockerfiles
         .iter()
         .map(|path| relative_path(path, &root))
@@ -199,7 +233,6 @@ pub fn inspect_repository_recovering(
             format!(".github/workflows/{workflow}"),
         );
         packages.push(with_publisher(
-            &root,
             package,
             &workflows,
             &BTreeMap::from([(Registry::ChromeWebStore, chrome)]),
@@ -261,8 +294,76 @@ fn kept(
     false
 }
 
+/// Registries whose publication evidence is scoped to one manifest.
+const SCOPED_REGISTRIES: [Registry; 4] = [
+    Registry::MavenCentral,
+    Registry::Packagist,
+    Registry::GoModules,
+    Registry::Cmake,
+];
+
+/// Benchmark/fixture manifests are internal unless a workflow releases them.
+fn internal_workload(item: &Package) -> Option<&'static str> {
+    if item.workflow.is_some() {
+        return None;
+    }
+    let pattern = Regex::new(r"(?i)^(?:bench(?:mark)?(?:es|s)?|perf)$").expect("static pattern");
+    let parts = item.manifest.split('/').collect::<Vec<_>>();
+    parts[..parts.len().saturating_sub(1)]
+        .iter()
+        .any(|part| pattern.is_match(part))
+        .then_some("benchmark")
+}
+
+/// Packagist reads only the repository-root composer.json, so a same-name
+/// descriptor in a subdirectory is a development copy of that distribution.
+/// The root keeps the copy's declared version and the copy's publishing job.
+fn canonical_composer(parsed: &mut [Package]) {
+    let composer = parsed
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| {
+            item.registry == Registry::Packagist && !item.audit.contains_key("discovery_skip")
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let Some(root) = composer
+        .iter()
+        .copied()
+        .find(|index| parsed[*index].manifest == "composer.json")
+    else {
+        return;
+    };
+    for copy in composer {
+        if copy == root || parsed[copy].name != parsed[root].name {
+            continue;
+        }
+        let (name, manifest, version) = (
+            parsed[root].name.clone(),
+            parsed[copy].manifest.clone(),
+            parsed[copy].version.clone(),
+        );
+        let item = &mut parsed[copy];
+        item.audit.insert(
+            "discovery_skip".into(),
+            JsonValue::String(format!(
+                "Packagist reads only the repository-root composer.json; {manifest} is a development descriptor of {name}"
+            )),
+        );
+        item.publishable = false;
+        let root = &mut parsed[root];
+        if root.version.is_none() && version.is_some() {
+            root.version = version;
+            root.audit
+                .insert("version_source".into(), JsonValue::String(manifest.clone()));
+        }
+        root.audit
+            .entry("publisher_scope".into())
+            .or_insert(JsonValue::String(manifest));
+    }
+}
+
 fn with_publisher(
-    root: &Path,
     mut item: Package,
     workflows: &[Workflow],
     publishers: &BTreeMap<Registry, Publisher>,
@@ -272,26 +373,27 @@ fn with_publisher(
     };
     item.workflow.clone_from(&publisher.workflow);
     item.workflow_jobs.clone_from(&publisher.jobs);
+    // Reusable workflows publish under the caller's identity; the callee
+    // jobs are kept so setup and recovery act on the actual publishing job.
+    item.workflow_callees.clone_from(&publisher.callees);
+    item.authentication_gate.clone_from(&publisher.gate);
     item.environment.clone_from(&publisher.environment);
     if publisher.candidates.len() > 1 {
         item.workflow_candidates.clone_from(&publisher.candidates);
     }
+    item.credential_requirements =
+        crate::credential_requirements::credential_requirements(item.registry, workflows);
     let secrets = token_secrets(workflows, item.registry);
     item.warnings.extend(publisher.warnings.iter().cloned());
-    if matches!(
-        item.registry,
-        Registry::CratesIo | Registry::Npm | Registry::PyPi | Registry::NuGet
-    ) && (publisher.workflow.is_some() || !publisher.candidates.is_empty())
-    {
-        let policy = crate::publishing_state::publishing_policy(root, workflows, item.registry);
-        if policy != "oidc-with-token-fallback" {
-            item.warnings.push(format!(
-                "publishing authentication is {policy}; migrate to OIDC with token fallback"
-            ));
-        }
-        item.publishing_policy = Some(policy);
+    if publisher.policy.is_some() {
+        item.publishing_policy.clone_from(&publisher.policy);
     }
-    if publisher.workflow.is_none() && publisher.candidates.is_empty() {
+    // Tags and registry hooks release Go modules, Packagist packages and
+    // CMake archives without a workflow, so only evidence is reported.
+    if publisher.workflow.is_none()
+        && publisher.candidates.is_empty()
+        && release_evidence(item.registry).is_none()
+    {
         item.warnings.push(format!(
             "no workflow publishes {} to {}; CI releases will not reach it",
             item.name, item.registry
@@ -413,7 +515,21 @@ fn parse_manifest(path: &Path, root: &Path) -> Result<Option<Package>> {
         )?)),
         "pyproject.toml" => parse_pyproject(contents, relative),
         "setup.py" => Ok(Some(parse_setup_py(contents, relative))),
-        "go.mod" => Ok(Some(parse_go(contents, relative))),
+        "go.mod" => {
+            let mut item = parse_go(contents, relative);
+            if let Some(version) = version_file(path)? {
+                item.version = Some(format!("v{}", version.trim_start_matches('v')));
+                let directory = item.manifest.rsplit_once('/').map_or(".", |(dir, _)| dir);
+                let source = if directory == "." {
+                    "VERSION".to_owned()
+                } else {
+                    format!("{directory}/VERSION")
+                };
+                item.audit
+                    .insert("version_source".into(), JsonValue::String(source));
+            }
+            Ok(Some(item))
+        }
         "pom.xml" => Ok(Some(parse_maven(contents, relative))),
         "build.gradle" | "build.gradle.kts" => {
             Ok(Some(crate::audit_discovery::gradle(contents, relative)))
@@ -533,14 +649,50 @@ fn parse_dotnet(contents: &str, path: &Path, manifest: String) -> Package {
         .and_then(|stem| stem.to_str())
         .unwrap_or("unknown-dotnet-package")
         .to_owned();
-    Package::new(
+    let mut item = Package::new(
         Registry::NuGet,
         xml_tag(contents, "PackageId")
             .or_else(|| xml_tag(contents, "AssemblyName"))
             .unwrap_or(fallback),
-        xml_tag(contents, "PackageVersion").or_else(|| xml_tag(contents, "Version")),
+        dotnet_version(contents),
         manifest,
-    )
+    );
+    if xml_tag(contents, "IsPackable").is_some_and(|value| value.eq_ignore_ascii_case("false")) {
+        item.publishable = false;
+        item.audit.insert(
+            "discovery_skip".into(),
+            "MSBuild IsPackable is false".into(),
+        );
+    }
+    item
+}
+
+fn dotnet_version(contents: &str) -> Option<String> {
+    let literal = |tag: &str| xml_tag(contents, tag).filter(|value| !value.contains("$("));
+    if let Some(explicit) = literal("PackageVersion").or_else(|| literal("Version")) {
+        return Some(explicit);
+    }
+    // MSBuild derives Version from VersionPrefix and VersionSuffix.
+    let prefix = literal("VersionPrefix")?;
+    Some(match literal("VersionSuffix") {
+        Some(suffix) => format!("{prefix}-{suffix}"),
+        None => prefix,
+    })
+}
+
+/// A plain sibling VERSION file, as release tooling for Go/C++ often keeps.
+pub fn version_file(manifest: &Path) -> Result<Option<String>> {
+    let path = manifest.with_file_name("VERSION");
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("cannot read {}", path.display())),
+    };
+    let value = contents.trim_start_matches('\u{feff}').trim().to_owned();
+    Ok(Regex::new(r"^v?\d+(?:\.\d+){1,3}(?:[-+][\w.-]+)?$")
+        .expect("static pattern")
+        .is_match(&value)
+        .then_some(value))
 }
 
 fn parse_maven(contents: &str, manifest: String) -> Package {

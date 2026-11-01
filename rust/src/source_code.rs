@@ -54,16 +54,22 @@ pub fn strip_comments(contents: &str, language: &str) -> String {
 /// Check whether a prefix places a publishing command in an executed command.
 #[must_use]
 pub fn command_position(prefix: &str) -> bool {
+    static PATTERNS: std::sync::LazyLock<Vec<Regex>> = std::sync::LazyLock::new(|| {
+        [
+        r"^(?:(?:if|elif|then|else|do|while|until|!|npx|bunx|exec|sudo|env|time|command|pnpm\s+exec|yarn|\w+=\S*)\s+)*$",
+        r"(?:\$|shell)\s*`\s*$",
+        r"^(?:export\s+)?\w+=`\s*$",
+        r"\$\(\s*$",
+        r#"(?:exec(?:Sync)?|spawn(?:Sync)?|run(?:_command)?|system|check_call|check_output|Popen)\s*\(\s*["'`]\s*$"#,
+        ]
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("static pattern"))
+        .collect()
+    });
     let segment = prefix
         .rsplit([';', '&', '|'])
         .next()
         .unwrap_or_default()
         .trim_start();
-    [
-        r"^(?:(?:npx|bunx|exec|sudo|env|time|command|pnpm\s+exec|yarn|\w+=\S*)\s+)*$",
-        r"(?:\$|shell)\s*`\s*$",
-        r"^(?:export\s+)?\w+=`\s*$",
-        r"\$\(\s*$",
-        r#"(?:exec(?:Sync)?|spawn(?:Sync)?|run(?:_command)?|system|check_call|check_output|Popen)\s*\(\s*["'`]\s*$"#,
-    ].iter().any(|pattern| Regex::new(pattern).expect("static pattern").is_match(segment))
+    PATTERNS.iter().any(|pattern| pattern.is_match(segment))
 }

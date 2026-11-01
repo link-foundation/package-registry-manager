@@ -6,6 +6,56 @@ use super::{
 use crate::github::{GhManager, GithubGateway};
 use crate::repository_identity::repository_slug;
 
+/// Job names (or reusable-call segments) whose skip would hide the release.
+#[must_use]
+pub fn required_jobs(package: &crate::model::Package) -> Vec<String> {
+    package
+        .workflow_jobs
+        .iter()
+        .cloned()
+        .chain(
+            package
+                .workflow_callees
+                .iter()
+                .filter_map(|chain| chain.split(" -> ").last().map(str::to_owned)),
+        )
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+/// Failed or cancelled jobs always block.
+///
+/// A skipped job blocks only when it is a
+/// required release job (or when the required set is unknown); PR-only reviews
+/// and unchanged-component jobs legitimately skip on a push to main.
+#[must_use]
+pub fn unmet_jobs(jobs: &[Value], required: &[String]) -> Vec<Value> {
+    let is_required = |job: &Value| {
+        required.is_empty()
+            || job["name"]
+                .as_str()
+                .unwrap_or_default()
+                .split(" / ")
+                .any(|segment| required.iter().any(|name| name == segment.trim()))
+    };
+    let mut unmet: Vec<Value> = jobs
+        .iter()
+        .filter(|job| {
+            !(job["conclusion"] == "success" || job["conclusion"] == "skipped")
+                || (job["conclusion"] == "skipped" && is_required(job))
+        })
+        .cloned()
+        .collect();
+    if !required.is_empty()
+        && !jobs
+            .iter()
+            .any(|job| is_required(job) && job["conclusion"] == "success")
+    {
+        unmet.push(serde_json::json!({"name": required.join(", "), "conclusion": "missing"}));
+    }
+    unmet
+}
+
 impl Session<'_> {
     pub(super) async fn verify_nuget_release(&mut self) -> Result<()> {
         let slug =
@@ -169,7 +219,7 @@ impl Session<'_> {
             || run["status"] != "completed"
             || run["conclusion"] != "success"
             || jobs.is_empty()
-            || jobs.iter().any(|job| job["conclusion"] != "success")
+            || !unmet_jobs(jobs, &required_jobs(&self.plan.package)).is_empty()
         {
             bail!(
                 "NuGet current-main pipeline has incomplete gates: {}",
