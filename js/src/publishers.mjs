@@ -45,6 +45,20 @@ export const JOB_PATTERNS = new Map([
   ],
 ]);
 
+/**
+ * Registries without an upload command: a release is a tag, a GitHub release
+ * asset or a registry update hook. The evidence is matched anywhere in the
+ * job's executable lines, as the URL is usually an argument.
+ */
+export const RELEASE_EVIDENCE = new Map([
+  ["packagist", /packagist\.org\/api\/(?:update|create)-package/],
+  [
+    "go-modules",
+    /\bgh\s+release\s+create\b|\bgit\s+push\b[^\n]*\btags?\b|proxy\.golang\.org/,
+  ],
+  ["cmake", /\bgh\s+release\s+(?:create|upload)\b/],
+]);
+
 // Scripts usually pass the subcommand as a separate argument, as in
 // `spawnSync("npm", ["publish"])` or `Command::new("cargo")` followed by
 // `.arg("publish")` within the next few lines.
@@ -272,6 +286,7 @@ async function detectPublisherDetails(root, workflows, registry) {
         job.lines.find((line) => LOCAL_WORKFLOW.test(line)) ?? "",
       )?.[1];
       const callee = called ? parsedWorkflows.get(called) : null;
+      const chain = [];
       const environments = callee
         ? await calledEnvironments(
             root,
@@ -279,6 +294,7 @@ async function detectPublisherDetails(root, workflows, registry) {
             called,
             registry,
             new Set([workflow.name]),
+            chain,
           )
         : (await jobPublishes(root, parsed, job, registry))
           ? [
@@ -295,6 +311,7 @@ async function detectPublisherDetails(root, workflows, registry) {
         found.push({
           workflow: workflow.name,
           job: job.name,
+          callees: chain,
           idToken:
             grantsIdToken(childBlock(job.lines, indent, "permissions")) ??
             workflowGrant ??
@@ -353,8 +370,10 @@ function described(workflow, found) {
       `the publishing jobs in ${workflow} use different environments (${environments.map((item) => item ?? "none").join(", ")}); pass --environment <name> to choose one`,
     );
   }
+  const callees = [...new Set(jobs.flatMap((item) => item.callees ?? []))];
   return {
     workflow,
+    ...(callees.length ? { callees } : {}),
     jobs: [...new Set(jobs.map((item) => item.job))],
     environment: environments.length === 1 ? environments[0] : null,
     candidates: [],
@@ -402,7 +421,14 @@ export function registryTokenSecrets(registry) {
   return TOKEN_SECRETS.get(registry) ?? [];
 }
 
-async function calledEnvironments(root, workflows, name, registry, visited) {
+async function calledEnvironments(
+  root,
+  workflows,
+  name,
+  registry,
+  visited,
+  chain = [],
+) {
   if (visited.has(name)) {
     return [];
   }
@@ -422,9 +448,12 @@ async function calledEnvironments(root, workflows, name, registry, visited) {
           LOCAL_WORKFLOW.exec(called)[1],
           registry,
           seen,
+          chain,
         )),
       );
     } else if (await jobPublishes(root, parsed, job, registry)) {
+      // Exact reusable-workflow identity: each callee job that publishes.
+      chain.push(`${[...seen].slice(1).join(" -> ")} -> ${job.name}`);
       environments.push(
         environmentName(
           childBlock(job.lines, childIndent(job.lines), "environment"),
@@ -439,6 +468,10 @@ async function calledEnvironments(root, workflows, name, registry, visited) {
 export async function jobPublishes(root, parsed, job, registry) {
   const pattern = JOB_PATTERNS.get(registry);
   const executable = executableLines(job.lines);
+  const evidence = RELEASE_EVIDENCE.get(registry);
+  if (evidence) {
+    return evidence.test(executable.join("\n"));
+  }
   if (publishingLine(executable, pattern)) {
     return true;
   }

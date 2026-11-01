@@ -9,6 +9,7 @@ import { packageWorkflows, auditWrappers } from "./package-coverage.mjs";
 import { REGISTRIES } from "./model.mjs";
 import { inspectManifestRepositories } from "./repository-identity.mjs";
 import {
+  RELEASE_EVIDENCE,
   TRUSTED_REGISTRIES,
   detectPublisher,
   tokenSecretWarning,
@@ -198,10 +199,10 @@ export async function inspectRepository(repository, options = {}) {
       }
     }
   }
-  publishers.set(
-    "maven-central",
-    await detectPublisher(root, workflows, "maven-central"),
-  );
+  for (const registry of SCOPED_REGISTRIES) {
+    publishers.set(registry, await detectPublisher(root, workflows, registry));
+  }
+  canonicalComposer(parsed);
   const containerFiles = dockerfiles
     .map((item) => relativePath(root, item))
     .filter((item) => !ignored(item) && kept(item, true));
@@ -237,9 +238,9 @@ export async function inspectRepository(repository, options = {}) {
         )
         .map(async (item) => {
           const scoped =
-            counts.get(item.registry) > 1 &&
-            (TRUSTED_REGISTRIES.includes(item.registry) ||
-              item.registry === "maven-central")
+            (counts.get(item.registry) > 1 &&
+              TRUSTED_REGISTRIES.includes(item.registry)) ||
+            SCOPED_REGISTRIES.includes(item.registry)
               ? new Map([
                   [
                     item.registry,
@@ -251,10 +252,37 @@ export async function inspectRepository(repository, options = {}) {
                   ],
                 ])
               : publishers;
-          return withPublisher(item, workflows, scoped);
+          return withPublisher(
+            item,
+            workflows,
+            item.publisher_scope
+              ? new Map([
+                  [
+                    item.registry,
+                    await detectPublisher(
+                      root,
+                      packageWorkflows(workflows, {
+                        ...item,
+                        manifest: item.publisher_scope,
+                      }),
+                      item.registry,
+                    ),
+                  ],
+                ])
+              : scoped,
+          );
         }),
     )
   )
+    .filter(
+      (item) =>
+        !internalWorkload(item) ||
+        config.publish?.includes(item.manifest) ||
+        skip(
+          item.manifest,
+          `internal ${internalWorkload(item)} workload: no workflow publishes it and no source decision lists it under "publish"`,
+        ),
+    )
     .concat(
       containerPackages(containerFiles, workflows, coordinates),
       chromePackages,
@@ -307,6 +335,47 @@ function releaseWorkflow(publishers) {
   return null;
 }
 
+/** Registries whose publication evidence is scoped to one manifest. */
+const SCOPED_REGISTRIES = ["maven-central", "packagist", "go-modules", "cmake"];
+
+/** Benchmark/fixture manifests are internal unless a workflow releases them. */
+function internalWorkload(item) {
+  if (item.workflow) {
+    return null;
+  }
+  const segment = item.manifest
+    .split("/")
+    .slice(0, -1)
+    .find((part) => /^(?:bench(?:mark)?(?:es|s)?|perf)$/i.test(part));
+  return segment ? "benchmark" : null;
+}
+
+/**
+ * Packagist reads only the repository-root composer.json, so a same-name
+ * descriptor in a subdirectory is a development copy of that distribution.
+ * The root keeps the copy's declared version and the copy's publishing job.
+ */
+function canonicalComposer(parsed) {
+  const composer = parsed.filter(
+    (item) => item?.registry === "packagist" && !item.discovery_skip,
+  );
+  const root = composer.find((item) => item.manifest === "composer.json");
+  if (!root) {
+    return;
+  }
+  for (const copy of composer.filter(
+    (item) => item !== root && item.name === root.name,
+  )) {
+    copy.discovery_skip = `Packagist reads only the repository-root composer.json; ${copy.manifest} is a development descriptor of ${root.name}`;
+    copy.publishable = false;
+    if (!root.version && copy.version) {
+      root.version = copy.version;
+      root.version_source = copy.manifest;
+    }
+    root.publisher_scope ??= copy.manifest;
+  }
+}
+
 function withPublisher(item, workflows, publishers) {
   const publisher = item.publishable ? publishers.get(item.registry) : null;
   if (!publisher) {
@@ -322,6 +391,14 @@ function withPublisher(item, workflows, publishers) {
   if (publisher.jobs.length > 0) {
     result.workflow_jobs = publisher.jobs;
   }
+  if (publisher.callees?.length) {
+    // Reusable workflows publish under the caller's identity; the callee
+    // jobs are kept so setup and recovery act on the actual publishing job.
+    result.workflow_callees = publisher.callees;
+  }
+  if (publisher.gate) {
+    result.authentication_gate = publisher.gate;
+  }
   if (publisher.environment) {
     result.environment = publisher.environment;
   }
@@ -331,7 +408,11 @@ function withPublisher(item, workflows, publishers) {
   const secrets = tokenSecrets(workflows, item.registry);
   const warnings = [
     ...publisher.warnings,
-    ...(!publisher.workflow && publisher.candidates.length === 0
+    // Tags and registry hooks release Go modules, Packagist packages and
+    // CMake archives without a workflow, so only evidence is reported.
+    ...(!publisher.workflow &&
+    publisher.candidates.length === 0 &&
+    !RELEASE_EVIDENCE.has(item.registry)
       ? [
           `no workflow publishes ${item.name} to ${item.registry}; CI releases will not reach it`,
         ]
@@ -400,13 +481,22 @@ async function parseManifest(manifestPath, manifest, root) {
         capture(contents, /\bversion\s*=\s*['"]([^'"]+)/),
         manifest,
       );
-    case "go.mod":
-      return packageInfo(
+    case "go.mod": {
+      const item = packageInfo(
         "go-modules",
         capture(contents, /^\s*module\s+(\S+)/m) ?? "unknown-go-module",
-        null,
+        await versionFile(manifestPath),
         manifest,
       );
+      if (item.version) {
+        item.version = `v${item.version.replace(/^v/, "")}`;
+        item.version_source = path.posix.join(
+          path.posix.dirname(manifest),
+          "VERSION",
+        );
+      }
+      return item;
+    }
     case "pom.xml":
       return parseMaven(contents, manifest);
     case "build.gradle":
@@ -542,9 +632,24 @@ function parseDotnet(contents, manifestPath, manifest) {
     xmlTag(contents, "PackageId") ??
       xmlTag(contents, "AssemblyName") ??
       path.basename(manifestPath, path.extname(manifestPath)),
-    xmlTag(contents, "PackageVersion") ?? xmlTag(contents, "Version"),
+    dotnetVersion(contents),
     manifest,
   );
+}
+
+function dotnetVersion(contents) {
+  const literal = (tag) => {
+    const value = xmlTag(contents, tag);
+    return value && !value.includes("$(") ? value : null;
+  };
+  const explicit = literal("PackageVersion") ?? literal("Version");
+  if (explicit) {
+    return explicit;
+  }
+  // MSBuild derives Version from VersionPrefix and VersionSuffix.
+  const prefix = literal("VersionPrefix");
+  const suffix = literal("VersionSuffix");
+  return prefix ? (suffix ? `${prefix}-${suffix}` : prefix) : null;
 }
 
 function parseMaven(contents, manifest) {
@@ -622,6 +727,21 @@ function packageInfo(
     result.problems = problems;
   }
   return result;
+}
+
+/** A plain sibling VERSION file, as release tooling for Go/C++ often keeps. */
+export async function versionFile(manifestPath) {
+  try {
+    const value = (
+      await readManifest(path.join(path.dirname(manifestPath), "VERSION"))
+    ).trim();
+    return /^v?\d+(?:\.\d+){1,3}(?:[-+][\w.-]+)?$/.test(value) ? value : null;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
 }
 
 // Editors on Windows may save a byte order mark; npm and Cargo accept it.
