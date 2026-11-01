@@ -8,7 +8,7 @@ import {
   pypiFlow,
 } from "./flows.mjs";
 import { credentialPolicy } from "./credential-cycle.mjs";
-import { trustedFlow, tokenFlow } from "./extra-flows.mjs";
+import { packagistSteps, trustedFlow, tokenFlow } from "./extra-flows.mjs";
 import { bootstrapRef } from "./bootstrap-reference.mjs";
 import { pagesSteps } from "./pages.mjs";
 import { planPrerequisites } from "./prerequisites.mjs";
@@ -159,12 +159,17 @@ function buildPlan(inspection, packageInfo, options) {
           "Strictly validate composer.json before submitting it.",
           command("composer", ["validate", "--strict"]),
         ),
-        browser(
-          "submit-repository",
-          "Submit the repository to Packagist",
-          "Sign in and submit the public VCS repository URL. Packagist reads package versions from tags.",
-          "https://packagist.org/packages/submit",
-        ),
+        ...(packageInfo.exists_on_registry !== true
+          ? [
+              browser(
+                "submit-repository",
+                "Submit the repository to Packagist",
+                "Sign in and submit the public VCS repository URL. Packagist reads package versions from tags.",
+                "https://packagist.org/packages/submit",
+              ),
+            ]
+          : []),
+        ...packagistSteps(packageInfo),
       ];
       break;
     default:

@@ -1,3 +1,4 @@
+import { credentialRequirements } from "./credential-requirements.mjs";
 import { credentialSteps } from "./credential-cycle.mjs";
 import { tokenSecretSteps } from "./tokens.mjs";
 
@@ -76,18 +77,98 @@ export function tokenFlow(item) {
       ]
     : [];
   if (item.registry === "maven-central") {
+    const group = /^([\w.-]+):/.exec(item.name ?? "")?.[1];
     steps.push({
       id: "verify-namespace",
-      title: "Verify a Central namespace",
+      title: `Verify the Central namespace${group ? ` ${group}` : ""}`,
       kind: "browser",
       description:
-        "Sign in to the Central Portal and verify the namespace used by the package coordinates.",
+        "Sign in to the Central Portal and verify the namespace used by the package coordinates. Publishing stays blocked until the namespace reads back as verified.",
       url: "https://central.sonatype.com/publishing/namespaces",
+      ...(group ? { namespace: group } : {}),
+      state: "manual-prerequisite",
     });
+    return steps.concat(mavenCredentialSteps(item));
   }
   return steps.concat(
     credentialSteps(item.registry, item.token_secrets?.[0] ?? item.registry),
   );
+}
+
+/**
+ * Central publishing needs a provider-specific pair plus signing material; no
+ * OIDC is claimed. Missing secrets are requested, present ones are kept, and
+ * nothing is rotated or revoked.
+ */
+export function mavenCredentialSteps(item) {
+  const requirements =
+    item.credential_requirements ?? credentialRequirements("maven-central");
+  const pick = (...roles) =>
+    requirements.secrets.filter((entry) => roles.includes(entry.role));
+  const describe = (entries) =>
+    entries.map((entry) => entry.secret).join(" + ");
+  const pair = pick("central-username", "central-token");
+  const signing = pick("gpg-private-key", "gpg-passphrase");
+  return [
+    {
+      id: "ensure-central-credential-pair",
+      title: `Ensure the Central user-token pair ${describe(pair)}`,
+      kind: "api",
+      confirm: true,
+      secrets: pair,
+      oidc: "unsupported",
+      description: `${requirements.oidc_note} Generate a Central Portal user token (username + password pair) only when ${describe(pair)} is missing, hold the values in memory, and store them as encrypted GitHub secrets through gh-manager. Existing secrets are kept; nothing is rotated or revoked.`,
+      url: "https://central.sonatype.com/usertoken",
+    },
+    {
+      id: "ensure-signing-key",
+      title: `Ensure the signing prerequisites ${describe(signing)}`,
+      kind: "manual",
+      confirm: true,
+      secrets: signing,
+      state: "manual-prerequisite",
+      description:
+        "Maven Central rejects unsigned artifacts. Provide an armored GPG private key whose public key is on a public keyserver, and its passphrase, as encrypted GitHub secrets; keys are never written to disk or printed.",
+    },
+  ];
+}
+
+/** Public Packagist: tags plus hook or update API; no OIDC, explicit states otherwise. */
+export function packagistSteps(item) {
+  const requirements =
+    item.credential_requirements ?? credentialRequirements("packagist");
+  const api = requirements.secrets;
+  const referenced = api.every((entry) => entry.referenced);
+  return [
+    {
+      id: "verify-packagist-package",
+      title: "Read back the Packagist package and exact stable tag",
+      kind: "check",
+      description: `Read https://repo.packagist.org/p2/${item.name}.json and require the exact stable version ${item.version ?? "(unresolved)"} from a tag; dev branches do not count.`,
+      url: `https://packagist.org/packages/${item.name}`,
+    },
+    {
+      id: "packagist-github-hook",
+      title: "Confirm the Packagist GitHub integration",
+      kind: "manual",
+      state: "manual-prerequisite",
+      description:
+        'Packagist updates on tag pushes through its GitHub hook/app integration. GitHub does not expose that installation to this tool, so confirm it on the package page (no "not auto-updated" warning).',
+      url: `https://packagist.org/packages/${item.name}`,
+    },
+    {
+      id: "packagist-update-api",
+      title: referenced
+        ? `Keep the update-package API path ${api.map((entry) => entry.secret).join(" + ")}`
+        : "Packagist update-package API is not configured",
+      kind: "manual",
+      state: referenced ? "configured" : "unsupported-without-credentials",
+      secrets: api,
+      oidc: "unsupported",
+      description: `${requirements.oidc_note} ${referenced ? "The workflow calls the update-package API; keep both secrets as encrypted GitHub secrets. Nothing is rotated or revoked." : "Rely on the GitHub hook, or add PACKAGIST_USERNAME and PACKAGIST_TOKEN (Packagist profile API token) as encrypted GitHub secrets for the update-package API."}`,
+      url: "https://packagist.org/profile/",
+    },
+  ];
 }
 
 /** NuGet uses explicit account policy and preserves provided fallback credentials. */

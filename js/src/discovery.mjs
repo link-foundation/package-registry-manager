@@ -1,3 +1,4 @@
+import { credentialRequirements } from "./credential-requirements.mjs";
 import { auditConfig, applyAuditConfig } from "./audit-config.mjs";
 import { cppDistribution } from "./cpp-distribution.mjs";
 import { markIdentityConflicts } from "./identity-conflicts.mjs";
@@ -404,6 +405,10 @@ function withPublisher(item, workflows, publishers) {
   }
   if (publisher.candidates.length > 1) {
     result.workflow_candidates = publisher.candidates;
+  }
+  const credentials = credentialRequirements(item.registry, workflows);
+  if (credentials) {
+    result.credential_requirements = credentials;
   }
   const secrets = tokenSecrets(workflows, item.registry);
   const warnings = [
