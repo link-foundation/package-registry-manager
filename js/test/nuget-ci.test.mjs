@@ -90,3 +90,23 @@ test("NuGet success for another package cannot verify the selected artifact", as
     '{"selected_method":"trusted-publishing","publication":"accepted","package_id":"Other.Lib","version":"1.0.0"}';
   await assert.rejects(verifyNugetRelease(f.session), /method.*unverified/);
 });
+
+test("NuGet verifier tolerates expected skips but not a skipped required release", async () => {
+  const { unmetJobs, requiredJobs } = await import("../src/nuget-ci.mjs");
+  const required = requiredJobs({
+    workflow_jobs: ["release"],
+    workflow_callees: ["release.yml -> publish-csharp.yml -> pushToNuget"],
+  });
+  const jobs = [
+    { name: "dependency-review", conclusion: "skipped" },
+    { name: "benchmark", conclusion: "skipped" },
+    { name: "release / publish-csharp / pushToNuget", conclusion: "success" },
+  ];
+  assert.deepEqual(unmetJobs(jobs, required), []);
+  jobs[2].conclusion = "skipped";
+  assert.ok(unmetJobs(jobs, required).length > 0);
+  jobs[2].conclusion = "success";
+  jobs[0].conclusion = "failure";
+  assert.ok(unmetJobs(jobs, required).length > 0);
+  assert.ok(unmetJobs([{ name: "x", conclusion: "skipped" }], []).length > 0);
+});

@@ -197,3 +197,36 @@ test("Go proxy accepts canonical versions and keeps malformed tagged lists unkno
     }
   }
 });
+
+test("Go proxy exact version uses @v/<version>.info for the manifest version", async () => {
+  const { distributionState } = await import("../src/publication-state.mjs");
+  const served = {
+    "/@v/list": "v0.27.0\nv0.27.1\n",
+    "/@latest": '{"Version":"v0.27.1"}',
+    "/@v/v0.27.1.info": '{"Version":"v0.27.1","Time":"2026-01-01T00:00:00Z"}',
+  };
+  const fetch = async (url) => {
+    const key = Object.keys(served).find((suffix) => url.endsWith(suffix));
+    return key
+      ? { ok: true, status: 200, text: async () => served[key] }
+      : { ok: false, status: 404, text: async () => "not found" };
+  };
+  const item = {
+    registry: "go-modules",
+    name: "github.com/link-foundation/links-notation/go",
+    version: "v0.27.1",
+  };
+  const found = await distributionState(item, { fetch }, "https://proxy.test");
+  assert.equal(found.manifest_version_exists, true);
+  assert.match(
+    found.version_evidence_url,
+    /links-notation\/go\/@v\/v0\.27\.1\.info$/,
+  );
+  const missing = await distributionState(
+    { ...item, version: "v0.28.0" },
+    { fetch },
+    "https://proxy.test",
+  );
+  assert.equal(missing.manifest_version_exists, false);
+  assert.equal(missing.version_state, "manifest-version-absent");
+});
