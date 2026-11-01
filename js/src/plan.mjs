@@ -75,6 +75,22 @@ function buildPlan(inspection, packageInfo, options) {
   const command = (program, args) => ({ program, args });
   if (
     (options.migrate || options.addPublishJob) &&
+    packageInfo.publishing_policy === "variable-gated-oidc-with-token-fallback"
+  ) {
+    // The workflow already tries OIDC first and keeps the token fallback; only
+    // the opt-in repository variable is off. Never rewrite the workflow.
+    return basePlan(inspection, packageInfo, [
+      {
+        id: "enable-oidc-variable",
+        title: `Register trust, then set ${packageInfo.authentication_gate?.variable ?? "the OIDC opt-in variable"} to true`,
+        kind: "manual",
+        confirm: true,
+        description: `The workflow exchanges OIDC only when ${packageInfo.authentication_gate?.variable ?? "its repository variable"} is 'true' and otherwise keeps the existing token. Register the trusted publisher for ${packageInfo.workflow ?? "the caller workflow"}, set the variable, and verify the next release selected OIDC; the token fallback is retained.`,
+      },
+    ]);
+  }
+  if (
+    (options.migrate || options.addPublishJob) &&
     ["crates-io", "npm", "pypi", "nuget"].includes(packageInfo.registry) &&
     (packageInfo.publishing_policy
       ? packageInfo.publishing_policy !== "oidc-with-token-fallback"

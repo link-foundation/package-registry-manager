@@ -1,0 +1,16 @@
+[package]
+name = "links-notation-macro"
+version = "0.1.2"
+edition.workspace = true
+rust-version.workspace = true
+description = "Procedural macro for Links Notation compile-time parsing"
+license.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "3.0.9", features = ["full", "extra-traits"] }
+quote = "1.0.47"
+proc-macro2 = "1.0.107"

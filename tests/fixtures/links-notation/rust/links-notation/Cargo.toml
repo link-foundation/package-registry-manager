@@ -1,0 +1,22 @@
+[package]
+name = "links-notation"
+version = "0.27.1"
+edition.workspace = true
+rust-version.workspace = true
+description = "Rust implementation of the Links Notation parser"
+license.workspace = true
+repository.workspace = true
+keywords = ["lino", "parser", "links", "notation", "protocol"]
+categories = ["parsing"]
+
+[lib]
+name = "links_notation"
+path = "src/lib.rs"
+
+[dependencies]
+nom = "8.0.0"
+links-notation-macro = { path = "../links-notation-macro", version = "0.1.2", optional = true }
+
+[features]
+default = ["macro"]
+macro = ["links-notation-macro"]
