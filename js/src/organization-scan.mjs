@@ -10,6 +10,7 @@ import { credentialPolicy } from "./credential-cycle.mjs";
 import { identityCommand } from "./repository-identity.mjs";
 import { tokenExpiryFindings } from "./crates-tokens.mjs";
 import { scriptReferences } from "./publishers.mjs";
+import { fetchVersionSidecars } from "./scan-sidecars.mjs";
 
 /** Only files used by existing discovery; no full repository clones for scans. */
 export const SCAN_MATCHES = [
@@ -25,6 +26,7 @@ export const SCAN_MATCHES = [
     "pom.xml",
     "build.gradle",
     "build.gradle.kts",
+    "Package.swift",
     "composer.json",
     "jsr.json",
     "deno.json",
@@ -186,10 +188,15 @@ export async function withAccountScan(options, callback) {
           throw new Error("gh-manager returned an invalid repository name");
         }
         const root = path.join(directory, String(index));
+        // One immutable commit for every read, so sidecars match manifests.
+        const ref = await headCommit(github, slug, repo.default_branch);
+        if (ref !== repo.default_branch) {
+          item.commit = ref;
+        }
         const files = await github.repos.files(slug, {
           match: SCAN_MATCHES,
           content: true,
-          ref: repo.default_branch,
+          ref,
         });
         // Fetch only scripts named by manifests/workflows, rather than all source blobs.
         const scripts = scriptReferences(
@@ -202,9 +209,19 @@ export async function withAccountScan(options, callback) {
             ...(await github.repos.files(slug, {
               match: scripts.map((script) => `**/${script}`),
               content: true,
-              ref: repo.default_branch,
+              ref,
             })),
           );
+        }
+        const sidecars = await fetchVersionSidecars(
+          github,
+          slug,
+          files,
+          ref,
+          onError,
+        );
+        if (sidecars.requested.length) {
+          item.version_sidecars = sidecars;
         }
         await writeSnapshot(root, slug, files);
         const discovered = await inspectRepository(root, {
@@ -290,6 +307,21 @@ export async function withAccountScan(options, callback) {
     return await callback(scan, github);
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/** The default branch's commit, or the branch itself when unreadable. */
+async function headCommit(github, slug, branch) {
+  if (!github.rest?.request || !branch) {
+    return branch;
+  }
+  try {
+    const commit = await github.rest.request(
+      `/repos/${slug}/commits/${encodeURIComponent(branch)}`,
+    );
+    return /^[0-9a-f]{40}$/.test(commit?.sha ?? "") ? commit.sha : branch;
+  } catch {
+    return branch;
   }
 }
 
