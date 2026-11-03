@@ -23,7 +23,7 @@ const summary = (p) => ({
   publishing_policy: p.publishing_policy ?? null,
 });
 
-test("links-notation: eight distributions plus the macro crate with exact identities", async () => {
+test("links-notation: ten-language distributions with exact identities", async () => {
   const inspection = await inspectRepository(root);
   const expected = JSON.parse(
     await readFile(`${root}/expected-packages.json`, "utf8"),
@@ -127,4 +127,71 @@ test("links-notation: variable-gated crates migration asks to flip the variable,
     );
     assert.match(plan.steps[0].title, /CRATES_IO_TRUSTED_PUBLISHING/);
   }
+});
+
+test("links-notation: SwiftPM package shares the bare tag and skips consumer examples", async () => {
+  const inspection = await inspectRepository(root);
+  const swift = inspection.packages.filter((p) => p.registry === "swiftpm");
+  assert.equal(swift.length, 1);
+  assert.equal(swift[0].name, "LinksNotation");
+  assert.equal(swift[0].version, "0.30.0");
+  assert.equal(swift[0].version_source, "swift/VERSION");
+  assert.deepEqual(swift[0].workflow_callees, [
+    "release.yml -> publish-swift.yml -> publishRelease",
+  ]);
+  assert.equal(swift[0].swift_package.tag, "0.30.0");
+  assert.deepEqual(swift[0].swift_package.shared_tag.with, [
+    "packagist:link-foundation/links-notation",
+  ]);
+  const skipped = JSON.stringify(inspection.skipped ?? []);
+  assert.ok(
+    !inspection.packages.some(
+      (p) => p.registry === "swiftpm" && p.manifest !== "Package.swift",
+    ),
+    skipped,
+  );
+  const [plan] = buildPlans(inspection, ["swiftpm"]);
+  assert.deepEqual(
+    plan.steps.map((s) => s.id),
+    [
+      "describe-package",
+      "build-package",
+      "test-package",
+      "verify-swift-release",
+      "verify-swift-consumer",
+    ],
+  );
+  // Git tags via the workflow's GITHUB_TOKEN: no secret, token or OIDC setup.
+  assert.ok(!plan.steps.some((s) => s.secrets || s.oidc));
+  assert.ok(!plan.steps.some((s) => /token|oidc/i.test(s.id)));
+});
+
+test("links-notation: Kotlin Multiplatform stays in Maven Central with Gradle steps and variants", async () => {
+  const inspection = await inspectRepository(root);
+  const kotlin = inspection.packages.find((p) => p.gradle);
+  assert.equal(kotlin.registry, "maven-central");
+  assert.equal(kotlin.name, "io.github.link-foundation:links-notation-kotlin");
+  assert.equal(kotlin.version, "0.30.0");
+  assert.equal(kotlin.gradle.publish_task, "publishToMavenCentral");
+  assert.ok(kotlin.gradle.multiplatform);
+  assert.ok(kotlin.variants.length >= 6);
+  assert.ok(
+    kotlin.variants.some((v) => v.host === "macos"),
+    "Apple targets need a macOS runner",
+  );
+  const java = inspection.packages.find((p) => p.manifest === "java/pom.xml");
+  assert.equal(java.registry, "maven-central");
+  assert.equal(java.gradle, undefined);
+  const plan = buildPlans(inspection, ["maven-central"]).find(
+    (p) => p.package.gradle,
+  );
+  const commands = JSON.stringify(plan.steps.map((s) => s.command ?? null));
+  assert.ok(!commands.includes('"mvn"'));
+  assert.match(commands, /publishToMavenLocal/);
+  assert.ok(plan.steps.some((s) => s.id === "verify-gradle-toolchain"));
+  assert.equal(
+    plan.steps.find((s) => s.id === "verify-central-publication").variants
+      .length,
+    kotlin.variants.length,
+  );
 });
