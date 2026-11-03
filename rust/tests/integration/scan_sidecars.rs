@@ -176,3 +176,32 @@ async fn unreadable_sidecars_keep_peers_and_leave_versions_unknown_with_an_error
     let local = inspect_repository(&root()).expect("local").packages;
     assert_eq!(scanned.len(), local.len());
 }
+
+#[test]
+fn an_absent_exact_version_is_reported_even_when_older_versions_exist() {
+    let mut inspection = inspect_repository(&root()).expect("local");
+    inspection.repository.github_owner = Some("link-foundation".into());
+    inspection.repository.github_repository = Some("links-notation".into());
+    inspection
+        .packages
+        .retain(|item| item.registry == Registry::GoModules);
+    let go = &mut inspection.packages[0];
+    go.exists_on_registry = Some(true);
+    go.audit.insert("latest_version".into(), json!("v0.29.0"));
+    go.audit
+        .insert("manifest_version_exists".into(), json!(false));
+    let found: Vec<(Value, Value)> =
+        package_registry_manager::organization_scan::findings(&inspection)
+            .into_iter()
+            .map(|finding| {
+                (
+                    finding["type"].clone(),
+                    finding["evidence"]["expected_version"].clone(),
+                )
+            })
+            .collect();
+    assert_eq!(
+        found,
+        [(json!("manifest-version-absent"), json!("v0.30.0"))]
+    );
+}
