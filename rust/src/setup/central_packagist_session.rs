@@ -4,10 +4,10 @@
 use super::{is_yes, prompt, Result, Session, SetupStep, Value};
 use crate::browser_options::ImportScope;
 use crate::central_packagist::{
-    plan_slug, retry_causal_jobs, run_generated_step, secret_presence, step_secrets, StepContext,
+    central_pair_preflight, run_generated_step, store_central_pair, CentralPairStart, StepContext,
     CENTRAL_PACKAGIST_STEPS, COMPLETE_STATUSES, READ_CENTRAL_PAIR,
 };
-use crate::github::{GhManager, GithubGateway};
+use crate::github::GhManager;
 use serde_json::json;
 
 /// Whether a generated step has its own handler here.
@@ -75,43 +75,28 @@ impl Session<'_> {
     /// automated browser after explicit confirmation, stored as a matched
     /// pair, read back, and then only the causal failed jobs are retried.
     async fn ensure_central_pair(&mut self, step: &SetupStep) -> Result<Value> {
-        let names = step_secrets(step);
-        let slug = plan_slug(self.plan).filter(|_| names.len() == 2);
-        let Some(slug) = slug else {
-            return Ok(json!({
-                "status": "unsupported",
-                "reason": "the Central pair needs GitHub repository coordinates and exactly two selected secret names",
-                "stop": true,
-            }));
-        };
-        let cwd = self.options.repository;
-        let (present, missing) = secret_presence(&GhManager, &slug, &names, cwd).await?;
-        if missing.is_empty() {
-            return Ok(json!({
-                "status": "present",
-                "secrets": present,
-                "reason": "existing Central secrets kept; nothing rotated",
-            }));
-        }
         let browser = self.options.browser_options;
-        let url = step
-            .url
-            .as_deref()
-            .unwrap_or("https://central.sonatype.com/usertoken");
-        if self.options.no_browser
-            || browser.attach.is_some()
-            || browser.import_scope == ImportScope::Full
-        {
-            return Ok(json!({
-                "status": "manual-prerequisite",
-                "secrets": missing,
-                "reason": format!(
-                    "generate a Central Portal user token at {url} and store {} as encrypted secrets; automation needs a dedicated profile with domain-scoped sign-in import",
-                    missing.join(" + ")
-                ),
-                "stop": true,
-            }));
-        }
+        let automation_allowed = !self.options.no_browser
+            && browser.attach.is_none()
+            && browser.import_scope != ImportScope::Full;
+        let start = central_pair_preflight(
+            &GhManager,
+            self.plan,
+            step,
+            automation_allowed,
+            self.options.repository,
+        )
+        .await?;
+        let (slug, names, present, missing, url) = match start {
+            CentralPairStart::Done(result) => return Ok(result),
+            CentralPairStart::Generate {
+                slug,
+                names,
+                present,
+                missing,
+                url,
+            } => (slug, names, present, missing, url),
+        };
         let replaces = if present.is_empty() {
             String::new()
         } else {
@@ -134,7 +119,7 @@ impl Session<'_> {
             }));
         }
         let page = self.visible_automated().await?;
-        page.goto(url).await?;
+        page.goto(&url).await?;
         prompt("Generate the user token in this browser and leave its username and password dialog open, then press Enter (never paste the values)...")?;
         let pair = self
             .visible_automated()
@@ -153,33 +138,12 @@ impl Session<'_> {
             }));
         };
         // The pair is matched: both values are written together after the
-        // explicit confirmation above, never one silently. Values go on stdin.
-        for (name, value) in names.iter().zip([username, password]) {
-            GhManager
-                .call(
-                    &[
-                        "secret".into(),
-                        "set".into(),
-                        name.clone(),
-                        "--repo".into(),
-                        slug.clone(),
-                    ],
-                    Some(value),
-                    cwd,
-                )
-                .await?;
+        // explicit confirmation above, never one silently.
+        let result =
+            store_central_pair(&self.step_context(), &slug, &names, [username, password]).await?;
+        if result["status"] == "configured" {
+            self.conditions.insert("central-pair-stored");
         }
-        let (_, unread) = secret_presence(&GhManager, &slug, &names, cwd).await?;
-        if !unread.is_empty() {
-            return Ok(json!({
-                "status": "unverified",
-                "secrets": unread,
-                "reason": "gh-manager did not read the stored secrets back",
-                "stop": true,
-            }));
-        }
-        self.conditions.insert("central-pair-stored");
-        let retry = retry_causal_jobs(&self.step_context(), &slug, &names).await?;
-        Ok(json!({"status":"configured","secrets":names,"retry":retry}))
+        Ok(result)
     }
 }

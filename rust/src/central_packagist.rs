@@ -549,6 +549,115 @@ async fn packagist_update_api(
     })
 }
 
+/// Where the Central pair stands before any browser opens.
+#[derive(Debug)]
+pub enum CentralPairStart {
+    /// Finished without a browser: unsupported, kept, or a prerequisite.
+    Done(Value),
+    /// Fields are missing and a domain-scoped automated browser may generate them.
+    Generate {
+        /// The plan's `owner/name`.
+        slug: String,
+        /// The two selected secret names, username first.
+        names: Vec<String>,
+        /// Selected names that already exist (replaced together with the pair).
+        present: Vec<String>,
+        /// Selected names that are missing.
+        missing: Vec<String>,
+        /// The Central Portal user-token page.
+        url: String,
+    },
+}
+
+/// Decides the Central pair step from secret metadata alone: kept when both
+/// fields exist, a structured prerequisite when automation is not allowed,
+/// and never a crates.io call or a browser launch.
+#[allow(clippy::future_not_send)]
+pub async fn central_pair_preflight(
+    github: &impl GithubGateway,
+    plan: &SetupPlan,
+    step: &SetupStep,
+    automation_allowed: bool,
+    cwd: &Path,
+) -> Result<CentralPairStart> {
+    let names = step_secrets(step);
+    let Some(slug) = plan_slug(plan).filter(|_| names.len() == 2) else {
+        return Ok(CentralPairStart::Done(json!({
+            "status": "unsupported",
+            "reason": "the Central pair needs GitHub repository coordinates and exactly two selected secret names",
+            "stop": true,
+        })));
+    };
+    let (present, missing) = secret_presence(github, &slug, &names, cwd).await?;
+    if missing.is_empty() {
+        return Ok(CentralPairStart::Done(json!({
+            "status": "present",
+            "secrets": present,
+            "reason": "existing Central secrets kept; nothing rotated",
+        })));
+    }
+    let url = step
+        .url
+        .clone()
+        .unwrap_or_else(|| "https://central.sonatype.com/usertoken".into());
+    if !automation_allowed {
+        return Ok(CentralPairStart::Done(json!({
+            "status": "manual-prerequisite",
+            "secrets": missing,
+            "reason": format!(
+                "generate a Central Portal user token at {url} and store {} as encrypted secrets; automation needs a dedicated profile with domain-scoped sign-in import",
+                missing.join(" + ")
+            ),
+            "stop": true,
+        })));
+    }
+    Ok(CentralPairStart::Generate {
+        slug,
+        names,
+        present,
+        missing,
+        url,
+    })
+}
+
+/// Stores a matched Central pair (values on stdin, never in argv or logs),
+/// reads both names back, and only then retries the causal failed jobs.
+#[allow(clippy::future_not_send)]
+pub async fn store_central_pair(
+    context: &StepContext<'_, impl GithubGateway>,
+    slug: &str,
+    names: &[String],
+    values: [&str; 2],
+) -> Result<Value> {
+    for (name, value) in names.iter().zip(values) {
+        context
+            .github
+            .call(
+                &[
+                    "secret".into(),
+                    "set".into(),
+                    name.clone(),
+                    "--repo".into(),
+                    slug.into(),
+                ],
+                Some(value),
+                context.cwd,
+            )
+            .await?;
+    }
+    let (_, unread) = secret_presence(context.github, slug, names, context.cwd).await?;
+    if !unread.is_empty() {
+        return Ok(json!({
+            "status": "unverified",
+            "secrets": unread,
+            "reason": "gh-manager did not read the stored secrets back",
+            "stop": true,
+        }));
+    }
+    let retry = retry_causal_jobs(context, slug, names).await?;
+    Ok(json!({"status":"configured","secrets":names,"retry":retry}))
+}
+
 /// Pressing Enter is never verification.
 #[must_use]
 pub fn manual_prerequisite(step: &SetupStep) -> Value {

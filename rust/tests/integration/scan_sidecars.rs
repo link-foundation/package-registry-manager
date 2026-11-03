@@ -8,6 +8,7 @@ use anyhow::Result;
 use package_registry_manager::github::GithubGateway;
 use package_registry_manager::organization_scan::scan_repositories;
 use package_registry_manager::registry_state::{Endpoints, RegistryClient};
+use package_registry_manager::scan_sidecars::version_sidecars;
 use package_registry_manager::{inspect_repository, Registry};
 use regex::Regex;
 use serde_json::{json, Value};
@@ -40,8 +41,10 @@ fn glob(pattern: &str) -> Regex {
 }
 
 /// Serves the fixture tree; records every `--branch` and can deny sidecars.
+#[derive(Default)]
 struct FixtureGithub {
     deny_sidecars: bool,
+    truncated: bool,
     branches: Mutex<Vec<String>>,
 }
 
@@ -66,6 +69,9 @@ impl GithubGateway for FixtureGithub {
         let sidecars = value_of("--match")
             .iter()
             .all(|pattern| !pattern.contains('*'));
+        if !sidecars && self.truncated {
+            anyhow::bail!("GitHub truncated a nonrecursive tree.");
+        }
         if sidecars && self.deny_sidecars {
             anyhow::bail!("HTTP 403 Resource not accessible");
         }
@@ -100,8 +106,7 @@ impl GithubGateway for FixtureGithub {
 #[tokio::test]
 async fn account_scan_and_local_inspection_agree_on_versions_at_one_commit() {
     let github = FixtureGithub {
-        deny_sidecars: false,
-        branches: Mutex::default(),
+        ..FixtureGithub::default()
     };
     let client = RegistryClient::new(Endpoints::default(), false);
     let scan = scan_repositories(&github, Some("link-foundation"), None, true, &client, false)
@@ -153,7 +158,7 @@ async fn account_scan_and_local_inspection_agree_on_versions_at_one_commit() {
 async fn unreadable_sidecars_keep_peers_and_leave_versions_unknown_with_an_error() {
     let github = FixtureGithub {
         deny_sidecars: true,
-        branches: Mutex::default(),
+        ..FixtureGithub::default()
     };
     let client = RegistryClient::new(Endpoints::default(), false);
     let scan = scan_repositories(&github, Some("link-foundation"), None, true, &client, false)
@@ -204,4 +209,35 @@ fn an_absent_exact_version_is_reported_even_when_older_versions_exist() {
         found,
         [(json!("manifest-version-absent"), json!("v0.30.0"))]
     );
+}
+
+#[tokio::test]
+async fn truncated_trees_surface_as_a_repository_error_instead_of_a_silent_empty_scan() {
+    let github = FixtureGithub {
+        truncated: true,
+        ..FixtureGithub::default()
+    };
+    let client = RegistryClient::new(Endpoints::default(), false);
+    let scan = scan_repositories(&github, Some("link-foundation"), None, true, &client, false)
+        .await
+        .expect("scan");
+    let error = scan.report.repositories[0]
+        .error
+        .clone()
+        .unwrap_or_default();
+    assert!(error.contains("truncated"), "{error:?}");
+}
+
+#[test]
+fn unsafe_and_escaping_version_references_are_rejected_not_followed() {
+    let selection = version_sidecars(&[
+        json!({"path": "cpp/CMakeLists.txt", "content": "file(READ \"${CMAKE_CURRENT_SOURCE_DIR}/../../etc/VERSION\" V)\nfile(READ \"${CMAKE_CURRENT_SOURCE_DIR}/version.txt\" W)"}),
+        json!({"path": ".github/workflows/r.yml", "content": "run: cat ../VERSION && cat go/VERSION"}),
+        json!({"path": "go/go.mod", "content": "module x"}),
+    ]);
+    assert_eq!(
+        selection.paths,
+        ["cpp/VERSION", "cpp/version.txt", "go/VERSION"]
+    );
+    assert_eq!(selection.rejected, ["../VERSION", "../etc/VERSION"]);
 }

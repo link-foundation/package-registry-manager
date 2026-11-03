@@ -12,7 +12,8 @@ use std::time::Duration;
 use anyhow::Result;
 use base64::Engine;
 use package_registry_manager::central_packagist::{
-    retry_causal_jobs, run_generated_step, StepContext, CENTRAL_PACKAGIST_STEPS,
+    central_pair_preflight, retry_causal_jobs, run_generated_step, store_central_pair,
+    CentralPairStart, StepContext, CENTRAL_PACKAGIST_STEPS,
 };
 use package_registry_manager::github::GithubGateway;
 use package_registry_manager::registry_state::{Endpoints, RegistryClient};
@@ -109,6 +110,8 @@ struct FakeGithub {
     logs: BTreeMap<u64, String>,
     verifies: Mutex<Vec<Value>>,
     writes: Mutex<Vec<String>>,
+    /// Whether stored secrets become readable metadata.
+    reads_back_writes: bool,
 }
 
 #[allow(clippy::unused_async_trait_impl)]
@@ -116,11 +119,16 @@ impl GithubGateway for FakeGithub {
     async fn call(&self, args: &[String], input: Option<&str>, _: &Path) -> Result<Value> {
         match (args[0].as_str(), args[1].as_str()) {
             ("secret", "get-metadata") if args[3] == "--org" => anyhow::bail!("forbidden"),
-            ("secret", "get-metadata") => Ok(if self.secrets.contains(&args[2]) {
-                json!({"name": args[2]})
-            } else {
-                Value::Null
-            }),
+            ("secret", "get-metadata") => Ok(
+                if self.secrets.contains(&args[2])
+                    || (self.reads_back_writes
+                        && self.writes.lock().expect("lock").contains(&args[2]))
+                {
+                    json!({"name": args[2]})
+                } else {
+                    Value::Null
+                },
+            ),
             ("secret", "set") => {
                 assert!(input.is_some(), "secret values go on stdin");
                 self.writes.lock().expect("lock").push(args[2].clone());
@@ -419,4 +427,120 @@ async fn a_settings_only_repair_retries_only_the_causal_jobs() {
     assert_eq!(verifies[0]["jobIds"], json!([1]));
     assert_eq!(verifies[0]["runId"], 7);
     assert!(github.writes.lock().expect("lock").is_empty());
+}
+
+async fn preflight(github: &FakeGithub, automation_allowed: bool) -> CentralPairStart {
+    let plan = plan(Registry::MavenCentral);
+    central_pair_preflight(
+        github,
+        &plan,
+        step(&plan, "ensure-central-credential-pair"),
+        automation_allowed,
+        Path::new("."),
+    )
+    .await
+    .expect("preflight")
+}
+
+#[tokio::test]
+async fn central_pair_existing_fields_are_kept_without_a_browser_or_crates_call() {
+    // The fake bails on any call other than secret metadata, so a crates.io
+    // session, browser or write would fail this test.
+    let github = FakeGithub {
+        secrets: BTreeSet::from(["CENTRAL_USERNAME".into(), "CENTRAL_TOKEN".into()]),
+        ..FakeGithub::default()
+    };
+    let CentralPairStart::Done(result) = preflight(&github, true).await else {
+        panic!("existing pair must not open a browser");
+    };
+    assert_eq!(result["status"], "present", "{result}");
+    assert!(github.writes.lock().expect("lock").is_empty());
+}
+
+#[tokio::test]
+async fn central_pair_missing_fields_without_automation_stop_with_a_prerequisite() {
+    let github = FakeGithub {
+        secrets: BTreeSet::from(["CENTRAL_USERNAME".into()]),
+        ..FakeGithub::default()
+    };
+    let CentralPairStart::Done(result) = preflight(&github, false).await else {
+        panic!("--no-browser must return before any browser");
+    };
+    assert_eq!(result["status"], "manual-prerequisite", "{result}");
+    assert_eq!(result["secrets"], json!(["CENTRAL_TOKEN"]));
+    assert_eq!(result["stop"], true);
+    assert!(github.writes.lock().expect("lock").is_empty());
+
+    let CentralPairStart::Generate {
+        names,
+        present,
+        missing,
+        url,
+        ..
+    } = preflight(&github, true).await
+    else {
+        panic!("automation may generate the missing field");
+    };
+    assert_eq!(names, ["CENTRAL_USERNAME", "CENTRAL_TOKEN"]);
+    assert_eq!(
+        (present, missing),
+        (
+            vec!["CENTRAL_USERNAME".to_owned()],
+            vec!["CENTRAL_TOKEN".to_owned()]
+        )
+    );
+    assert!(url.starts_with("https://central.sonatype.com/"), "{url}");
+}
+
+#[tokio::test]
+async fn a_stored_central_pair_is_read_back_before_retrying_only_causal_jobs() {
+    let names = ["CENTRAL_USERNAME", "CENTRAL_TOKEN"].map(String::from);
+    let client = client(Vec::new());
+    let plan = plan(Registry::MavenCentral);
+    let unread = FakeGithub::default();
+    let context = StepContext {
+        github: &unread,
+        client: &client,
+        plan: &plan,
+        cwd: Path::new("."),
+        wait_timeout: Duration::from_secs(5),
+    };
+    let result = store_central_pair(
+        &context,
+        "link-foundation/links-notation",
+        &names,
+        ["u", "p"],
+    )
+    .await
+    .expect("store");
+    assert_eq!(result["status"], "unverified", "{result}");
+    assert!(unread.verifies.lock().expect("lock").is_empty());
+
+    let github = FakeGithub {
+        reads_back_writes: true,
+        runs: json!([{"id": 7, "conclusion": "failure"}]),
+        jobs: json!([{"id": 1, "conclusion": "failure"}, {"id": 2, "conclusion": "failure"}]),
+        logs: [
+            (1, "CENTRAL_TOKEN secret is missing".to_owned()),
+            (2, "unrelated test failure".to_owned()),
+        ]
+        .into(),
+        ..FakeGithub::default()
+    };
+    let context = StepContext {
+        github: &github,
+        ..context
+    };
+    let result = store_central_pair(
+        &context,
+        "link-foundation/links-notation",
+        &names,
+        ["u", "p"],
+    )
+    .await
+    .expect("store");
+    assert_eq!(result["status"], "configured", "{result}");
+    assert_eq!(*github.writes.lock().expect("lock"), names);
+    assert_eq!(result["retry"]["jobs"], json!([1]));
+    assert!(!result.to_string().contains("\"u\"") && !result.to_string().contains("\"p\""));
 }
