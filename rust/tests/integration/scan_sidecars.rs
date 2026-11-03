@@ -105,9 +105,7 @@ impl GithubGateway for FixtureGithub {
 
 #[tokio::test]
 async fn account_scan_and_local_inspection_agree_on_versions_at_one_commit() {
-    let github = FixtureGithub {
-        ..FixtureGithub::default()
-    };
+    let github = FixtureGithub::default();
     let client = RegistryClient::new(Endpoints::default(), false);
     let scan = scan_repositories(&github, Some("link-foundation"), None, true, &client, false)
         .await
