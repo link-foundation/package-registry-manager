@@ -34,6 +34,7 @@ use crate::tokens::{
 mod batch;
 mod bootstrap_session;
 mod browser_session;
+mod central_packagist_session;
 mod crates_session;
 mod credential_session;
 mod distribution_channel;
@@ -122,6 +123,12 @@ struct Session<'a> {
     browser_name: Option<&'static str>,
     /// Whether the default browser was already looked up.
     browser_detected: bool,
+    /// Structured results of the generated Central/Packagist/SwiftPM steps.
+    step_results: Vec<Value>,
+    /// Generated-step results without evidence; setup stays incomplete.
+    incomplete: Vec<Value>,
+    /// A generated step returned a structured stop.
+    stopped: bool,
 }
 
 #[allow(clippy::future_not_send)] // Browser Commander's native CDP adapter is intentionally !Sync.
@@ -153,6 +160,9 @@ impl<'a> Session<'a> {
             shim: None,
             browser_name: None,
             browser_detected: false,
+            step_results: Vec::new(),
+            incomplete: Vec::new(),
+            stopped: false,
         }
     }
 
@@ -193,7 +203,7 @@ impl<'a> Session<'a> {
                 _ => {
                     println!("==> {}", step.title);
                     self.run_step(step).await?;
-                    if self.values.contains_key("manifest_pr") {
+                    if self.stopped || self.values.contains_key("manifest_pr") {
                         break;
                     }
                 }
@@ -233,6 +243,12 @@ impl<'a> Session<'a> {
                 );
             } else if step.when.as_deref().is_some_and(|when| self.holds(when)) {
                 println!("==> {}", step.title);
+                if central_packagist_session::handles(step) {
+                    if let Err(error) = self.run_central_packagist_step(step).await {
+                        eprintln!("warning: {} failed: {error:#}", step.id);
+                    }
+                    continue;
+                }
                 if step.kind == StepKind::Api {
                     if let Err(error) = self.api_step(step).await {
                         eprintln!("warning: {} failed: {error:#}", step.id);
@@ -263,6 +279,9 @@ impl<'a> Session<'a> {
     }
 
     async fn run_step(&mut self, step: &SetupStep) -> Result<()> {
+        if central_packagist_session::handles(step) {
+            return self.run_central_packagist_step(step).await;
+        }
         if step.id == "audit-distribution-channel" {
             return self.audit_distribution_channel().await;
         }

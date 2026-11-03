@@ -36,10 +36,13 @@ pub enum Registry {
     Cmake,
     Conan,
     Vcpkg,
+    /// Swift Package Manager: Git tags of the repository, no upload.
+    #[serde(rename = "swiftpm")]
+    Swiftpm,
 }
 
 impl Registry {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Npm,
         Self::CratesIo,
         Self::PyPi,
@@ -57,6 +60,7 @@ impl Registry {
         Self::Cmake,
         Self::Conan,
         Self::Vcpkg,
+        Self::Swiftpm,
     ];
 
     #[must_use]
@@ -79,6 +83,7 @@ impl Registry {
             Self::Cmake => "CMake",
             Self::Conan => "Conan",
             Self::Vcpkg => "vcpkg",
+            Self::Swiftpm => "SwiftPM",
         }
     }
 }
@@ -103,6 +108,7 @@ impl fmt::Display for Registry {
             Self::Cmake => "cmake",
             Self::Conan => "conan",
             Self::Vcpkg => "vcpkg",
+            Self::Swiftpm => "swiftpm",
         })
     }
 }
@@ -121,6 +127,7 @@ impl FromStr for Registry {
             "cmake" => Ok(Self::Cmake),
             "conan" => Ok(Self::Conan),
             "vcpkg" => Ok(Self::Vcpkg),
+            "swift" | "swiftpm" | "swift-package-manager" => Ok(Self::Swiftpm),
             "npm" => Ok(Self::Npm),
             "cargo" | "crate" | "crates" | "crates-io" => Ok(Self::CratesIo),
             "python" | "pypi" => Ok(Self::PyPi),
@@ -131,7 +138,7 @@ impl FromStr for Registry {
             "docker" | "dockerhub" | "docker-hub" | "docker-io" => Ok(Self::DockerHub),
             "ghcr" | "ghcr-io" | "github-container-registry" => Ok(Self::Ghcr),
             _ => bail!(
-                "unsupported registry '{value}'; expected npm, crates-io, pypi, go-modules, nuget, maven-central, packagist, docker-hub, ghcr, rubygems, jsr, vscode-marketplace, open-vsx, or chrome-web-store"
+                "unsupported registry '{value}'; expected npm, crates-io, pypi, go-modules, nuget, maven-central, packagist, docker-hub, ghcr, rubygems, jsr, vscode-marketplace, open-vsx, chrome-web-store, cmake, conan, vcpkg, or swiftpm"
             ),
         }
     }

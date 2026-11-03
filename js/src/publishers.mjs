@@ -1,3 +1,4 @@
+import { swiftReleaseEvidence } from "./swift-distribution.mjs";
 import { authenticationFacts, publishingPolicy } from "./publishing-state.mjs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
@@ -23,7 +24,7 @@ export const JOB_PATTERNS = new Map([
   ["docker-hub", /docker\/login-action|\bdocker\s+(?:login|push)\b/],
   [
     "maven-central",
-    /(?:\.\/|\b)mvnw?\s+(?:-\S+\s+)*deploy\b|(?:\.\/|\b)gradlew?\s+(?:-\S+\s+)*publish\b/,
+    /(?:\.\/|\b)mvnw?\s+(?:-\S+\s+)*deploy\b|(?:\.\/|\b)gradlew?\s+(?:-\S+\s+)*publish(?:ToMavenCentral|AndReleaseToMavenCentral|AllPublicationsTo\w+|ToSonatype)?\b/,
   ],
   ["vscode-marketplace", /\bvsce\s+publish\b/],
   ["open-vsx", /\bovsx\s+publish\b/],
@@ -57,6 +58,9 @@ export const RELEASE_EVIDENCE = new Map([
     /\bgh\s+release\s+create\b|\bgit\s+push\b[^\n]*\btags?\b|proxy\.golang\.org/,
   ],
   ["cmake", /\bgh\s+release\s+(?:create|upload)\b/],
+  // SwiftPM consumers resolve Git tags: a tag or release that names the
+  // Swift package is the publication.
+  ["swiftpm", { test: swiftReleaseEvidence }],
 ]);
 
 // Scripts usually pass the subcommand as a separate argument, as in
@@ -67,7 +71,10 @@ const SCRIPT_PATTERNS = new Map([
   ["rubygems", [/\bgem\b/, /["'`]push["'`]/]],
   ["nuget", [/\b(?:dotnet|nuget)\b/, /["'`]push["'`]/]],
   ["jsr", [/\b(?:deno|jsr)\b/, /["'`]publish["'`]/]],
-  ["maven-central", [/\b(?:mvn|gradle)\b/, /["'`]deploy["'`]/]],
+  [
+    "maven-central",
+    [/\b(?:mvnw?|gradlew?)\b/, /["'`](?:deploy|publish\w*)["'`]/],
+  ],
   ["vscode-marketplace", [/\bvsce\b/, /["'`]publish["'`]/]],
   ["open-vsx", [/\bovsx\b/, /["'`]publish["'`]/]],
   ["npm", [/\b(?:npm|pnpm|yarn)\b/, /["'`]publish["'`]/]],

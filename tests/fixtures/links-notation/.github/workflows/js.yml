@@ -71,6 +71,18 @@ jobs:
     with:
       verbose: ${{ inputs.verbose || false }}
 
+  swift:
+    needs: [js]
+    uses: ./.github/workflows/swift.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
+  kotlin:
+    needs: [js]
+    uses: ./.github/workflows/kotlin.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
   binary_interop:
     needs: [js]
     uses: ./.github/workflows/binary-interop.yml
@@ -104,7 +116,7 @@ jobs:
       verbose: ${{ inputs.verbose || false }}
 
   release:
-    needs: [js, rust, python, java, go, csharp, php, cpp]
+    needs: [js, rust, python, java, go, csharp, php, cpp, swift, kotlin]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     uses: ./.github/workflows/release.yml
     with:
@@ -125,12 +137,19 @@ jobs:
       contents: write
       id-token: write
 
+  # Runs after a failed, skipped or cancelled release too, so main reports
+  # what is missing; release-result lets the audit name the failed stage
+  # instead of blaming credentials (issue #377). always(), not the usual
+  # !cancelled(), on purpose: this job only reads the registries, and a run
+  # cancelled mid-publication is a partial delivery the audit must report.
+  # scripts/ci/check-js-gate.mjs requires this exact condition.
   release_audit:
-    needs: [js, rust, python, java, go, csharp, php, cpp, release]
+    needs: [js, rust, python, java, go, csharp, php, cpp, swift, kotlin, release]
     if: ${{ always() && needs.js.result == 'success' }}
     uses: ./.github/workflows/release-audit.yml
     with:
       verbose: ${{ inputs.verbose || false }}
+      release-result: ${{ needs.release.result }}
 
   js_check:
     name: JavaScript
@@ -226,4 +245,28 @@ jobs:
       - name: Require a successful stage
         env:
           STAGE_RESULT: ${{ needs.cpp.result }}
+        run: test "$STAGE_RESULT" = success
+
+  swift_check:
+    name: Swift
+    needs: [swift]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful stage
+        env:
+          STAGE_RESULT: ${{ needs.swift.result }}
+        run: test "$STAGE_RESULT" = success
+
+  kotlin_check:
+    name: Kotlin
+    needs: [kotlin]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful stage
+        env:
+          STAGE_RESULT: ${{ needs.kotlin.result }}
         run: test "$STAGE_RESULT" = success

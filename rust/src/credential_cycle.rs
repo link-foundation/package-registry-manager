@@ -20,6 +20,7 @@ pub fn credential_policy(registry: Registry) -> CredentialPolicy {
         Registry::NuGet => ("oidc-with-token-fallback", "NuGet/login OIDC first; use an existing provided token only after unavailable or rejected OIDC. Retain fallback secrets; no persistent key creation.".into()),
         Registry::Npm | Registry::PyPi | Registry::CratesIo | Registry::RubyGems | Registry::Jsr => ("trusted", format!("{registry}: trusted publishing; remove unused long-lived tokens after verification")),
         Registry::Ghcr => ("github-token", "ghcr: GITHUB_TOKEN with packages: write; no registry secret".into()),
+        Registry::Swiftpm => ("github-token", "swiftpm: Git tags and GitHub releases written by the existing workflow's GITHUB_TOKEN; no SwiftPM OIDC, token secret or registry upload".into()),
         Registry::GoModules | Registry::Packagist => ("tags", format!("{registry}: public repository tags; no publishing token secret")),
         _ => ("token", format!("{registry}: scoped expiring token; gh-manager stores selected-repository organization secrets by default")),
     };

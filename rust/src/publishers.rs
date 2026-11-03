@@ -94,7 +94,9 @@ static NUGET_JOB: LazyLock<Regex> = LazyLock::new(|| {
 });
 static JSR_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:deno|jsr)\s+publish\b"));
 static MAVEN_JOB: LazyLock<Regex> = LazyLock::new(|| {
-    regex(r"(?:\./|\b)mvnw?\s+(?:-\S+\s+)*deploy\b|(?:\./|\b)gradlew?\s+(?:-\S+\s+)*publish\b")
+    regex(
+        r"(?:\./|\b)mvnw?\s+(?:-\S+\s+)*deploy\b|(?:\./|\b)gradlew?\s+(?:-\S+\s+)*publish(?:ToMavenCentral|AndReleaseToMavenCentral|AllPublicationsTo\w+|ToSonatype)?\b",
+    )
 });
 static VSCE_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\bvsce\s+publish\b"));
 static OVSX_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\bovsx\s+publish\b"));
@@ -107,9 +109,10 @@ static NUGET_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:dotnet|nug
 static JSR_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:deno|jsr)\b"));
 static VSCE_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\bvsce\b"));
 static OVSX_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\bovsx\b"));
-static MAVEN_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:mvn|gradle)\b"));
+static MAVEN_PROGRAM: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:mvnw?|gradlew?)\b"));
 static PUSH_ARGUMENT: LazyLock<Regex> = LazyLock::new(|| regex(r#"["'`]push["'`]"#));
-static DEPLOY_ARGUMENT: LazyLock<Regex> = LazyLock::new(|| regex(r#"["'`]deploy["'`]"#));
+static DEPLOY_ARGUMENT: LazyLock<Regex> =
+    LazyLock::new(|| regex(r#"["'`](?:deploy|publish\w*)["'`]"#));
 
 static PACKAGIST_EVIDENCE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"packagist\.org/api/(?:update|create)-package"));
@@ -598,6 +601,11 @@ pub fn token_secret_warning(registry: Registry, secret: &TokenSecret) -> String 
 #[must_use]
 pub fn job_publishes(root: &Path, parsed: &ParsedWorkflow, job: &Job, registry: Registry) -> bool {
     let executable = executable_lines(&job.lines);
+    // SwiftPM consumers resolve Git tags: a tag or release that names the
+    // Swift package is the publication.
+    if registry == Registry::Swiftpm {
+        return crate::swift_distribution::swift_release_evidence(&executable.join("\n"));
+    }
     if let Some(evidence) = release_evidence(registry) {
         return evidence.is_match(&executable.join("\n"));
     }

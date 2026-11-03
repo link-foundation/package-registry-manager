@@ -329,8 +329,24 @@ pub async fn execute_plans_with(
                 )
             });
         if result.is_ok() {
+            let incomplete = (!session.incomplete.is_empty()).then(|| {
+                let steps: Vec<_> = session
+                    .incomplete
+                    .iter()
+                    .map(|entry| {
+                        format!(
+                            "{} {}",
+                            entry["step"].as_str().unwrap_or_default(),
+                            entry["status"].as_str().unwrap_or_default()
+                        )
+                    })
+                    .collect();
+                format!("incomplete ({})", steps.join(", "))
+            });
             let status = if let Some(status) = session.values.get("migration_status") {
                 status.as_str()
+            } else if let Some(incomplete) = &incomplete {
+                incomplete.as_str()
             } else if session.values.contains_key("manifest_pr") {
                 if session.values["manifest_pr"].is_empty() {
                     "blocked"

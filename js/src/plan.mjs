@@ -1,4 +1,5 @@
 import { cppPlan } from "./cpp-distribution.mjs";
+import { swiftPlan } from "./swift-distribution.mjs";
 import {
   BOOTSTRAP_CONDITIONS,
   cratesFlow,
@@ -137,6 +138,19 @@ function buildPlan(inspection, packageInfo, options) {
     case "nuget":
     case "jsr":
       return flowPlan(inspection, packageInfo, options);
+    case "swiftpm": {
+      const { github_owner, github_repository } = inspection.repository ?? {};
+      return basePlan(
+        inspection,
+        packageInfo,
+        swiftPlan(
+          packageInfo,
+          github_owner && github_repository
+            ? `${github_owner}/${github_repository}`
+            : null,
+        ),
+      );
+    }
     case "go-modules":
       steps = [
         check(

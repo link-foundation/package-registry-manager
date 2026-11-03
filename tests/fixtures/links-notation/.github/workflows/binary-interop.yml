@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  eight-languages:
+  ten-languages:
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: '24'
-      - uses: actions/setup-python@v7.0.0
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.15'
       - uses: actions/setup-go@v7.0.0
@@ -46,13 +46,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
+          # The Kotlin example builds with kotlin/gradlew on this JDK.
+          cache: gradle
       - uses: shivammathur/setup-php@2.40.0
         with:
           php-version: '8.5'
           extensions: mbstring
           tools: composer
-      # CMake and GCC come with the runner image and build the C++ example.
+      # CMake and GCC come with the runner image and build the C++ example;
+      # the image's Swift toolchain builds the Swift example.
       - name: Install PHP autoloader
         run: composer install --working-dir=php --no-dev --no-interaction
-      - name: Compare bytes and decoded text in all eight languages
+      - name: Compare bytes and decoded text in all ten languages
         run: bash examples/binary/run-interop.sh

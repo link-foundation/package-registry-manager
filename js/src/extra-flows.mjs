@@ -1,6 +1,10 @@
 import { credentialRequirements } from "./credential-requirements.mjs";
 import { credentialSteps } from "./credential-cycle.mjs";
 import { tokenSecretSteps } from "./tokens.mjs";
+import {
+  centralPublicationStep,
+  gradleValidationSteps,
+} from "./gradle-distribution.mjs";
 
 /** Additional OIDC registries never fall back to a stored publishing token. */
 export function trustedFlow(item, context) {
@@ -65,17 +69,20 @@ export function tokenFlow(item) {
     },
     "open-vsx": { program: "npx", args: ["--no-install", "vsce", "package"] },
   };
-  const steps = checks[item.registry]
-    ? [
-        {
-          id: "validate-package",
-          title: "Validate package before credential changes",
-          kind: "check",
-          description: "Build without publishing.",
-          command: checks[item.registry],
-        },
-      ]
-    : [];
+  const gradle = item.registry === "maven-central" && item.gradle;
+  const steps = gradle
+    ? gradleValidationSteps(item)
+    : checks[item.registry]
+      ? [
+          {
+            id: "validate-package",
+            title: "Validate package before credential changes",
+            kind: "check",
+            description: "Build without publishing.",
+            command: checks[item.registry],
+          },
+        ]
+      : [];
   if (item.registry === "maven-central") {
     const group = /^([\w.-]+):/.exec(item.name ?? "")?.[1];
     steps.push({
@@ -88,7 +95,9 @@ export function tokenFlow(item) {
       ...(group ? { namespace: group } : {}),
       state: "manual-prerequisite",
     });
-    return steps.concat(mavenCredentialSteps(item));
+    return steps.concat(mavenCredentialSteps(item), [
+      centralPublicationStep(item),
+    ]);
   }
   return steps.concat(
     credentialSteps(item.registry, item.token_secrets?.[0] ?? item.registry),

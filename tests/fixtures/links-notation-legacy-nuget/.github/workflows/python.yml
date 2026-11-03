@@ -1,0 +1,80 @@
+name: python
+
+on:
+  workflow_call:
+    inputs:
+      verbose:
+        description: "Print extra diagnostics (never secret values)"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  CI_VERBOSE: ${{ inputs.verbose && 'true' || vars.CI_VERBOSE || 'false' }}
+
+defaults:
+  run:
+    working-directory: python
+
+jobs:
+  lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    concurrency:
+      group: ci-python-${{ github.ref }}-lint
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Set up Python 3.15
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.15"
+      - name: Install linting tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[lint]"
+      - name: Check formatting with Black
+        run: black --check --diff .
+      - name: Check import sorting with isort
+        run: isort --check-only --diff .
+      - name: Lint with flake8
+        run: flake8 --max-line-length=120
+
+  test:
+    needs: [lint]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The requires-python floor and the newest release.
+        python-version: ["3.11", "3.15"]
+    concurrency:
+      group: ci-python-${{ github.ref }}-test-${{ matrix.python-version }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]" -r ../scripts/ci/requirements.txt
+      - name: Build package
+        run: python -m build
+      - name: Check package metadata
+        run: twine check dist/*
+      - name: Run tests
+        run: pytest -v

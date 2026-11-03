@@ -36,11 +36,61 @@ pub trait GithubGateway {
         )
         .await
     }
+
+    /// The commit a branch points at, so every scan read uses one immutable
+    /// tree. `None` keeps reads on the branch (unsupported or unreadable).
+    async fn head_commit(&self, _slug: &str, _branch: &str, _cwd: &Path) -> Option<String> {
+        None
+    }
+
+    /// One read-only GitHub REST document; `None` is a 404. Transports
+    /// without REST access report the read as unsupported.
+    async fn rest(&self, endpoint: &str, _cwd: &Path) -> Result<Option<Value>> {
+        anyhow::bail!("GitHub REST read {endpoint} is unsupported by this gateway")
+    }
+
+    /// The plain-text log of one Actions job, never printed by callers.
+    async fn job_log(&self, slug: &str, job: u64, _cwd: &Path) -> Result<String> {
+        anyhow::bail!("job log {slug}#{job} is unsupported by this gateway")
+    }
 }
 
 /// Resolves the pinned package through npm; no ambient gh-manager is required.
 pub struct GhManager;
 impl GithubGateway for GhManager {
+    async fn rest(&self, endpoint: &str, cwd: &Path) -> Result<Option<Value>> {
+        let (status, body, _) = github_api(endpoint.trim_start_matches('/'), cwd).await?;
+        match status {
+            200..=299 => Ok(Some(body)),
+            404 => Ok(None),
+            _ => anyhow::bail!("GitHub HTTP {status} for {endpoint}"),
+        }
+    }
+
+    async fn job_log(&self, slug: &str, job: u64, cwd: &Path) -> Result<String> {
+        let output = Command::new("gh")
+            .args(["api", &format!("repos/{slug}/actions/jobs/{job}/logs")])
+            .current_dir(cwd)
+            .output()
+            .await?;
+        if !output.status.success() {
+            anyhow::bail!("job log {slug}#{job} is unavailable");
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    async fn head_commit(&self, slug: &str, branch: &str, cwd: &Path) -> Option<String> {
+        let branch = crate::registry_state::encode_uri_component(branch);
+        let (status, body, _) = github_api(&format!("repos/{slug}/commits/{branch}"), cwd)
+            .await
+            .ok()?;
+        let sha = body["sha"].as_str().filter(|_| status == 200)?;
+        (sha.len() == 40
+            && sha
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+        .then(|| sha.to_owned())
+    }
     async fn release_runs(
         &self,
         slug: &str,

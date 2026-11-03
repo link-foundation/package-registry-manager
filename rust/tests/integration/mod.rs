@@ -1,4 +1,5 @@
 mod browser_parity;
+mod central_packagist;
 mod cli;
 mod firefox_forms;
 mod mock_registry;
@@ -16,3 +17,4 @@ mod npm_similarity;
 mod publisher_forms;
 
 mod scan_reliability;
+mod scan_sidecars;

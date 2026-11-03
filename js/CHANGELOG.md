@@ -27,6 +27,13 @@ currently shares its release version with the Rust implementation.
 - An npm first publish stops before the sign-in when the packed tarball
   contains repository development directories such as `.github/` or `tests/`,
   which a package.json without a `files` allowlist lets in.
+- SwiftPM packages (`--registry swift`) are discovered from `Package.swift`
+  and `swift/VERSION` and verified by exact bare tag, commit, tagged manifest,
+  public release and consumer (#77). Kotlin Multiplatform Gradle publications
+  are discovered with their platform variants and verified by root POM,
+  `.module` metadata and every variant (#78).
+- Generated Central, Packagist and SwiftPM setup steps run their own handlers;
+  manual prerequisites stay incomplete without read-back evidence (#79).
 
 ### Changed
 
@@ -62,6 +69,9 @@ currently shares its release version with the Rust implementation.
   packages; they appear with `"steps": []` and a `skipped_reason`, and `setup`
   picks the only publishable package when a registry also has private ones
   (#4).
+- Central and Packagist steps no longer reach the crates.io session (#79).
+  Account scans fetch referenced version sidecars at the scanned commit, so
+  they agree with local inspection (#80).
 
 ## [0.19.35] - 2026-09-21
 

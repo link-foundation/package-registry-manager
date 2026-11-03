@@ -1,6 +1,8 @@
 import { credentialRequirements } from "./credential-requirements.mjs";
 import { auditConfig, applyAuditConfig } from "./audit-config.mjs";
 import { cppDistribution } from "./cpp-distribution.mjs";
+import { gradleDistribution } from "./gradle-distribution.mjs";
+import { markSharedTags, swiftDistribution } from "./swift-distribution.mjs";
 import { markIdentityConflicts } from "./identity-conflicts.mjs";
 import { readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
@@ -51,6 +53,7 @@ const MANIFEST_NAMES = new Set([
   "composer.json",
   "jsr.json",
   "deno.json",
+  "Package.swift",
 ]);
 
 /**
@@ -101,7 +104,7 @@ export async function inspectRepository(repository, options = {}) {
       .filter(([, manifest]) => !ignored(manifest))
       .map(async ([manifestPath, manifest]) => {
         try {
-          return await parseManifest(manifestPath, manifest, root);
+          return await parseManifest(manifestPath, manifest, root, config);
         } catch (error) {
           if (testDirectory(manifest) === null) {
             if (!options.onError) {
@@ -204,6 +207,7 @@ export async function inspectRepository(repository, options = {}) {
     publishers.set(registry, await detectPublisher(root, workflows, registry));
   }
   canonicalComposer(parsed);
+  markSharedTags(parsed);
   const containerFiles = dockerfiles
     .map((item) => relativePath(root, item))
     .filter((item) => !ignored(item) && kept(item, true));
@@ -337,7 +341,13 @@ function releaseWorkflow(publishers) {
 }
 
 /** Registries whose publication evidence is scoped to one manifest. */
-const SCOPED_REGISTRIES = ["maven-central", "packagist", "go-modules", "cmake"];
+const SCOPED_REGISTRIES = [
+  "maven-central",
+  "packagist",
+  "go-modules",
+  "cmake",
+  "swiftpm",
+];
 
 /** Benchmark/fixture manifests are internal unless a workflow releases them. */
 function internalWorkload(item) {
@@ -454,7 +464,7 @@ async function collectManifests(directory, manifests, dockerfiles) {
   }
 }
 
-async function parseManifest(manifestPath, manifest, root) {
+async function parseManifest(manifestPath, manifest, root, config = {}) {
   const contents = await readManifest(manifestPath);
   const filename = path.basename(manifestPath);
   switch (filename) {
@@ -506,7 +516,14 @@ async function parseManifest(manifestPath, manifest, root) {
       return parseMaven(contents, manifest);
     case "build.gradle":
     case "build.gradle.kts":
-      return parseGradle(contents, manifest);
+      return gradleDistribution(contents, manifest, manifestPath);
+    case "Package.swift":
+      return swiftDistribution(
+        contents,
+        manifest,
+        root,
+        config.swiftpm?.find((item) => item.manifest === manifest),
+      );
     case "composer.json":
       return parseComposer(contents, manifest);
     default:
@@ -664,38 +681,6 @@ function parseMaven(contents, manifest) {
     "maven-central",
     group ? `${group}:${artifact}` : artifact,
     xmlTag(contents, "version"),
-    manifest,
-  );
-}
-
-function parseGradle(contents, manifest) {
-  const literal = (key) =>
-    capture(contents, new RegExp(`\\b${key}\\s*(?:=\\s*)?['"]([^'"]+)`));
-  const group = literal("groupId") ?? literal("group");
-  const artifact =
-    literal("artifactId") ??
-    literal("archivesBaseName") ??
-    literal("rootProject\\.name");
-  const version = literal("version");
-  if (
-    !group ||
-    !artifact ||
-    !version ||
-    /[$}{]/.test(`${group}${artifact}${version}`) ||
-    !/maven-publish|MavenPublication/.test(contents) ||
-    !/from\s*\(?\s*components|artifact\s*\(/.test(contents)
-  ) {
-    return {
-      manifest,
-      publishable: false,
-      discovery_skip:
-        "Gradle application/build definition has no resolved Maven publication coordinates and component",
-    };
-  }
-  return packageInfo(
-    "maven-central",
-    `${group}:${artifact}`,
-    version,
     manifest,
   );
 }

@@ -107,37 +107,6 @@ pub fn cargo_version(root: &Path, manifest: &Path, text: &str) -> Option<String>
     None
 }
 
-/// A Gradle build is publishable only with resolved coordinates and publication inputs.
-#[must_use]
-pub fn gradle(text: &str, manifest: String) -> Package {
-    let literal = |key: &str| capture(text, &format!(r#"\b{key}\s*(?:=\s*)?['"]([^'"]+)"#));
-    let group = literal("groupId").or_else(|| literal("group"));
-    let artifact = literal("artifactId")
-        .or_else(|| literal("archivesBaseName"))
-        .or_else(|| literal(r"rootProject\.name"));
-    let version = literal("version");
-    let publish = Regex::new(r"maven-publish|MavenPublication")
-        .expect("regex")
-        .is_match(text);
-    let input = Regex::new(r"from\s*\(?\s*components|artifact\s*\(")
-        .expect("regex")
-        .is_match(text);
-    if let (Some(group), Some(artifact), Some(version)) = (group, artifact, version) {
-        if publish && input && !format!("{group}{artifact}{version}").contains(['$', '{', '}']) {
-            return Package::new(
-                Registry::MavenCentral,
-                format!("{group}:{artifact}"),
-                Some(version),
-                manifest,
-            );
-        }
-    }
-    let mut item = Package::new(Registry::MavenCentral, String::new(), None, manifest)
-        .unpublishable("unresolved Gradle Maven publication");
-    item.audit.insert("discovery_skip".into(), json!("Gradle application/build definition has no resolved Maven publication coordinates and component"));
-    item
-}
-
 /// Read `CMake`, Conan and vcpkg distribution identities without running their code.
 pub fn cpp(root: &Path, manifest: &Path, relative: String, text: &str) -> Result<Package> {
     let filename = manifest

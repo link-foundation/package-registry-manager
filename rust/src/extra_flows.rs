@@ -157,8 +157,13 @@ pub fn token_flow(package: &Package) -> Vec<SetupStep> {
         }
         _ => None,
     };
-    let mut steps = Vec::new();
-    if let Some((program, args)) = command {
+    let gradle = package.registry == Registry::MavenCentral && package.audit.contains_key("gradle");
+    let mut steps = if gradle {
+        crate::gradle_distribution::gradle_validation_steps(package)
+    } else {
+        Vec::new()
+    };
+    if let Some((program, args)) = command.filter(|_| !gradle) {
         steps.push(
             SetupStep::new(
                 "validate-package",
@@ -195,6 +200,9 @@ pub fn token_flow(package: &Package) -> Vec<SetupStep> {
         }
         steps.push(step.detail("state", json!("manual-prerequisite")));
         steps.extend(maven_credential_steps(package));
+        steps.push(crate::gradle_distribution::central_publication_step(
+            package,
+        ));
         return steps;
     }
     steps.extend(credential_steps(

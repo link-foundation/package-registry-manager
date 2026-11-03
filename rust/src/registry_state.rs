@@ -99,6 +99,20 @@ impl Endpoints {
         Some(value.trim_end_matches('/').to_owned())
     }
 
+    /// A non-registry base URL, such as Maven Central search: an override
+    /// from [`Endpoints::with`], then the environment, then `fallback`.
+    #[must_use]
+    pub fn named(&self, variable: &str, fallback: &str) -> String {
+        self.overrides
+            .get(variable)
+            .cloned()
+            .or_else(|| std::env::var(variable).ok())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| fallback.to_owned())
+            .trim_end_matches('/')
+            .to_owned()
+    }
+
     /// Return the public URL that answers whether a package exists.
     #[must_use]
     pub fn state_url(&self, package: &Package) -> Option<String> {
@@ -231,6 +245,12 @@ impl RegistryClient {
     #[must_use]
     pub const fn endpoints(&self) -> &Endpoints {
         &self.endpoints
+    }
+
+    /// Whether lookups trace their requests.
+    #[must_use]
+    pub const fn verbose(&self) -> bool {
+        self.verbose
     }
 
     /// Fetch a JSON document; 404 is `Missing`, anything else unexpected is `Unknown`.
