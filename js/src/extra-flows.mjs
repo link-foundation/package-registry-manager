@@ -2,7 +2,7 @@ import { credentialRequirements } from "./credential-requirements.mjs";
 import { credentialSteps } from "./credential-cycle.mjs";
 import { tokenSecretSteps } from "./tokens.mjs";
 import {
-  gradlePublicationStep,
+  centralPublicationStep,
   gradleValidationSteps,
 } from "./gradle-distribution.mjs";
 
@@ -95,10 +95,9 @@ export function tokenFlow(item) {
       ...(group ? { namespace: group } : {}),
       state: "manual-prerequisite",
     });
-    return steps.concat(
-      mavenCredentialSteps(item),
-      gradle ? [gradlePublicationStep(item)] : [],
-    );
+    return steps.concat(mavenCredentialSteps(item), [
+      centralPublicationStep(item),
+    ]);
   }
   return steps.concat(
     credentialSteps(item.registry, item.token_secrets?.[0] ?? item.registry),

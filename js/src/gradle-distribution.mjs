@@ -395,12 +395,12 @@ export function gradleValidationSteps(item) {
  * module metadata and every platform publication it references. A root POM
  * alone never certifies the platform variants.
  */
-export function gradlePublicationStep(item) {
+export function centralPublicationStep(item) {
   const [group, artifact] = (item.name ?? "").split(":");
   const variants = item.variants ?? [];
   return {
     id: "verify-central-publication",
-    title: `Verify ${item.name}:${item.version ?? "(unresolved)"} and its ${variants.length} platform publications on Central`,
+    title: `Verify ${item.name}:${item.version ?? "(unresolved)"}${variants.length ? ` and its ${variants.length} platform publications` : ""} on Central`,
     kind: "api",
     coordinates: { group, artifact, version: item.version ?? null },
     variants: variants.map((entry) => entry.coordinates),

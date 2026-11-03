@@ -32,6 +32,10 @@ import {
 } from "./approvals.mjs";
 import { connectAutomation } from "./automation.mjs";
 import { runCratesApiStep } from "./crates-api.mjs";
+import {
+  CENTRAL_PACKAGIST_STEPS,
+  runCentralPackagistStep,
+} from "./central-packagist-steps.mjs";
 import { detachedRunner, openInUserBrowser } from "./browser.mjs";
 import { detectDefaultBrowser, openWithCommand } from "./default-browser.mjs";
 import { CLEANUP_CONDITIONS } from "./flows.mjs";
@@ -115,6 +119,9 @@ export class SetupSession {
         console.error(`skip ${step.id}: condition ${step.when} does not hold`);
       }
     }
+    if (!this.outcome && this.incomplete?.length) {
+      this.outcome = { status: "incomplete", incomplete: this.incomplete };
+    }
   }
 
   /**
@@ -142,7 +149,11 @@ export class SetupSession {
         );
       } else if (this.conditions.has(step.when) && step.kind === "api") {
         this.log(`==> ${step.title}`);
-        await runCratesApiStep(this, step).catch((error) =>
+        await (
+          CENTRAL_PACKAGIST_STEPS.has(step.id)
+            ? runCentralPackagistStep(this, step)
+            : runCratesApiStep(this, step)
+        ).catch((error) =>
           console.error(`warning: ${step.id} failed: ${error.message}`),
         );
       } else if (this.conditions.has(step.when)) {
@@ -184,6 +195,9 @@ export class SetupSession {
   }
 
   async runStep(step) {
+    if (CENTRAL_PACKAGIST_STEPS.has(step.id)) {
+      return runCentralPackagistStep(this, step);
+    }
     if (step.id === "audit-distribution-channel") {
       const { auditDistributionChannel } =
         await import("./distribution-channel.mjs");
