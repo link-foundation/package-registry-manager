@@ -2,7 +2,7 @@
   {
     "registry": "npm",
     "name": "links-notation",
-    "version": "0.27.1",
+    "version": "0.30.0",
     "manifest": "js/package.json",
     "publishable": true,
     "workflow": "js.yml",
@@ -43,7 +43,7 @@
   {
     "registry": "crates-io",
     "name": "links-notation",
-    "version": "0.27.1",
+    "version": "0.30.0",
     "manifest": "rust/links-notation/Cargo.toml",
     "publishable": true,
     "workflow": "js.yml",
@@ -58,7 +58,7 @@
   {
     "registry": "pypi",
     "name": "links-notation",
-    "version": "0.27.1",
+    "version": "0.30.0",
     "manifest": "python/pyproject.toml",
     "publishable": true,
     "workflow": "js.yml",
@@ -73,7 +73,7 @@
   {
     "registry": "go-modules",
     "name": "github.com/link-foundation/links-notation/go",
-    "version": "v0.27.1",
+    "version": "v0.30.0",
     "manifest": "go/go.mod",
     "publishable": true,
     "workflow": "js.yml",
@@ -88,7 +88,7 @@
   {
     "registry": "nuget",
     "name": "Link.Foundation.Links.Notation",
-    "version": "0.27.1",
+    "version": "0.30.0",
     "manifest": "csharp/Link.Foundation.Links.Notation/Link.Foundation.Links.Notation.csproj",
     "publishable": true,
     "workflow": "js.yml",
@@ -98,12 +98,12 @@
     "workflow_callees": [
       "release.yml -> publish-csharp.yml -> pushToNuget"
     ],
-    "publishing_policy": "token-only"
+    "publishing_policy": "oidc-only"
   },
   {
     "registry": "maven-central",
     "name": "io.github.link-foundation:links-notation",
-    "version": "0.27.1",
+    "version": "0.30.0",
     "manifest": "java/pom.xml",
     "publishable": true,
     "workflow": "js.yml",
@@ -116,9 +116,24 @@
     "publishing_policy": null
   },
   {
+    "registry": "maven-central",
+    "name": "io.github.link-foundation:links-notation-kotlin",
+    "version": "0.30.0",
+    "manifest": "kotlin/build.gradle.kts",
+    "publishable": true,
+    "workflow": "js.yml",
+    "workflow_jobs": [
+      "release"
+    ],
+    "workflow_callees": [
+      "release.yml -> publish-kotlin.yml -> publishToMavenCentral"
+    ],
+    "publishing_policy": null
+  },
+  {
     "registry": "packagist",
     "name": "link-foundation/links-notation",
-    "version": "0.27.1",
+    "version": "0.30.0",
     "manifest": "composer.json",
     "publishable": true,
     "workflow": "js.yml",
@@ -133,7 +148,7 @@
   {
     "registry": "cmake",
     "name": "links_notation",
-    "version": "0.27.1",
+    "version": "0.30.0",
     "manifest": "cpp/CMakeLists.txt",
     "publishable": true,
     "workflow": "js.yml",
@@ -142,6 +157,21 @@
     ],
     "workflow_callees": [
       "release.yml -> publish-cpp.yml -> publishRelease"
+    ],
+    "publishing_policy": null
+  },
+  {
+    "registry": "swiftpm",
+    "name": "LinksNotation",
+    "version": "0.30.0",
+    "manifest": "Package.swift",
+    "publishable": true,
+    "workflow": "js.yml",
+    "workflow_jobs": [
+      "release"
+    ],
+    "workflow_callees": [
+      "release.yml -> publish-swift.yml -> publishRelease"
     ],
     "publishing_policy": null
   }

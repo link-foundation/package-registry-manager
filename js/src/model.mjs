@@ -16,12 +16,16 @@ export const REGISTRIES = Object.freeze([
   "cmake",
   "conan",
   "vcpkg",
+  "swiftpm",
 ]);
 
 const REGISTRY_ALIASES = new Map([
   ["cmake", "cmake"],
   ["conan", "conan"],
   ["vcpkg", "vcpkg"],
+  ["swift", "swiftpm"],
+  ["swiftpm", "swiftpm"],
+  ["swift-package-manager", "swiftpm"],
   ["ruby", "rubygems"],
   ["rubygems", "rubygems"],
   ["gem", "rubygems"],

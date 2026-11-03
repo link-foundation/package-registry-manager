@@ -1,0 +1,229 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      verbose:
+        description: "Print extra diagnostics (never secret values)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One commit range at a time; drafting agents never push during a run.
+concurrency:
+  group: ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  js:
+    uses: ./.github/workflows/javascript.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
+  rust:
+    needs: [js]
+    uses: ./.github/workflows/rust.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
+  python:
+    needs: [js]
+    uses: ./.github/workflows/python.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
+  java:
+    needs: [js]
+    uses: ./.github/workflows/java.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
+  go:
+    needs: [js]
+    uses: ./.github/workflows/go.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  csharp:
+    needs: [js]
+    uses: ./.github/workflows/csharp.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
+  php:
+    needs: [js]
+    uses: ./.github/workflows/php.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
+  cpp:
+    needs: [js]
+    uses: ./.github/workflows/cpp.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
+  binary_interop:
+    needs: [js]
+    uses: ./.github/workflows/binary-interop.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
+  benchmarks:
+    needs: [js]
+    uses: ./.github/workflows/benchmarks.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+
+  security:
+    needs: [js]
+    uses: ./.github/workflows/security.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+    permissions:
+      contents: write
+      security-events: write
+      pull-requests: write
+
+  docs:
+    needs: [js]
+    uses: ./.github/workflows/docs.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
+  release:
+    needs: [js, rust, python, java, go, csharp, php, cpp]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    uses: ./.github/workflows/release.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
+      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+      CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+      CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      NUGET_TOKEN: ${{ secrets.NUGET_TOKEN }}
+      PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
+      PACKAGIST_TOKEN: ${{ secrets.PACKAGIST_TOKEN }}
+    permissions:
+      contents: write
+      id-token: write
+
+  release_audit:
+    needs: [js, rust, python, java, go, csharp, php, cpp, release]
+    if: ${{ always() && needs.js.result == 'success' }}
+    uses: ./.github/workflows/release-audit.yml
+    with:
+      verbose: ${{ inputs.verbose || false }}
+
+  js_check:
+    name: JavaScript
+    needs: [js]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful stage
+        env:
+          STAGE_RESULT: ${{ needs.js.result }}
+        run: test "$STAGE_RESULT" = success
+
+  rust_check:
+    name: Rust
+    needs: [rust]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful stage
+        env:
+          STAGE_RESULT: ${{ needs.rust.result }}
+        run: test "$STAGE_RESULT" = success
+
+  python_check:
+    name: Python
+    needs: [python]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful stage
+        env:
+          STAGE_RESULT: ${{ needs.python.result }}
+        run: test "$STAGE_RESULT" = success
+
+  java_check:
+    name: Java
+    needs: [java]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful stage
+        env:
+          STAGE_RESULT: ${{ needs.java.result }}
+        run: test "$STAGE_RESULT" = success
+
+  go_check:
+    name: Go
+    needs: [go]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful stage
+        env:
+          STAGE_RESULT: ${{ needs.go.result }}
+        run: test "$STAGE_RESULT" = success
+
+  csharp_check:
+    name: CSharp
+    needs: [csharp]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful stage
+        env:
+          STAGE_RESULT: ${{ needs.csharp.result }}
+        run: test "$STAGE_RESULT" = success
+
+  php_check:
+    name: PHP
+    needs: [php]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful stage
+        env:
+          STAGE_RESULT: ${{ needs.php.result }}
+        run: test "$STAGE_RESULT" = success
+
+  cpp_check:
+    name: Cpp
+    needs: [cpp]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful stage
+        env:
+          STAGE_RESULT: ${{ needs.cpp.result }}
+        run: test "$STAGE_RESULT" = success

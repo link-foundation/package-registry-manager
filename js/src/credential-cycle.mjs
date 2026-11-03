@@ -20,6 +20,13 @@ export function credentialPolicy(registry) {
         "ghcr: GITHUB_TOKEN with packages: write; no registry secret",
     };
   }
+  if (registry === "swiftpm") {
+    return {
+      mode: "github-token",
+      description:
+        "swiftpm: Git tags and GitHub releases written by the existing workflow's GITHUB_TOKEN; no SwiftPM OIDC, token secret or registry upload",
+    };
+  }
   if (["go-modules", "packagist"].includes(registry)) {
     return {
       mode: "tags",

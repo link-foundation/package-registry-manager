@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=84.0.0"]
+requires = ["setuptools>=84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "links-notation"
-version = "0.27.1"
+version = "0.30.0"
 description = "Python implementation of the Links Notation parser"
 readme = "README.md"
 license = "Unlicense"
@@ -29,8 +29,8 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-test = ["pytest>=9.1.1", "pytest-timeout>=2.4.0"]
-lint = ["black>=26.10.1", "isort>=9.0.2", "flake8>=7.4.1"]
+test = ["pytest>=9.2.0", "pytest-timeout>=2.4.0"]
+lint = ["black>=26.10.1", "isort>=9.0.2", "flake8>=7.5.0"]
 dev = ["links-notation[test,lint]"]
 
 [project.urls]

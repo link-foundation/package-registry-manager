@@ -1,0 +1,78 @@
+name: php
+
+on:
+  workflow_call:
+    inputs:
+      verbose:
+        description: "Print extra diagnostics (never secret values)"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  CI_VERBOSE: ${{ inputs.verbose && 'true' || vars.CI_VERBOSE || 'false' }}
+
+defaults:
+  run:
+    working-directory: php
+
+jobs:
+  lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    concurrency:
+      group: ci-php-${{ github.ref }}-lint
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Set up PHP 8.5
+        uses: shivammathur/setup-php@2.40.0
+        with:
+          php-version: "8.5"
+          extensions: mbstring
+          tools: composer:v2
+      - name: Validate composer.json
+        run: composer validate --strict --no-check-version
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+      - name: Check coding standard with PHP_CodeSniffer
+        run: composer run-script lint
+
+  test:
+    needs: [lint]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    concurrency:
+      # The matrix value belongs in the group. Without it all four legs share
+      # one group and cancel each other, so a run reported on one PHP version
+      # while the other three were cancelled before their first step.
+      group: ci-php-${{ github.ref }}-test-${{ matrix.php-version }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version: ["8.4", "8.5"]
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Set up PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@2.40.0
+        with:
+          php-version: ${{ matrix.php-version }}
+          extensions: mbstring
+          tools: composer:v2
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress
+      - name: Run tests
+        run: composer run-script test
+      - name: Verify tagged monorepo installation and autoloading
+        run: python3 ../experiments/issue-339/test_php_distribution.py

@@ -92,7 +92,9 @@ test("links-notation: Maven and Packagist plans expose structured credential sta
 });
 
 test("links-notation: NuGet migration keeps pack, guard, fallback and id-token across callers", async () => {
-  const dir = `${root}/.github/workflows`;
+  // Upstream now uses NuGet trusted publishing; the API-key workflows it
+  // replaced are frozen next to the fixture.
+  const dir = `${root}-legacy-nuget/.github/workflows`;
   const workflows = readdirSync(dir).map((name) => ({
     name,
     contents: readFileSync(`${dir}/${name}`, "utf8"),

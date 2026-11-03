@@ -1,0 +1,77 @@
+name: release-audit
+
+# Compares the version declared in each language's source tree with the version
+# actually available on that language's registry.
+#
+# At the time this was added the audit reported: js declared 0.15.0 / npm
+# 0.13.0, csharp declared 0.15.0 / NuGet 0.13.0, java declared 0.3.0 with
+# nothing on Maven Central, php declared 0.2.0 with nothing on Packagist. All
+# four had green CI runs. The release jobs gated on
+# `needs.<publishJob>.result == 'success'`, which is also what a job reports
+# when its publish step did nothing, so a missing credential or a
+# never-evaluated `if:` looked exactly like a successful release.
+
+on:
+  workflow_call:
+    inputs:
+      verbose:
+        description: 'Print extra diagnostics (never secret values)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-release-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Hard failure: reads only the working tree, so a disagreement between the
+  # implementations is always a defect and never a transient registry answer.
+  consistency:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24'
+      - name: Check that every implementation declares the same version
+        run: node scripts/version-consistency.mjs
+
+  audit:
+    runs-on: ubuntu-26.04
+    # The caller has already waited for every publisher and propagation probe.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24'
+      - name: Audit declared versions against the registries
+        env:
+          CI_VERBOSE: ${{ inputs.verbose && 'true' || vars.CI_VERBOSE || 'false' }}
+          # On a pull request no publish job runs at all, so a bumped version
+          # being ahead of the registry is the expected state rather than
+          # drift. Reporting it as a warning there would flag every release PR.
+          AUDIT_EXPECT_PUBLISHED: ${{ github.event_name != 'pull_request' }}
+          AUDIT_REPORT: ${{ runner.temp }}/registry-audit.json
+          # Read-only lookups of each published version's GitHub release.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/release-audit.mjs
+      - name: Preserve exact registry responses
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: registry-audit-${{ github.run_id }}
+          path: ${{ runner.temp }}/registry-audit.json
