@@ -14,6 +14,9 @@ use std::path::Path;
 #[must_use]
 pub fn scan_matches() -> Vec<String> {
     let mut patterns: Vec<_> = [
+        "CMakeLists.txt",
+        "conanfile.py",
+        "vcpkg.json",
         "package.json",
         "Cargo.toml",
         "pyproject.toml",
@@ -22,6 +25,7 @@ pub fn scan_matches() -> Vec<String> {
         "pom.xml",
         "build.gradle",
         "build.gradle.kts",
+        "Package.swift",
         "composer.json",
         "jsr.json",
         "deno.json",
@@ -101,7 +105,16 @@ pub fn findings(inspection: &Inspection) -> Vec<Value> {
             }
             results.push(finding);
         };
-        if let Some(kind) = package.audit.get("version_state").and_then(Value::as_str) {
+        // An absent exact version is reported even when older versions exist.
+        let version_state = package
+            .audit
+            .get("version_state")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                (package.audit.get("manifest_version_exists") == Some(&json!(false)))
+                    .then_some("manifest-version-absent")
+            });
+        if let Some(kind) = version_state {
             push(
                 kind,
                 json!({"expected_version":package.version,"latest_version":package.audit.get("latest_version"),"url":package.audit.get("version_evidence_url").or_else(||package.audit.get("registry_evidence_url"))}),
@@ -159,6 +172,12 @@ pub struct ScannedRepository {
     /// Failure to read or parse this repository.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Commit every file read used, when it was resolved from the branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// Version sidecars requested next to the manifests, when any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_sidecars: Option<crate::scan_sidecars::SidecarFetch>,
 }
 
 /// Organization/user scan with package and release evidence.
@@ -258,11 +277,18 @@ pub async fn scan_repositories_with_inactive(
         let slug = repo["full_name"].as_str().unwrap_or("<invalid repository>");
         let branch = repo["default_branch"].as_str();
         let mut errors = Vec::new();
+        let mut commit = None;
+        let mut version_sidecars = None;
         let finding_start = report.findings.len();
         let result: Result<Inspection> = async {
             if !slug_pattern.is_match(slug) {
                 bail!("invalid repository name");
             }
+            // One immutable commit for every read, so sidecars match manifests.
+            if let Some(branch) = branch {
+                commit = github.head_commit(slug, branch, workspace.path()).await;
+            }
+            let branch = commit.as_deref().or(branch);
             let mut args = vec![
                 "repo".into(),
                 "files".into(),
@@ -319,7 +345,22 @@ pub async fn scan_repositories_with_inactive(
                             .cloned(),
                     );
             }
-            snapshot(&root, slug, &files)?;
+            let Value::Array(mut list) = files else {
+                bail!("gh-manager returned an invalid file list")
+            };
+            let fetched = crate::scan_sidecars::fetch_version_sidecars(
+                github,
+                slug,
+                &mut list,
+                branch,
+                workspace.path(),
+                |error| errors.push(error),
+            )
+            .await;
+            if !fetched.requested.is_empty() {
+                version_sidecars = Some(fetched);
+            }
+            snapshot(&root, slug, &Value::Array(list))?;
             let discovered = crate::discovery::inspect_repository_recovering(
                 &root,
                 InspectOptions {
@@ -389,6 +430,8 @@ pub async fn scan_repositories_with_inactive(
             inspection,
             error,
             errors,
+            commit,
+            version_sidecars,
         };
         progress(
             &item,

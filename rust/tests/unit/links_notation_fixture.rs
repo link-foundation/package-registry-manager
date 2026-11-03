@@ -150,7 +150,12 @@ fn links_notation_maven_and_packagist_expose_credential_states() {
 
 #[test]
 fn links_notation_nuget_migration_keeps_pack_guard_fallback_and_id_token() {
-    let dir = root().join(".github/workflows");
+    // Upstream now uses NuGet trusted publishing; the API-key workflows it
+    // replaced are frozen next to the fixture.
+    let dir = root()
+        .parent()
+        .expect("fixtures")
+        .join("links-notation-legacy-nuget/.github/workflows");
     let workflows: Vec<Workflow> = std::fs::read_dir(&dir)
         .expect("workflows")
         .map(|entry| {
@@ -371,4 +376,101 @@ async fn go_proxy_exact_version_uses_the_info_endpoint() {
     assert_eq!(missing.audit["manifest_version_exists"], false);
     assert_eq!(missing.audit["version_state"], "manifest-version-absent");
     server.join().unwrap();
+}
+
+#[test]
+fn links_notation_swiftpm_shares_the_bare_tag_and_skips_consumer_examples() {
+    let inspection = inspection();
+    let swift: Vec<Value> = inspection
+        .packages
+        .iter()
+        .filter(|p| p.registry == Registry::Swiftpm)
+        .map(|p| serde_json::to_value(p).expect("package json"))
+        .collect();
+    assert_eq!(swift.len(), 1, "{swift:?}");
+    let package = &swift[0];
+    assert_eq!(package["manifest"], "Package.swift");
+    assert_eq!(package["name"], "LinksNotation");
+    assert_eq!(package["version"], "0.30.0");
+    assert_eq!(package["version_source"], "swift/VERSION");
+    assert_eq!(
+        package["workflow_callees"],
+        json!(["release.yml -> publish-swift.yml -> publishRelease"])
+    );
+    assert_eq!(package["swift_package"]["tag"], "0.30.0");
+    assert_eq!(
+        package["swift_package"]["shared_tag"]["with"],
+        json!(["packagist:link-foundation/links-notation"])
+    );
+    let plans = plans(&[Registry::Swiftpm], &PlanOptions::default());
+    let ids: Vec<&str> = plans[0].steps.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "describe-package",
+            "build-package",
+            "test-package",
+            "verify-swift-release",
+            "verify-swift-consumer",
+        ]
+    );
+    // Git tags via the workflow's GITHUB_TOKEN: no secret, token or OIDC setup.
+    for step in &plans[0].steps {
+        assert!(!step.details.contains_key("secrets") && !step.details.contains_key("oidc"));
+        let id = step.id.to_lowercase();
+        assert!(!id.contains("token") && !id.contains("oidc"), "{id}");
+    }
+}
+
+#[test]
+fn links_notation_kotlin_multiplatform_stays_in_central_with_gradle_steps() {
+    let inspection = inspection();
+    let kotlin = inspection
+        .packages
+        .iter()
+        .find(|p| p.audit.contains_key("gradle"))
+        .expect("kotlin package");
+    assert_eq!(kotlin.registry, Registry::MavenCentral);
+    assert_eq!(
+        kotlin.name,
+        "io.github.link-foundation:links-notation-kotlin"
+    );
+    assert_eq!(kotlin.version.as_deref(), Some("0.30.0"));
+    let gradle = &kotlin.audit["gradle"];
+    assert_eq!(gradle["publish_task"], "publishToMavenCentral");
+    assert_eq!(gradle["multiplatform"], true);
+    let variants = kotlin.audit["variants"].as_array().expect("variants");
+    assert!(variants.len() >= 6, "{variants:?}");
+    assert!(
+        variants.iter().any(|v| v["host"] == "macos"),
+        "Apple targets need a macOS runner"
+    );
+    let java = inspection
+        .packages
+        .iter()
+        .find(|p| p.manifest == "java/pom.xml")
+        .expect("java package");
+    assert_eq!(java.registry, Registry::MavenCentral);
+    assert!(!java.audit.contains_key("gradle"));
+    let plan = plans(&[Registry::MavenCentral], &PlanOptions::default())
+        .into_iter()
+        .find(|p| p.package.audit.contains_key("gradle"))
+        .expect("gradle plan");
+    let commands = serde_json::to_string(
+        &plan
+            .steps
+            .iter()
+            .map(|s| s.command.clone())
+            .collect::<Vec<_>>(),
+    )
+    .expect("commands");
+    assert!(!commands.contains("\"mvn\""), "{commands}");
+    assert!(commands.contains("publishToMavenLocal"), "{commands}");
+    assert!(plan.steps.iter().any(|s| s.id == "verify-gradle-toolchain"));
+    assert_eq!(
+        step(&plan, "verify-central-publication")["variants"]
+            .as_array()
+            .map(Vec::len),
+        Some(variants.len())
+    );
 }

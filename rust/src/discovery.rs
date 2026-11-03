@@ -87,7 +87,7 @@ pub fn inspect_repository_recovering(
         if ignored(&relative, &mut skipped) {
             continue;
         }
-        match parse_manifest(path, &root) {
+        match parse_manifest(path, &root, &config) {
             Ok(item) => parsed.extend(item),
             // An unparsable fixture is skipped like any other fixture.
             Err(_) if test_directory(&relative).is_some() => {
@@ -147,6 +147,7 @@ pub fn inspect_repository_recovering(
         publishers.insert(registry, detect_publisher(&root, &workflows, registry));
     }
     canonical_composer(&mut parsed);
+    crate::swift_distribution::mark_shared_tags(&mut parsed);
     let mut counts = BTreeMap::new();
     for item in &parsed {
         // JS skip records carry no registry, except Packagist development copies.
@@ -295,11 +296,12 @@ fn kept(
 }
 
 /// Registries whose publication evidence is scoped to one manifest.
-const SCOPED_REGISTRIES: [Registry; 4] = [
+const SCOPED_REGISTRIES: [Registry; 5] = [
     Registry::MavenCentral,
     Registry::Packagist,
     Registry::GoModules,
     Registry::Cmake,
+    Registry::Swiftpm,
 ];
 
 /// Benchmark/fixture manifests are internal unless a workflow releases them.
@@ -393,6 +395,7 @@ fn with_publisher(
     if publisher.workflow.is_none()
         && publisher.candidates.is_empty()
         && release_evidence(item.registry).is_none()
+        && item.registry != Registry::Swiftpm
     {
         item.warnings.push(format!(
             "no workflow publishes {} to {}; CI releases will not reach it",
@@ -452,6 +455,7 @@ fn is_manifest(path: &Path) -> bool {
             | "pom.xml"
             | "build.gradle"
             | "build.gradle.kts"
+            | "Package.swift"
             | "composer.json"
             | "jsr.json"
             | "deno.json"
@@ -475,7 +479,7 @@ fn read_manifest(path: &Path) -> Result<String> {
     Ok(contents)
 }
 
-fn parse_manifest(path: &Path, root: &Path) -> Result<Option<Package>> {
+fn parse_manifest(path: &Path, root: &Path, config: &JsonValue) -> Result<Option<Package>> {
     let relative = relative_path(path, root);
     let contents = read_manifest(path)?;
     let contents = contents.as_str();
@@ -531,8 +535,18 @@ fn parse_manifest(path: &Path, root: &Path) -> Result<Option<Package>> {
             Ok(Some(item))
         }
         "pom.xml" => Ok(Some(parse_maven(contents, relative))),
-        "build.gradle" | "build.gradle.kts" => {
-            Ok(Some(crate::audit_discovery::gradle(contents, relative)))
+        "build.gradle" | "build.gradle.kts" => Ok(Some(
+            crate::gradle_distribution::gradle_distribution(contents, relative, path)?,
+        )),
+        "Package.swift" => {
+            let mapping = config["swiftpm"].as_array().and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item["manifest"] == relative.as_str())
+            });
+            Ok(Some(crate::swift_distribution::swift_distribution(
+                contents, relative, root, mapping,
+            )))
         }
         "composer.json" => parse_composer(contents, relative),
         _ if matches!(

@@ -161,6 +161,15 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
         | Registry::DockerHub
         | Registry::Ghcr | Registry::RubyGems | Registry::NuGet | Registry::Jsr => return flow_plan(inspection, package, options),
         Registry::Cmake | Registry::Conan | Registry::Vcpkg => crate::extra_flows::cpp_flow(package),
+        Registry::Swiftpm => {
+            let slug = inspection
+                .repository
+                .github_owner
+                .as_ref()
+                .zip(inspection.repository.github_repository.as_ref())
+                .map(|(owner, repository)| format!("{owner}/{repository}"));
+            crate::swift_distribution::swift_plan(package, slug.as_deref())
+        }
         Registry::GoModules => vec![
                 check(
                     "test-module",
