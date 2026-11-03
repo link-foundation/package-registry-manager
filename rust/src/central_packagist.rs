@@ -122,9 +122,9 @@ pub async fn http(client: &RegistryClient, url: &str, head: bool) -> HttpAnswer 
     }
 }
 
-/// Secret names of a step's `secrets` detail.
+/// Repository setting (secret) names listed in a step's `secrets` detail; never values.
 #[must_use]
-pub fn step_secrets(step: &SetupStep) -> Vec<String> {
+pub fn step_setting_names(step: &SetupStep) -> Vec<String> {
     step.details
         .get("secrets")
         .and_then(Value::as_array)
@@ -140,9 +140,9 @@ pub fn plan_slug(plan: &SetupPlan) -> Option<String> {
     crate::repository_identity::repository_slug(&plan.repository)
 }
 
-/// Selected secret presence at repository, then organization scope.
+/// Which named repository settings exist (repository, then organization scope), from metadata only; values are never read.
 #[allow(clippy::future_not_send)]
-pub async fn secret_presence(
+pub async fn setting_presence(
     github: &impl GithubGateway,
     slug: &str,
     names: &[String],
@@ -282,9 +282,9 @@ async fn ensure_signing_key(
     context: &StepContext<'_, impl GithubGateway>,
     step: &SetupStep,
 ) -> Result<Value> {
-    let names = step_secrets(step);
+    let names = step_setting_names(step);
     let (present, missing) = match plan_slug(context.plan) {
-        Some(slug) => secret_presence(context.github, &slug, &names, context.cwd).await?,
+        Some(slug) => setting_presence(context.github, &slug, &names, context.cwd).await?,
         None => (Vec::new(), names),
     };
     let package = &context.plan.package;
@@ -533,9 +533,9 @@ async fn packagist_update_api(
             "reason": "the workflow does not call the update-package API; the GitHub hook is the only update path",
         }));
     }
-    let names = step_secrets(step);
+    let names = step_setting_names(step);
     let (present, missing) = match plan_slug(context.plan) {
-        Some(slug) => secret_presence(context.github, &slug, &names, context.cwd).await?,
+        Some(slug) => setting_presence(context.github, &slug, &names, context.cwd).await?,
         None => (Vec::new(), names),
     };
     Ok(if missing.is_empty() {
@@ -580,7 +580,7 @@ pub async fn central_pair_preflight(
     automation_allowed: bool,
     cwd: &Path,
 ) -> Result<CentralPairStart> {
-    let names = step_secrets(step);
+    let names = step_setting_names(step);
     let Some(slug) = plan_slug(plan).filter(|_| names.len() == 2) else {
         return Ok(CentralPairStart::Done(json!({
             "status": "unsupported",
@@ -588,7 +588,7 @@ pub async fn central_pair_preflight(
             "stop": true,
         })));
     };
-    let (present, missing) = secret_presence(github, &slug, &names, cwd).await?;
+    let (present, missing) = setting_presence(github, &slug, &names, cwd).await?;
     if missing.is_empty() {
         return Ok(CentralPairStart::Done(json!({
             "status": "present",
@@ -645,7 +645,7 @@ pub async fn store_central_pair(
             )
             .await?;
     }
-    let (_, unread) = secret_presence(context.github, slug, names, context.cwd).await?;
+    let (_, unread) = setting_presence(context.github, slug, names, context.cwd).await?;
     if !unread.is_empty() {
         return Ok(json!({
             "status": "unverified",

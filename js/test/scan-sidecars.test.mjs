@@ -38,7 +38,7 @@ async function fixtureGithub({ deny = () => false, truncated = false } = {}) {
   const refs = [];
   const rest = {
     request: async (apiPath) => {
-      const base = `/repos/${SLUG.replace("/", "/")}`;
+      const base = `/repos/${SLUG}`;
       if (apiPath === `${base}/commits/main`) {
         return { sha: SHA };
       }
