@@ -74,39 +74,78 @@ fn set(value: &Value) -> Vec<String> {
     v.sort();
     v
 }
-/// Equivalent names with unbound immutable IDs are pending, never recreated.
+/// Match creation order before package scopes, just like the Gallery OIDC evaluator.
 pub fn state(policies: &[Value], expected: &Value, actual_username: &str) -> Result<Value> {
     validate(expected)?;
     if !actual_username.eq_ignore_ascii_case(expected["username"].as_str().unwrap_or_default()) {
         return Ok(json!({"status":"wrong-account","verified":false}));
     }
-    let matches = policies
+    let mut matches = policies
         .iter()
         .filter(|p| {
-            ["package_owner", "organization", "repository"]
+            ["organization", "repository"]
                 .iter()
                 .all(|k| same(&p[k], &expected[k]))
                 && ["workflow", "environment"].iter().all(|k| {
                     p[k].as_str().unwrap_or_default() == expected[k].as_str().unwrap_or_default()
                 })
-                && ["package_ids", "operations"]
-                    .iter()
-                    .all(|k| set(&p[k]) == set(&expected[k]))
         })
         .collect::<Vec<_>>();
-    if matches.len() > 1 {
+    if matches.len() > 1
+        && (matches
+            .iter()
+            .any(|p| p["evaluation_order"].as_u64().is_none())
+            || matches
+                .iter()
+                .filter_map(|p| p["evaluation_order"].as_u64())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != matches.len())
+    {
         return Ok(json!({"status":"duplicate","verified":false}));
     }
-    let Some(policy) = matches.first() else {
+    matches.sort_by_key(|p| p["evaluation_order"].as_u64().unwrap_or_default());
+    let eligible = matches
+        .iter()
+        .copied()
+        .filter(|p| p["activation"] != "inactive")
+        .collect::<Vec<_>>();
+    let Some(policy) = eligible.first().or_else(|| matches.first()) else {
         return Ok(json!({"status":"missing-or-mismatched","verified":false}));
     };
+    if !same(&policy["package_owner"], &expected["package_owner"]) {
+        return Ok(json!({"status":"owner-conflict","verified":false,"policy_id":policy["id"]}));
+    }
     let bound = ["owner_id", "repository_id"]
         .iter()
         .all(|k| same(&policy[k], &expected[k]));
     let activation = policy["activation"].as_str().unwrap_or("unknown");
-    Ok(
-        json!({"status":if bound{activation}else{"immutable-identity-unverified"},"verified":bound&&activation=="active","policy_id":policy["id"]}),
-    )
+    let scopes_match = |p: &Value| {
+        ["package_ids", "operations"]
+            .iter()
+            .all(|k| set(&p[k]) == set(&expected[k]))
+    };
+    let shadowed = eligible
+        .iter()
+        .filter(|p| p["id"] != policy["id"] && scopes_match(p))
+        .map(|p| p["id"].clone())
+        .collect::<Vec<_>>();
+    let status = if !bound {
+        "immutable-identity-unverified"
+    } else if !scopes_match(policy) {
+        if shadowed.is_empty() {
+            "scope-mismatch"
+        } else {
+            "shadowed"
+        }
+    } else {
+        activation
+    };
+    let mut result = json!({"status":status,"verified":status=="active","policy_id":policy["id"]});
+    if !shadowed.is_empty() {
+        result["shadowed_policy_ids"] = json!(shadowed);
+    }
+    Ok(result)
 }
 /// `PackageVerify` is not a push authorization check. Never print credentials.
 #[must_use]

@@ -114,6 +114,66 @@ test("NuGet workflow and environment subjects are exact and one publish operatio
   );
 });
 
+test("NuGet uses the oldest identity match before checking renamed package scopes", () => {
+  const expected = {
+    ...policy,
+    package_ids: ["links-notation"],
+    operations: ["package:push"],
+  };
+  const older = {
+    ...policy,
+    id: 24222,
+    evaluation_order: 0,
+    activation: "active",
+  };
+  const newer = {
+    ...expected,
+    id: 24255,
+    evaluation_order: 1,
+    activation: "active",
+  };
+  const unrelated = {
+    ...older,
+    repository: "another-repository",
+    evaluation_order: 2,
+  };
+  const state = nugetPolicyState(
+    [newer, unrelated, older],
+    expected,
+    "profile",
+  );
+  assert.equal(state.status, "shadowed");
+  assert.equal(state.verified, false);
+  assert.equal(state.policy_id, older.id);
+  assert.deepEqual(state.shadowed_policy_ids, [newer.id]);
+  const repaired = {
+    ...older,
+    package_ids: expected.package_ids,
+    operations: expected.operations,
+  };
+  assert.equal(
+    nugetPolicyState([repaired, newer, unrelated], expected, "profile")
+      .verified,
+    true,
+  );
+  assert.equal(
+    nugetPolicyState(
+      [{ ...older, package_owner: "another-owner" }, newer],
+      expected,
+      "profile",
+    ).status,
+    "owner-conflict",
+  );
+  assert.equal(
+    nugetPolicyState(
+      [{ ...older, activation: "inactive" }, newer],
+      expected,
+      "profile",
+    ).policy_id,
+    newer.id,
+  );
+});
+
 test("OIDC success ignores invalid fallback; missing username uses provided custom fallback", async () => {
   let logins = 0;
   const adapter = {

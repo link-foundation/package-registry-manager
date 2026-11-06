@@ -81,7 +81,9 @@ See [audit and NuGet configuration](../docs/issue-73-requirements.md) for setup,
 identity decisions and the distinction between verified configuration and release.
 
 NuGet setup resolves reusable publishing identities and verifies saved policy
-scopes after reload. Maven Central setup verifies authenticated namespace
+scopes after reload. Package renames repair the oldest matching policy in place,
+preserving identity and unrelated policies; first publication requires the exact
+new ID and explicit `package:push` authorization. Maven Central setup verifies authenticated namespace
 ownership before a first release, supports explicitly authorized GnuPG signing
 bootstrap, and preserves actual token expiry metadata. Both runtimes use the same
 page adapters and GPG driver. See the [Central setup configuration](../README.md#maven-central).

@@ -65,6 +65,53 @@ struct Adapter {
     probe: Option<bool>,
     calls: Vec<String>,
 }
+
+#[test]
+fn oldest_identity_match_shadows_new_package_scopes_until_repaired() {
+    let mut expected = policy();
+    expected["package_ids"] = json!(["links-notation"]);
+    expected["operations"] = json!(["package:push"]);
+    let mut older = policy();
+    older["id"] = json!(24222);
+    older["evaluation_order"] = json!(0);
+    older["activation"] = json!("active");
+    let mut newer = expected.clone();
+    newer["id"] = json!(24255);
+    newer["evaluation_order"] = json!(1);
+    newer["activation"] = json!("active");
+    let mut unrelated = older.clone();
+    unrelated["repository"] = json!("another-repository");
+    unrelated["evaluation_order"] = json!(2);
+    let state = nuget_policy::state(
+        &[newer.clone(), unrelated.clone(), older.clone()],
+        &expected,
+        "profile",
+    )
+    .unwrap();
+    assert_eq!(state["status"], "shadowed");
+    assert_eq!(state["verified"], false);
+    assert_eq!(state["policy_id"], 24222);
+    assert_eq!(state["shadowed_policy_ids"], json!([24255]));
+    let mut repaired = older.clone();
+    repaired["package_ids"] = expected["package_ids"].clone();
+    repaired["operations"] = expected["operations"].clone();
+    assert_eq!(
+        nuget_policy::state(&[repaired, newer.clone(), unrelated], &expected, "profile").unwrap()
+            ["verified"],
+        true
+    );
+    older["package_owner"] = json!("another-owner");
+    assert_eq!(
+        nuget_policy::state(&[older.clone(), newer.clone()], &expected, "profile").unwrap()
+            ["status"],
+        "owner-conflict"
+    );
+    older["activation"] = json!("inactive");
+    assert_eq!(
+        nuget_policy::state(&[older, newer], &expected, "profile").unwrap()["policy_id"],
+        24255
+    );
+}
 // Immediate mock responses implement the production async interface.
 #[allow(clippy::unused_async_trait_impl)]
 impl PublishAdapter for Adapter {

@@ -445,7 +445,11 @@ dedicated authenticated browser, verifies the active saved state, and ensures
 the effective `NUGET_USER` Actions variable through gh-manager. The policy uses
 the actual nested NuGet publishing workflow; CI discovery and retries retain
 the caller filename. Saved scope labels are normalized through the official
-page controls independently of unsaved edits. It never registers
+page controls independently of unsaved edits. Setup checks policies in server
+creation order, detects older identity matches shadowing renamed package scopes,
+and repairs the original policy in place without changing its owner or GitHub
+identity. First publication needs explicitly configured `package:push` permission
+and the exact new package ID; the saved policy is reloaded before CI retry. It never registers
 template placeholders or broadens a policy to work around an incompatible probe.
 
 Generated CI uses official `NuGet/login` first and retains an existing provided

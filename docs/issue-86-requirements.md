@@ -26,11 +26,12 @@ comments and reviews were read (no comments/reviews at initial investigation).
 | 83.1 | Missing optional Gallery staging observable must not throw | Feature detection in both copies of the official-page adapter; representative model test |
 | 83.2 | Explicitly disable unlist; keep one push operation and exact package IDs | Required scope fields remain fail-closed; optional staging disabled when available |
 | 83.3 | Normalize saved machine scopes independently of display labels and pending edits | Inspect official Gallery source, read persisted policy scopes from fresh page state; translated-label and unsaved-edit tests |
-| 83.4 | Reload after create, check profile/owner, GitHub IDs, workflow/environment, subjects, operations, permanent activation | Existing state comparison retained; create/reload/idempotence regression |
+| 83.4 | Reload after create or edit, check profile/owner, GitHub IDs, workflow/environment, subjects, operations, permanent activation | Effective policy comparison; create/edit/reload/idempotence regressions |
 | 83.5 | Separate CI entrypoint from NuGet reusable OIDC identity; trace nested calls; reject ambiguity | Provider-specific resolver from actual publishing/login jobs; callers retained for retry; npm/PyPI unchanged |
 | 83.6 | Use normal reviewed installed gh-manager dependency, update both pins/lockfile | Immutable gh-manager 1.5.0 source pin; real-library mocked HTTP integration |
 | 83.7 | Preserve fallback secrets and credential privacy | No fallback deletion/rotation changes; secret write/log assertions |
 | 83.8 | Distinguish configuration, OIDC exchange, accepted push, exact public package | Keep existing independent evidence/gates and test them |
+| 83.9 | Detect first-match policy shadowing after rename/first publication; repair original exact subject and new-package authorization, preserve owner/creator/GitHub identity and unrelated policies | Use Gallery creation order before scope comparison; edit original in place with configured `package:push`, wait for edit, reload; older/newer regression in both ports and mocked push rejection/acceptance, never infer delivery from exchange |
 | 84.1 | Authenticated ownership readback must work before first release and after indexing lag | Official authenticated portal UI readback; never infer account ownership from public artifacts |
 | 84.2 | Authorized namespace registration and GitHub proof creation/submission | Portal UI plus official GitHub API/CLI; bind account/namespace/org and immutable IDs |
 | 84.3 | Retain proof cleanup obligation; no token scope escalation | Persist cleanup state; delete only newly created empty proof repo via existing permission or report pending |
@@ -54,6 +55,12 @@ comments and reviews were read (no comments/reviews at initial investigation).
   Gallery's existing model, not a separate API-key mechanism.
 - [Official Gallery implementation](https://github.com/NuGet/NuGetGallery/blob/main/src/NuGetGallery/Scripts/gallery/page-trusted-publishing.js)
   is the authority for machine-scope readback; labels/pending edits are insufficient.
+- [Gallery's policy ordering](https://github.com/NuGet/NuGetGallery/blob/main/src/NuGetGallery/Controllers/UsersController.cs)
+  and [OIDC policy evaluator](https://github.com/NuGet/NuGetGallery/blob/5969489b9f4928c70dbbb645768c47a525133f9b/src/NuGetGallery.Services/Authentication/Federated/FederatedCredentialPolicyEvaluator.cs)
+  sort by creation date. The evaluator returns the first successful identity match
+  before applying package subjects/scopes. Use the server's ordered policy list,
+  edit the effective original in place, and reject conflicting owners or unbound
+  identities. Creating a newer matching policy cannot repair the earlier scope.
 - [Sonatype namespace registration](https://central.sonatype.org/register/namespace/)
   documents temporary public proof repositories and deletion after verification.
   Public Maven search was rejected as an ownership source.
@@ -83,9 +90,16 @@ comments and reviews were read (no comments/reviews at initial investigation).
 - `node experiments/issue-86/reproduce.mjs`: the 0.27.0 Gallery model throws
   without `StageScopeChecked`; the repaired adapter submits. The original Gradle
   string map produces `undefined:undefined`; the repaired realistic fixture verifies.
-- NuGet focused suite: 35 passed, including create → reload → second setup,
+- Initial NuGet focused suite: 35 passed, including create → reload → second setup,
   localized persisted scopes, nested workflow identity, ambiguity and the normal
   installed gh-manager 1.5.0 encryption/expiry-health path.
+- Added rename/shadowing regression fails before the fix (`active` instead of
+  `shadowed`). The focused Gallery/policy/setup/signing suite now passes 17 tests.
+  It verifies the original key is edited once, exact new-package `package:push`
+  authorization, edit completion, persisted reload, second-run idempotence,
+  retained owner/creator/immutable IDs/activation, and untouched unrelated policies.
+  The push adapter mock rejects the older historical subject after a successful
+  OIDC exchange and accepts the same artifact after repair; live push is a separate gate.
 - Central focused suite: 36 passed, including real RSA4096 generation, detached
   signing, a separate verifier keyring, proof reuse and temporary-home removal.
   External keyserver send/receive is replaced with public-key export/import in the
@@ -115,6 +129,10 @@ comments and reviews were read (no comments/reviews at initial investigation).
   remain private. Windows CI reproduced Git's GPG treating a backslash homedir
   as relative; the real signing test now uses per-keyring subprocess working
   directories and relative proof paths, including when temp and repo drives differ.
+  macOS CI exposed GPG agent startup failure in its long per-user temporary path;
+  macOS signing homes now use short private directories under `/tmp`, keeping
+  agent socket paths within the Unix socket limit. The same real-signing CI test
+  verifies generation and cleanup across platforms.
 
 No live private account setup or keyserver propagation is inferred from mocks.
 No downstream package uploads are performed. The implementation adds the
