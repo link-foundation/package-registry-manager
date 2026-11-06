@@ -231,7 +231,7 @@ test("Central namespace and signing stay incomplete without read-back evidence",
   const github = fakeGithub({
     secrets: { GPG_PRIVATE_KEY: 1, GPG_PASSPHRASE: 1 },
   });
-  const { instance } = session("maven-central", { github });
+  const { instance } = session("maven-central", { github, noBrowser: true });
   for (const id of ["verify-namespace", "ensure-signing-key"]) {
     const result = await instance.runStep(
       instance.plan.steps.find((s) => s.id === id),
@@ -251,7 +251,7 @@ test("Central publication: a root POM alone never certifies the Kotlin variants"
   const step = instance.plan.steps.find(
     (s) => s.id === "verify-central-publication",
   );
-  assert.equal((await instance.runStep(step)).status, "partial");
+  assert.equal((await instance.runStep(step)).status, "root-metadata-missing");
 });
 
 const packagist = "repo.packagist.org/p2/link-foundation/links-notation";

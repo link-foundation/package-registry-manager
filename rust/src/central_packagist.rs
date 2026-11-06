@@ -30,22 +30,13 @@ pub const CENTRAL_PACKAGIST_STEPS: [&str; 10] = [
 pub const COMPLETE_STATUSES: [&str; 4] = ["verified", "present", "configured", "not-used"];
 
 /// Reads the open Central Portal user-token dialog in the page; values stay in memory.
-pub const READ_CENTRAL_PAIR: &str = r##"(() => {
-  const root = document.querySelector('[role="dialog"]') ?? document.body;
-  const text = (element) => (element?.value ?? element?.textContent ?? "").trim();
-  const field = (label) => {
-    for (const node of root.querySelectorAll("label, dt, th, span, p, div")) {
-      if (node.children.length === 0 && new RegExp("^" + label + ":?$", "i").test(text(node))) {
-        const target = node.htmlFor ? root.querySelector("#" + CSS.escape(node.htmlFor)) : null;
-        const next = target ?? node.nextElementSibling ?? node.parentElement?.nextElementSibling;
-        const value = text(next?.querySelector?.("input, code, pre") ?? next);
-        if (value && !/\s/.test(value)) return value;
-      }
-    }
-    return null;
-  };
-  return { username: field("username"), password: field("password") };
-})()"##;
+pub fn read_central_pair_script() -> String {
+    let source = include_str!("central-token-page.mjs")
+        .split_once("export default ")
+        .expect("page function")
+        .1;
+    format!("({source})()")
+}
 
 const MISSING_SECRET: &str = r"(?i)secrets? (?:are |is )?missing|missing (?:secrets?|credentials?)|(?:CENTRAL_USERNAME|CENTRAL_TOKEN|GPG_PRIVATE_KEY|GPG_PASSPHRASE)[^\n]*(?:not set|missing|empty)";
 
@@ -76,7 +67,7 @@ pub struct HttpAnswer {
 }
 
 impl HttpAnswer {
-    fn shown(&self) -> String {
+    pub(crate) fn shown(&self) -> String {
         self.status
             .map_or_else(|| "transport".to_owned(), |status| status.to_string())
     }
@@ -191,7 +182,7 @@ pub async fn setting_presence(
     Ok((present, missing))
 }
 
-fn maven_path(
+pub(crate) fn maven_path(
     client: &RegistryClient,
     group: &str,
     artifact: &str,
@@ -219,9 +210,11 @@ pub async fn run_generated_step(
     release_verified: bool,
 ) -> Result<Value> {
     match step.id.as_str() {
-        "verify-namespace" => Ok(verify_namespace(context, step).await),
-        "ensure-signing-key" => ensure_signing_key(context, step).await,
-        "verify-central-publication" => Ok(verify_central_publication(context, step).await),
+        "verify-namespace" => Ok(
+            json!({"status":"manual-prerequisite","reason":"authenticated Central ownership read-back requires the dedicated browser"}),
+        ),
+        "ensure-signing-key" => crate::central_signing::ensure(context, step, false).await,
+        "verify-central-publication" => Ok(crate::central_publication::verify(context, step).await),
         "verify-packagist-package" => Ok(verify_packagist_package(context).await),
         "packagist-github-hook" => Ok(packagist_hook(step, prior)),
         "packagist-update-api" => packagist_update_api(context, step).await,
@@ -235,184 +228,6 @@ pub async fn run_generated_step(
             "reason": format!("no handler for {other}"),
             "stop": true,
         })),
-    }
-}
-
-#[allow(clippy::future_not_send)]
-/// Published artifacts under the namespace prove it was verified; nothing else does.
-async fn verify_namespace(
-    context: &StepContext<'_, impl GithubGateway>,
-    step: &SetupStep,
-) -> Value {
-    let Some(namespace) = step.details.get("namespace").and_then(Value::as_str) else {
-        return json!({"status":"manual-prerequisite","reason":"the package coordinates name no namespace"});
-    };
-    let search = context.client.endpoints().named(
-        "PACKAGE_REGISTRY_MANAGER_MAVEN_SEARCH",
-        "https://search.maven.org",
-    );
-    let query = encode_uri_component(&format!("g:\"{namespace}\""));
-    let response = http(
-        context.client,
-        &format!("{search}/solrsearch/select?q={query}&rows=1&wt=json"),
-        false,
-    )
-    .await;
-    if response
-        .json
-        .as_ref()
-        .and_then(|json| json["response"]["numFound"].as_u64())
-        .is_some_and(|found| found > 0)
-    {
-        return json!({"status":"verified","namespace":namespace,"evidence":"artifacts are published under the namespace"});
-    }
-    json!({
-        "status": "manual-prerequisite",
-        "namespace": namespace,
-        "reason": format!(
-            "no fresh read-back proves {namespace} is verified; confirm it at {}",
-            step.url.as_deref().unwrap_or("https://central.sonatype.com/publishing/namespaces")
-        ),
-    })
-}
-
-/// Signing works only when a published signature exists; presence is not proof.
-#[allow(clippy::future_not_send)]
-async fn ensure_signing_key(
-    context: &StepContext<'_, impl GithubGateway>,
-    step: &SetupStep,
-) -> Result<Value> {
-    let names = step_setting_names(step);
-    let (present, missing) = match plan_slug(context.plan) {
-        Some(slug) => setting_presence(context.github, &slug, &names, context.cwd).await?,
-        None => (Vec::new(), names),
-    };
-    let package = &context.plan.package;
-    if let (Some((group, artifact)), Some(version)) =
-        (package.name.split_once(':'), package.version.as_deref())
-    {
-        let signature = http(
-            context.client,
-            &maven_path(context.client, group, artifact, version, "pom.asc"),
-            true,
-        )
-        .await;
-        if signature.status == Some(200) {
-            return Ok(
-                json!({"status":"verified","secrets":present,"evidence":"the exact release has a published signature"}),
-            );
-        }
-    }
-    Ok(json!({
-        "status": "manual-prerequisite",
-        "secrets": present,
-        "missing": missing,
-        "reason": if missing.is_empty() {
-            "signing secrets are present, but no signed release proves the key is valid and published".to_owned()
-        } else {
-            format!("{} missing; provide an armored key whose public key is on a keyserver", missing.join(" + "))
-        },
-    }))
-}
-
-#[allow(clippy::future_not_send)]
-/// Root POM, Gradle module metadata and every referenced platform coordinate.
-async fn verify_central_publication(
-    context: &StepContext<'_, impl GithubGateway>,
-    step: &SetupStep,
-) -> Value {
-    let coordinates = step.details.get("coordinates").cloned().unwrap_or_default();
-    let (Some(group), Some(artifact), Some(version)) = (
-        coordinates["group"].as_str(),
-        coordinates["artifact"].as_str(),
-        coordinates["version"].as_str(),
-    ) else {
-        return json!({"status":"unknown","reason":"the exact coordinates are unresolved"});
-    };
-    let client = context.client;
-    let root = http(
-        client,
-        &maven_path(client, group, artifact, version, "pom"),
-        true,
-    )
-    .await;
-    if root.status != Some(200) {
-        return json!({
-            "status": if root.status == Some(404) { "unpublished" } else { "transport-unknown" },
-            "reason": format!("root POM HTTP {}", root.shown()),
-        });
-    }
-    let multiplatform = context
-        .plan
-        .package
-        .audit
-        .get("gradle")
-        .is_some_and(|gradle| gradle["multiplatform"] == true);
-    let referenced: Vec<String> = if multiplatform {
-        let module = http(
-            client,
-            &maven_path(client, group, artifact, version, "module"),
-            false,
-        )
-        .await;
-        let Some(document) = module.json.as_ref() else {
-            return json!({
-                "status": "partial",
-                "reason": format!(
-                    "Gradle module metadata missing (HTTP {}); the root POM alone certifies no variant",
-                    module.shown()
-                ),
-            });
-        };
-        document["variants"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|variant| {
-                let module = &variant["available-at"]["module"];
-                Some(format!(
-                    "{}:{}",
-                    module["group"].as_str()?,
-                    module["module"].as_str()?
-                ))
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let mut wanted: Vec<String> = step
-        .details
-        .get("variants")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.as_str().map(str::to_owned))
-        .chain(referenced.iter().cloned())
-        .collect();
-    let mut seen = std::collections::BTreeSet::new();
-    wanted.retain(|entry| seen.insert(entry.clone()));
-    let mut missing = Vec::new();
-    for coordinates in wanted {
-        if multiplatform && !referenced.contains(&coordinates) {
-            missing.push(format!("{coordinates} (not in module metadata)"));
-            continue;
-        }
-        let (variant_group, variant_artifact) =
-            coordinates.split_once(':').unwrap_or((&coordinates, ""));
-        let pom = http(
-            client,
-            &maven_path(client, variant_group, variant_artifact, version, "pom"),
-            true,
-        )
-        .await;
-        if pom.status != Some(200) {
-            missing.push(format!("{coordinates} (HTTP {})", pom.shown()));
-        }
-    }
-    if missing.is_empty() {
-        json!({"status":"verified","variants":referenced})
-    } else {
-        json!({"status":"partial","missing":missing,"reason":"platform publications are missing"})
     }
 }
 
@@ -593,7 +408,8 @@ pub async fn central_pair_preflight(
         return Ok(CentralPairStart::Done(json!({
             "status": "present",
             "secrets": present,
-            "reason": "existing Central secrets kept; nothing rotated",
+            "reason": "existing Central secrets kept; presence does not prove token validity",
+            "expiry": central_expiry(github, &slug, &names, cwd).await,
         })));
     }
     let url = step
@@ -623,27 +439,25 @@ pub async fn central_pair_preflight(
 /// Stores a matched Central pair (values on stdin, never in argv or logs),
 /// reads both names back, and only then retries the causal failed jobs.
 #[allow(clippy::future_not_send)]
-pub async fn store_central_pair(
+pub async fn store_central_pair_with_expiry(
     context: &StepContext<'_, impl GithubGateway>,
     slug: &str,
     names: &[String],
     values: [&str; 2],
+    expires_at: Option<&str>,
 ) -> Result<Value> {
     for (name, value) in names.iter().zip(values) {
-        context
-            .github
-            .call(
-                &[
-                    "secret".into(),
-                    "set".into(),
-                    name.clone(),
-                    "--repo".into(),
-                    slug.into(),
-                ],
-                Some(value),
-                context.cwd,
-            )
-            .await?;
+        let mut args = vec![
+            "secret".into(),
+            "set".into(),
+            name.clone(),
+            "--repo".into(),
+            slug.into(),
+        ];
+        if let Some(expiry) = expires_at {
+            args.extend(["--expires-at".into(), expiry.into()]);
+        }
+        context.github.call(&args, Some(value), context.cwd).await?;
     }
     let (_, unread) = setting_presence(context.github, slug, names, context.cwd).await?;
     if !unread.is_empty() {
@@ -655,7 +469,9 @@ pub async fn store_central_pair(
         }));
     }
     let retry = retry_causal_jobs(context, slug, names).await?;
-    Ok(json!({"status":"configured","secrets":names,"retry":retry}))
+    Ok(
+        json!({"status":"configured","secrets":names,"retry":retry,"expiry":{"status":if expires_at.is_some() {"server-reported"} else {"unknown"},"expires_at":expires_at}}),
+    )
 }
 
 /// Pressing Enter is never verification.
@@ -763,4 +579,52 @@ pub async fn retry_causal_jobs(
         "run": if result["runUrl"].is_null() { failed["html_url"].clone() } else { result["runUrl"].clone() },
         "jobs": causal,
     }))
+}
+
+/// Store a pair with unknown expiry; never calculate an artificial lifetime.
+#[allow(clippy::future_not_send)]
+pub async fn store_central_pair(
+    context: &StepContext<'_, impl GithubGateway>,
+    slug: &str,
+    names: &[String],
+    values: [&str; 2],
+) -> Result<Value> {
+    store_central_pair_with_expiry(context, slug, names, values, None).await
+}
+
+/// Existing credential presence is independent of recorded expiry and validity.
+#[allow(clippy::future_not_send)]
+async fn central_expiry(
+    github: &impl GithubGateway,
+    slug: &str,
+    names: &[String],
+    cwd: &Path,
+) -> Value {
+    let mut values = Vec::new();
+    for name in names {
+        let expiry = github
+            .call(
+                &[
+                    "variable".into(),
+                    "get".into(),
+                    format!("{name}_EXPIRES_AT"),
+                    "--repo".into(),
+                    slug.into(),
+                ],
+                None,
+                cwd,
+            )
+            .await
+            .unwrap_or(Value::Null);
+        values.push(expiry["value"].clone());
+    }
+    let date = values
+        .first()
+        .and_then(Value::as_str)
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+    if values.len() == 2 && values[0] == values[1] && date.is_some() {
+        json!({"status":"recorded","expires_at":values[0],"expired":date.is_some_and(|d| d <= chrono::Utc::now())})
+    } else {
+        json!({"status":"unknown","reason":"existing encrypted token lifetime is unreadable; no expiry was invented"})
+    }
 }

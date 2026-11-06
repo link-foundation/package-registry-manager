@@ -4,10 +4,11 @@
 use super::{is_yes, prompt, Result, Session, SetupStep, Value};
 use crate::browser_options::ImportScope;
 use crate::central_packagist::{
-    central_pair_preflight, run_generated_step, store_central_pair, CentralPairStart, StepContext,
-    CENTRAL_PACKAGIST_STEPS, COMPLETE_STATUSES, READ_CENTRAL_PAIR,
+    central_pair_preflight, read_central_pair_script, run_generated_step,
+    store_central_pair_with_expiry, CentralPairStart, StepContext, CENTRAL_PACKAGIST_STEPS,
+    COMPLETE_STATUSES,
 };
-use crate::github::GhManager;
+use crate::github::{GhManager, GithubGateway};
 use serde_json::json;
 
 /// Whether a generated step has its own handler here.
@@ -32,6 +33,11 @@ impl Session<'_> {
     pub(super) async fn run_central_packagist_step(&mut self, step: &SetupStep) -> Result<()> {
         let result = if step.id == "ensure-central-credential-pair" {
             self.ensure_central_pair(step).await?
+        } else if step.id == "verify-namespace" {
+            self.ensure_central_namespace(step).await?
+        } else if step.id == "ensure-signing-key" {
+            let authorized = self.options.yes || is_yes(&prompt("Verify signing material, publish its public key and store the encrypted signing pair? [y/N] ")?);
+            crate::central_signing::ensure(&self.step_context(), step, authorized).await?
         } else {
             let release_verified = self.holds("swift-release-verified");
             run_generated_step(
@@ -124,7 +130,7 @@ impl Session<'_> {
         let pair = self
             .visible_automated()
             .await?
-            .evaluate(READ_CENTRAL_PAIR)
+            .evaluate(&read_central_pair_script())
             .await?;
         let (Some(username), Some(password)) = (
             pair["username"].as_str().filter(|value| !value.is_empty()),
@@ -137,10 +143,29 @@ impl Session<'_> {
                 "stop": true,
             }));
         };
+        if pair["revoked"] == true
+            || pair["expires_at"]
+                .as_str()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .is_some_and(|expiry| expiry <= chrono::Utc::now())
+        {
+            return Ok(
+                json!({"status":"unverified","reason":"Central returned a revoked or expired token; nothing was stored","stop":true}),
+            );
+        }
+        if !pair["token_id"].is_null() {
+            GhManager.call(&["variable".into(), "ensure".into(), "CENTRAL_TOKEN_IDENTITY".into(), "--repo".into(), slug.clone(), "--value".into(), json!({"id":pair["token_id"],"name":pair["token_name"],"expires_at":pair["expires_at"]}).to_string()], None, self.options.repository).await?;
+        }
         // The pair is matched: both values are written together after the
         // explicit confirmation above, never one silently.
-        let result =
-            store_central_pair(&self.step_context(), &slug, &names, [username, password]).await?;
+        let result = store_central_pair_with_expiry(
+            &self.step_context(),
+            &slug,
+            &names,
+            [username, password],
+            pair["expires_at"].as_str(),
+        )
+        .await?;
         if result["status"] == "configured" {
             self.conditions.insert("central-pair-stored");
         }

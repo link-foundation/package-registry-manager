@@ -34,6 +34,7 @@ use crate::tokens::{
 mod batch;
 mod bootstrap_session;
 mod browser_session;
+mod central_namespace;
 mod central_packagist_session;
 mod crates_session;
 mod credential_session;

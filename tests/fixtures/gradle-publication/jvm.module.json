@@ -1,0 +1,102 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "url": "../../links-notation-kotlin/0.31.0/links-notation-kotlin-0.31.0.module",
+    "group": "io.github.link-foundation",
+    "module": "links-notation-kotlin",
+    "version": "0.31.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.8.2"
+    }
+  },
+  "variants": [
+    {
+      "name": "jvmApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.21"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "links-notation-kotlin-jvm-0.31.0.jar",
+          "url": "links-notation-kotlin-jvm-0.31.0.jar",
+          "size": 161315,
+          "sha512": "5d795de8aa1dcf3a08b809000e4ccdec4c3f3cdfa707ae1f76899cef2c01d0197194ba2c4d97fb000b83d59b4986795ea010b0455274e40c879c1941ee1e918d",
+          "sha256": "08c9a1e9217289675995a83c0236eb5acdb7c483aca4e89c131fd87971059a4c",
+          "sha1": "c9197e770721616db42e2ea1fa8a422de4aeaf5a",
+          "md5": "4a3a9107935317ac247c21cc31c4de4d"
+        }
+      ]
+    },
+    {
+      "name": "jvmRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.21"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "links-notation-kotlin-jvm-0.31.0.jar",
+          "url": "links-notation-kotlin-jvm-0.31.0.jar",
+          "size": 161315,
+          "sha512": "5d795de8aa1dcf3a08b809000e4ccdec4c3f3cdfa707ae1f76899cef2c01d0197194ba2c4d97fb000b83d59b4986795ea010b0455274e40c879c1941ee1e918d",
+          "sha256": "08c9a1e9217289675995a83c0236eb5acdb7c483aca4e89c131fd87971059a4c",
+          "sha1": "c9197e770721616db42e2ea1fa8a422de4aeaf5a",
+          "md5": "4a3a9107935317ac247c21cc31c4de4d"
+        }
+      ]
+    },
+    {
+      "name": "jvmSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "files": [
+        {
+          "name": "links-notation-kotlin-jvm-0.31.0-sources.jar",
+          "url": "links-notation-kotlin-jvm-0.31.0-sources.jar",
+          "size": 43105,
+          "sha512": "3ae4d1e4ac828c91dc1ed2c2d626d9595ea845a135a940e5e42f6fc8de9d6d618381b702e7604cae5beb7de2055ba674389e346d32dd6d0bc37c1a644de289aa",
+          "sha256": "bf656e49bc264ae72d83883062ae28acba7be46d2463b778478694c510eb0e8b",
+          "sha1": "7ec066c475d3d8f82cf9a49d19d2cde115227158",
+          "md5": "3dda329ec4ecfdc65729a2105f33b72c"
+        }
+      ]
+    }
+  ]
+}

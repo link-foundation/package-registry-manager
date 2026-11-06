@@ -1,3 +1,7 @@
+import { ensureSigningKey } from "./central-signing.mjs";
+import readCentralPair from "./central-token-page.mjs";
+import { verifyNamespace } from "./central-namespace.mjs";
+import { verifyCentralPublication } from "./central-publication.mjs";
 import { githubServices } from "./github.mjs";
 import { AUTH_FAILURE_PATTERNS } from "./publishing-policy.mjs";
 import { repositorySlug } from "./repository-identity.mjs";
@@ -20,7 +24,6 @@ export const CENTRAL_PACKAGIST_STEPS = new Set([
   "verify-gradle-toolchain",
 ]);
 
-const MAVEN_REPOSITORY = "https://repo1.maven.org/maven2";
 const MISSING_SECRET =
   /secrets? (?:are |is )?missing|missing (?:secrets?|credentials?)|(?:CENTRAL_USERNAME|CENTRAL_TOKEN|GPG_PRIVATE_KEY|GPG_PASSPHRASE)[^\n]*(?:not set|missing|empty)/i;
 
@@ -114,7 +117,9 @@ async function ensureCentralPair(session, step) {
     return {
       status: "present",
       secrets: present,
-      reason: "existing Central secrets kept; nothing rotated",
+      reason:
+        "existing Central secrets kept; values are not readable and validity is not inferred from names",
+      expiry: await centralExpiry(services(session), slug, names),
     };
   }
   const { options } = session;
@@ -173,12 +178,25 @@ async function ensureCentralPair(session, step) {
       stop: true,
     };
   }
+  if (
+    pair.revoked ||
+    (pair.expires_at && Date.parse(pair.expires_at) <= Date.now())
+  ) {
+    return {
+      status: "unverified",
+      reason:
+        "the displayed Central token is revoked or expired; nothing was stored",
+      stop: true,
+    };
+  }
   const github = services(session);
   const values = [pair.username, pair.password];
   // The pair is matched: both fields are written together after the
   // explicit confirmation above, never one silently.
   for (const [index, name] of names.entries()) {
-    await github.secrets({ repo: slug }).set(name, values[index]);
+    await github
+      .secrets({ repo: slug })
+      .set(name, values[index], { expiresAt: pair.expires_at ?? undefined });
   }
   const check = await secretPresence(session, names);
   if (check.missing.length) {
@@ -189,10 +207,25 @@ async function ensureCentralPair(session, step) {
       stop: true,
     };
   }
+  if (pair.token_id && github.variables) {
+    await github.variables({ repo: slug }).ensure(
+      "CENTRAL_TOKEN_IDENTITY",
+      JSON.stringify({
+        id: pair.token_id,
+        name: pair.token_name,
+        expires_at: pair.expires_at ?? null,
+      }),
+    );
+  }
   session.conditions.add("central-pair-stored");
   return {
     status: "configured",
     secrets: names,
+    expiry: {
+      status: pair.expires_at ? "server-reported" : "unknown",
+      expires_at: pair.expires_at ?? null,
+      token_name: pair.token_name ?? null,
+    },
     retry: await retryCausalJobs(session, slug, names),
   };
 }
@@ -263,22 +296,7 @@ async function retryCausalJobs(session, slug, names) {
 }
 
 /** Reads both displayed fields of the Central token dialog; never logged. */
-export const READ_CENTRAL_PAIR = `(() => {
-  const root = document.querySelector('[role="dialog"]') ?? document.body;
-  const text = (element) => (element?.value ?? element?.textContent ?? "").trim();
-  const field = (label) => {
-    for (const node of root.querySelectorAll("label, dt, th, span, p, div")) {
-      if (node.children.length === 0 && new RegExp("^" + label + ":?$", "i").test(text(node))) {
-        const target = node.htmlFor ? root.querySelector("#" + CSS.escape(node.htmlFor)) : null;
-        const next = target ?? node.nextElementSibling ?? node.parentElement?.nextElementSibling;
-        const value = text(next?.querySelector?.("input, code, pre") ?? next);
-        if (value && !/\\s/.test(value)) return value;
-      }
-    }
-    return null;
-  };
-  return { username: field("username"), password: field("password") };
-})()`;
+export const READ_CENTRAL_PAIR = `(${readCentralPair})()`;
 
 async function http(session, url, method = "GET") {
   const fetcher = session.options.fetch ?? globalThis.fetch;
@@ -301,133 +319,6 @@ async function http(session, url, method = "GET") {
   } catch (error) {
     return { status: "transport", reason: error.message };
   }
-}
-
-/** Published artifacts under the namespace prove it was verified; nothing else does. */
-async function verifyNamespace(session, step) {
-  const namespace = step.namespace;
-  if (!namespace) {
-    return {
-      status: "manual-prerequisite",
-      reason: "the package coordinates name no namespace",
-    };
-  }
-  const response = await http(
-    session,
-    `https://search.maven.org/solrsearch/select?q=${encodeURIComponent(`g:"${namespace}"`)}&rows=1&wt=json`,
-  );
-  if (response.json?.response?.numFound > 0) {
-    return {
-      status: "verified",
-      namespace,
-      evidence: "artifacts are published under the namespace",
-    };
-  }
-  return {
-    status: "manual-prerequisite",
-    namespace,
-    reason: `no fresh read-back proves ${namespace} is verified; confirm it at ${step.url}`,
-  };
-}
-
-function mavenPath(group, artifact, version, extension) {
-  return `${MAVEN_REPOSITORY}/${group.replaceAll(".", "/")}/${artifact}/${version}/${artifact}-${version}.${extension}`;
-}
-
-/** Signing works only when a published signature exists; presence is not proof. */
-async function ensureSigningKey(session, step) {
-  const names = (step.secrets ?? []).map((entry) => entry.secret);
-  const { present, missing } = await secretPresence(session, names);
-  const [group, artifact] = (session.plan.package.name ?? "").split(":");
-  const version = session.plan.package.version;
-  if (group && artifact && version) {
-    const signature = await http(
-      session,
-      mavenPath(group, artifact, version, "pom.asc"),
-      "HEAD",
-    );
-    if (signature.status === 200) {
-      return {
-        status: "verified",
-        secrets: present,
-        evidence: "the exact release has a published signature",
-      };
-    }
-  }
-  return {
-    status: "manual-prerequisite",
-    secrets: present,
-    missing,
-    reason: missing.length
-      ? `${missing.join(" + ")} missing; provide an armored key whose public key is on a keyserver`
-      : "signing secrets are present, but no signed release proves the key is valid and published",
-  };
-}
-
-/** Root POM, Gradle module metadata and every referenced platform coordinate. */
-async function verifyCentralPublication(session, step) {
-  const { group, artifact, version } = step.coordinates ?? {};
-  if (!group || !artifact || !version) {
-    return {
-      status: "unknown",
-      reason: "the exact coordinates are unresolved",
-    };
-  }
-  const root = await http(
-    session,
-    mavenPath(group, artifact, version, "pom"),
-    "HEAD",
-  );
-  if (root.status !== 200) {
-    return {
-      status: root.status === 404 ? "unpublished" : "transport-unknown",
-      reason: `root POM HTTP ${root.status}`,
-    };
-  }
-  const missing = [];
-  const multiplatform = session.plan.package.gradle?.multiplatform;
-  let referenced = [];
-  if (multiplatform) {
-    const module = await http(
-      session,
-      mavenPath(group, artifact, version, "module"),
-    );
-    if (!module.json) {
-      return {
-        status: "partial",
-        reason: `Gradle module metadata missing (HTTP ${module.status}); the root POM alone certifies no variant`,
-      };
-    }
-    referenced = (module.json.variants ?? [])
-      .map((variant) => variant["available-at"]?.module)
-      .filter(Boolean)
-      .map((entry) => `${entry.group}:${entry.module}`);
-  }
-  for (const coordinates of new Set([
-    ...(step.variants ?? []),
-    ...referenced,
-  ])) {
-    const [variantGroup, variantArtifact] = coordinates.split(":");
-    if (multiplatform && !referenced.includes(coordinates)) {
-      missing.push(`${coordinates} (not in module metadata)`);
-      continue;
-    }
-    const pom = await http(
-      session,
-      mavenPath(variantGroup, variantArtifact, version, "pom"),
-      "HEAD",
-    );
-    if (pom.status !== 200) {
-      missing.push(`${coordinates} (HTTP ${pom.status})`);
-    }
-  }
-  return missing.length
-    ? {
-        status: "partial",
-        missing,
-        reason: "platform publications are missing",
-      }
-    : { status: "verified", variants: referenced };
 }
 
 const STABLE = (version) =>
@@ -535,4 +426,29 @@ async function manualPrerequisite(session, step) {
     status: "manual-prerequisite",
     reason: "no automated read-back evidence",
   };
+}
+
+async function centralExpiry(github, slug, names) {
+  if (!github.variables) {
+    return { status: "unknown" };
+  }
+  const values = await Promise.all(
+    names.map(async (name) => {
+      const value = await github
+        .variables({ repo: slug })
+        .get(`${name}_EXPIRES_AT`)
+        .catch(() => null);
+      return value?.value ?? null;
+    }),
+  );
+  return values.every(
+    (value) =>
+      value && value === values[0] && Number.isFinite(Date.parse(value)),
+  )
+    ? {
+        status: "recorded",
+        expires_at: values[0],
+        expired: Date.parse(values[0]) <= Date.now(),
+      }
+    : { status: "unknown" };
 }

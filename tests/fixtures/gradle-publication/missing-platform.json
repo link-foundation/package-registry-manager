@@ -1,0 +1,7 @@
+{
+  "description": "Root POM and metadata exist and require JVM; the referenced JVM module is genuinely absent.",
+  "root": "root.module.json",
+  "platform": "io.github.link-foundation:links-notation-kotlin-jvm",
+  "missing": "links-notation-kotlin-jvm-0.31.0.module",
+  "expected_status": "partial"
+}

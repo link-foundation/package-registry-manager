@@ -1,0 +1,419 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "io.github.link-foundation",
+    "module": "links-notation-kotlin",
+    "version": "0.31.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.8.2"
+    }
+  },
+  "variants": [
+    {
+      "name": "metadataApiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-metadata",
+        "org.jetbrains.kotlin.platform.type": "common"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.21"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "links-notation-kotlin-metadata-0.31.0.jar",
+          "url": "links-notation-kotlin-0.31.0.jar",
+          "size": 19412,
+          "sha512": "81f8cffa9975226ddfc3953badd67cefa5ee654fd21a88ac747278f3f60e85146466d1c704b62e9806d88c6021d7c1934a87e258f6086a94d25b096b0a10a8bc",
+          "sha256": "b87a3b0dbb5a2314178b69699ce7879f0d966ac7453017bd584eabec7876c3f1",
+          "sha1": "3f2fafc3c409d10aad8e85dd91a8e6edf11c0cc7",
+          "md5": "98e990f1f039646ae6e81b8813ea8539"
+        }
+      ]
+    },
+    {
+      "name": "metadataSourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.platform.type": "common"
+      },
+      "files": [
+        {
+          "name": "links-notation-kotlin-kotlin-0.31.0-sources.jar",
+          "url": "links-notation-kotlin-0.31.0-sources.jar",
+          "size": 43105,
+          "sha512": "3ae4d1e4ac828c91dc1ed2c2d626d9595ea845a135a940e5e42f6fc8de9d6d618381b702e7604cae5beb7de2055ba674389e346d32dd6d0bc37c1a644de289aa",
+          "sha256": "bf656e49bc264ae72d83883062ae28acba7be46d2463b778478694c510eb0e8b",
+          "sha1": "7ec066c475d3d8f82cf9a49d19d2cde115227158",
+          "md5": "3dda329ec4ecfdc65729a2105f33b72c"
+        }
+      ]
+    },
+    {
+      "name": "androidApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-android/0.31.0/links-notation-kotlin-android-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-android",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "androidRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-android/0.31.0/links-notation-kotlin-android-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-android",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "androidSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-android/0.31.0/links-notation-kotlin-android-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-android",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "iosArm64ApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-api",
+        "org.jetbrains.kotlin.native.target": "ios_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-iosarm64/0.31.0/links-notation-kotlin-iosarm64-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-iosarm64",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "iosArm64SourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.native.target": "ios_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-iosarm64/0.31.0/links-notation-kotlin-iosarm64-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-iosarm64",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "iosArm64MetadataElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-metadata",
+        "org.jetbrains.kotlin.native.target": "ios_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-iosarm64/0.31.0/links-notation-kotlin-iosarm64-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-iosarm64",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "iosSimulatorArm64ApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-api",
+        "org.jetbrains.kotlin.native.target": "ios_simulator_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-iossimulatorarm64/0.31.0/links-notation-kotlin-iossimulatorarm64-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-iossimulatorarm64",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "iosSimulatorArm64SourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.native.target": "ios_simulator_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-iossimulatorarm64/0.31.0/links-notation-kotlin-iossimulatorarm64-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-iossimulatorarm64",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "iosSimulatorArm64MetadataElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-metadata",
+        "org.jetbrains.kotlin.native.target": "ios_simulator_arm64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-iossimulatorarm64/0.31.0/links-notation-kotlin-iossimulatorarm64-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-iossimulatorarm64",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "iosX64ApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-api",
+        "org.jetbrains.kotlin.native.target": "ios_x64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-iosx64/0.31.0/links-notation-kotlin-iosx64-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-iosx64",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "iosX64SourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.native.target": "ios_x64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-iosx64/0.31.0/links-notation-kotlin-iosx64-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-iosx64",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "iosX64MetadataElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-metadata",
+        "org.jetbrains.kotlin.native.target": "ios_x64",
+        "org.jetbrains.kotlin.platform.type": "native"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-iosx64/0.31.0/links-notation-kotlin-iosx64-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-iosx64",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "jsApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-api",
+        "org.jetbrains.kotlin.js.compiler": "ir",
+        "org.jetbrains.kotlin.platform.type": "js"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-js/0.31.0/links-notation-kotlin-js-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-js",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "jsRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.js.compiler": "ir",
+        "org.jetbrains.kotlin.platform.type": "js"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-js/0.31.0/links-notation-kotlin-js-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-js",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "jsSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.js.compiler": "ir",
+        "org.jetbrains.kotlin.platform.type": "js"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-js/0.31.0/links-notation-kotlin-js-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-js",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "jvmApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-jvm/0.31.0/links-notation-kotlin-jvm-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-jvm",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "jvmRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-jvm/0.31.0/links-notation-kotlin-jvm-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-jvm",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "jvmSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-jvm/0.31.0/links-notation-kotlin-jvm-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-jvm",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "wasmJsApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-api",
+        "org.jetbrains.kotlin.platform.type": "wasm",
+        "org.jetbrains.kotlin.wasm.target": "js"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-wasm-js/0.31.0/links-notation-kotlin-wasm-js-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-wasm-js",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "wasmJsRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.platform.type": "wasm",
+        "org.jetbrains.kotlin.wasm.target": "js"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-wasm-js/0.31.0/links-notation-kotlin-wasm-js-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-wasm-js",
+        "version": "0.31.0"
+      }
+    },
+    {
+      "name": "wasmJsSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "non-jvm",
+        "org.gradle.usage": "kotlin-runtime",
+        "org.jetbrains.kotlin.platform.type": "wasm",
+        "org.jetbrains.kotlin.wasm.target": "js"
+      },
+      "available-at": {
+        "url": "../../links-notation-kotlin-wasm-js/0.31.0/links-notation-kotlin-wasm-js-0.31.0.module",
+        "group": "io.github.link-foundation",
+        "module": "links-notation-kotlin-wasm-js",
+        "version": "0.31.0"
+      }
+    }
+  ]
+}

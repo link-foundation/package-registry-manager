@@ -75,3 +75,8 @@ pub mod nuget_migration;
 pub mod bootstrap_recovery;
 
 mod audit_config;
+
+mod central_publication;
+
+/// Central signing configuration verification.
+pub mod central_signing;
