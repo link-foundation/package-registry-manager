@@ -1,3 +1,12 @@
+import {
+  ensurePackagistPackage,
+  ensurePackagistHook,
+  ensurePackagistUpdate,
+} from "./packagist-setup.mjs";
+import {
+  verifyPackagistPublication,
+  retryPackagistJobs,
+} from "./packagist-publication.mjs";
 import { ensureSigningKey } from "./central-signing.mjs";
 import readCentralPair from "./central-token-page.mjs";
 import { verifyNamespace } from "./central-namespace.mjs";
@@ -16,6 +25,7 @@ export const CENTRAL_PACKAGIST_STEPS = new Set([
   "verify-namespace",
   "ensure-signing-key",
   "verify-central-publication",
+  "ensure-packagist-package",
   "verify-packagist-package",
   "packagist-github-hook",
   "packagist-update-api",
@@ -34,9 +44,13 @@ export async function runCentralPackagistStep(session, step) {
     "verify-namespace": verifyNamespace,
     "ensure-signing-key": ensureSigningKey,
     "verify-central-publication": verifyCentralPublication,
-    "verify-packagist-package": verifyPackagistPackage,
-    "packagist-github-hook": packagistHook,
-    "packagist-update-api": packagistUpdateApi,
+    "ensure-packagist-package": ensurePackagistPackage,
+    "verify-packagist-package": async (session) => {
+      const retry = await retryPackagistJobs(session);
+      return { ...(await verifyPackagistPublication(session)), retry };
+    },
+    "packagist-github-hook": ensurePackagistHook,
+    "packagist-update-api": ensurePackagistUpdate,
     "verify-swift-release": verifySwiftRelease,
     "verify-swift-consumer": verifySwiftConsumer,
     "verify-gradle-toolchain": manualPrerequisite,
@@ -297,124 +311,6 @@ async function retryCausalJobs(session, slug, names) {
 
 /** Reads both displayed fields of the Central token dialog; never logged. */
 export const READ_CENTRAL_PAIR = `(${readCentralPair})()`;
-
-async function http(session, url, method = "GET") {
-  const fetcher = session.options.fetch ?? globalThis.fetch;
-  try {
-    const response = await fetcher(url, {
-      method,
-      headers: { accept: "application/json" },
-      signal: AbortSignal.timeout(session.options.timeoutMs ?? 10_000),
-    });
-    if (session.options.verbose) {
-      console.error(`${method} ${url} -> ${response.status}`);
-    }
-    return {
-      status: response.status,
-      json:
-        method === "GET" && response.ok
-          ? await response.json().catch(() => null)
-          : null,
-    };
-  } catch (error) {
-    return { status: "transport", reason: error.message };
-  }
-}
-
-const STABLE = (version) =>
-  !/^dev-|-dev$|[-.](?:alpha|beta|rc|dev)/i.test(version);
-
-/**
- * Exact stable tag read-back from Packagist's p2 metadata. Package
- * existence or a dev branch never passes.
- */
-async function verifyPackagistPackage(session) {
-  const item = session.plan.package;
-  if (item.manifest !== "composer.json") {
-    return {
-      status: "unsupported",
-      reason: `${item.manifest} is not the canonical root Composer descriptor Packagist reads`,
-    };
-  }
-  const tagged = await http(
-    session,
-    `https://repo.packagist.org/p2/${item.name}.json`,
-  );
-  if (tagged.status === 404) {
-    return {
-      status: "unregistered",
-      reason: `${item.name} is not on Packagist`,
-    };
-  }
-  if ([401, 403].includes(tagged.status)) {
-    return { status: "auth-rejected", reason: `HTTP ${tagged.status}` };
-  }
-  if (tagged.status !== 200 || !tagged.json) {
-    return {
-      status: "transport-unknown",
-      reason: tagged.reason ?? `HTTP ${tagged.status}`,
-    };
-  }
-  const versions = (tagged.json.packages?.[item.name] ?? [])
-    .map((entry) => entry.version)
-    .filter((version) => version && STABLE(version));
-  if (!versions.length) {
-    const dev = await http(
-      session,
-      `https://repo.packagist.org/p2/${item.name}~dev.json`,
-    );
-    return {
-      status: dev.json?.packages?.[item.name]?.length
-        ? "dev-only"
-        : "stable-version-missing",
-      reason: "no stable tagged version",
-    };
-  }
-  const wanted = item.version?.replace(/^v/, "");
-  if (!wanted) {
-    return {
-      status: "unknown",
-      reason: "the expected version is unresolved",
-      versions,
-    };
-  }
-  return versions.some((version) => version.replace(/^v/, "") === wanted)
-    ? { status: "verified", version: wanted }
-    : {
-        status: "stable-version-missing",
-        reason: `${wanted} is not published; latest ${versions[0]}`,
-      };
-}
-
-/** The GitHub hook is invisible to this tool: stays a prerequisite. */
-async function packagistHook(session, step) {
-  const exact = session.stepResults?.find(
-    (entry) => entry.step === "verify-packagist-package",
-  );
-  return {
-    status: "manual-prerequisite",
-    reason: `confirm the GitHub integration at ${step.url}${exact?.status === "verified" ? "; the exact tag reached Packagist, but that does not prove the hook" : ""}`,
-  };
-}
-
-async function packagistUpdateApi(session, step) {
-  if (step.state !== "configured") {
-    return {
-      status: "not-used",
-      reason:
-        "the workflow does not call the update-package API; the GitHub hook is the only update path",
-    };
-  }
-  const names = (step.secrets ?? []).map((entry) => entry.secret);
-  const { present, missing } = await secretPresence(session, names);
-  return missing.length
-    ? {
-        status: "manual-prerequisite",
-        missing,
-        reason: `${missing.join(" + ")} missing; add the Packagist API token as encrypted secrets`,
-      }
-    : { status: "configured", secrets: present };
-}
 
 /** Pressing Enter is never verification. */
 async function manualPrerequisite(session, step) {

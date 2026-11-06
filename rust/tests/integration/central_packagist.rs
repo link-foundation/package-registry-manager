@@ -259,58 +259,22 @@ async fn a_root_pom_alone_never_certifies_the_kotlin_variants() {
     assert_eq!(result["status"], "root-metadata-missing", "{result}");
 }
 
-#[tokio::test]
-async fn packagist_exact_stable_tag_states_stay_distinct() {
-    let name = "link-foundation/links-notation";
-    let tagged = format!("/p2/{name}.json");
-    let dev = format!("/p2/{name}~dev.json");
-    let versions = |versions: &[&str]| json!({"packages": {name: versions.iter().map(|v| json!({"version": v})).collect::<Vec<_>>()}});
-    let cases = [
-        ("unregistered", vec![]),
-        ("auth-rejected", vec![(tagged.clone(), 403, Value::Null)]),
-        (
-            "transport-unknown",
-            vec![(tagged.clone(), 503, Value::Null)],
-        ),
-        (
-            "dev-only",
-            vec![
-                (dev.clone(), 200, versions(&["dev-main"])),
-                (tagged.clone(), 200, versions(&[])),
-            ],
-        ),
-        (
-            "stable-version-missing",
-            vec![(tagged.clone(), 200, versions(&["0.29.0"]))],
-        ),
-        (
-            "verified",
-            vec![(tagged.clone(), 200, versions(&["0.30.0"]))],
-        ),
-    ];
-    let plan = plan(Registry::Packagist);
-    assert_eq!(plan.package.version.as_deref(), Some("0.30.0"));
-    for (status, routes) in cases {
-        let client = client(routes);
-        let result = run(
-            &FakeGithub::default(),
-            &client,
-            &plan,
-            "verify-packagist-package",
-            false,
-        )
-        .await;
-        assert_eq!(result["status"], status, "{result}");
-    }
-    let hook = run(
-        &FakeGithub::default(),
-        &client(Vec::new()),
-        &plan,
-        "packagist-github-hook",
-        false,
-    )
-    .await;
-    assert_eq!(hook["status"], "manual-prerequisite");
+#[test]
+fn packagist_embedded_engine_requires_authentication_without_browser() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let driver = STANDARD.encode(include_str!("../../src/packagist-driver.mjs"));
+    let script = format!("const {{loadPackagistEngine}} = await import('data:text/javascript;base64,{driver}'); const {{engine}} = await loadPackagistEngine({}); console.log(JSON.stringify(await engine.acquirePackagistCredential({{options:{{noBrowser:true}}}})));", package_registry_manager::packagist::engine_sources());
+    let output = std::process::Command::new("node")
+        .args(["--input-type=module", "-e", &script])
+        .output()
+        .expect("Node is required by gh-manager");
+    assert!(
+        output.status.success(),
+        "embedded Packagist module must execute"
+    );
+    let value: Value = serde_json::from_slice(&output.stdout).expect("structured result");
+    assert_eq!(value["status"], "authentication-required");
+    assert_eq!(value["stop"], true);
 }
 
 fn encode(text: &str) -> Value {

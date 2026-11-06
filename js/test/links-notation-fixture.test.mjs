@@ -82,12 +82,12 @@ test("links-notation: Maven and Packagist plans expose structured credential sta
   assert.ok(!maven.steps.some((s) => /rotate|revoke/i.test(s.id)));
   const packagist = plans.find((p) => p.registry === "packagist");
   assert.equal(
-    packagist.steps.find((s) => s.id === "packagist-update-api").state,
-    "configured",
+    packagist.steps.find((s) => s.id === "packagist-update-api").kind,
+    "api",
   );
   assert.equal(
-    packagist.steps.find((s) => s.id === "packagist-github-hook").state,
-    "manual-prerequisite",
+    packagist.steps.find((s) => s.id === "packagist-github-hook").kind,
+    "api",
   );
 });
 

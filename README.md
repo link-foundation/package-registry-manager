@@ -184,11 +184,11 @@ The automation profile holds npm approvals and publisher forms. Do not pass a no
 the default profile. The default is an isolated, reusable profile in the
 per-user state directory, outside any repository:
 
-| OS | Default `--browser-profile` |
-|----|-----------------------------|
-| macOS | `~/Library/Application Support/package-registry-manager/browser-profile` |
-| Linux | `$XDG_STATE_HOME/package-registry-manager/browser-profile`, or `~/.local/state/package-registry-manager/browser-profile` |
-| Windows | `%LOCALAPPDATA%\package-registry-manager\browser-profile` |
+| OS      | Default `--browser-profile`                                                                                              |
+| ------- | ------------------------------------------------------------------------------------------------------------------------ |
+| macOS   | `~/Library/Application Support/package-registry-manager/browser-profile`                                                 |
+| Linux   | `$XDG_STATE_HOME/package-registry-manager/browser-profile`, or `~/.local/state/package-registry-manager/browser-profile` |
+| Windows | `%LOCALAPPDATA%\package-registry-manager\browser-profile`                                                                |
 
 The profile holds registry session cookies, so it must never be committed.
 When `--browser-profile` points inside a Git work tree, the CLI writes a
@@ -267,17 +267,17 @@ elsewhere.
 
 ## Supported registries
 
-| Ecosystem | Manifest | Registry | Validation | Authenticated setup |
-| --- | --- | --- | --- | --- |
-| JavaScript / TypeScript | `package.json` | npm | `npm pkg get ...` | Web-login first publish, then `npm trust github` |
-| Rust | `Cargo.toml` | crates.io | `cargo publish --dry-run` | First publish and trusted publisher through the crates.io API with a self-revoking 1-hour token |
-| Python | `pyproject.toml`, `setup.py` | PyPI | `python -m build` | Pending publisher, first OIDC publish from CI |
-| Go | `go.mod` | Go module proxy | `go test ./...` | Version tag and proxy request; no central account |
-| C# / .NET | `*.csproj`, `*.fsproj`, `*.vbproj` | NuGet | `dotnet pack --configuration Release` | Trusted-publishing credential |
-| Java | `pom.xml`, `build.gradle`, `build.gradle.kts` | Maven Central | `mvn --batch-mode verify` | Central namespace verification |
-| PHP | `composer.json` | Packagist | `composer validate --strict` | Repository submission |
-| Container image | `Dockerfile` + Docker Hub release workflow | Docker Hub | Registry lookup | Repository, scoped token, `DOCKERHUB_*` variables and secret |
-| Container image | `Dockerfile` + `ghcr.io` workflow | GHCR | `packages: write` check | Link the package to the repository |
+| Ecosystem               | Manifest                                      | Registry        | Validation                            | Authenticated setup                                                                             |
+| ----------------------- | --------------------------------------------- | --------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| JavaScript / TypeScript | `package.json`                                | npm             | `npm pkg get ...`                     | Web-login first publish, then `npm trust github`                                                |
+| Rust                    | `Cargo.toml`                                  | crates.io       | `cargo publish --dry-run`             | First publish and trusted publisher through the crates.io API with a self-revoking 1-hour token |
+| Python                  | `pyproject.toml`, `setup.py`                  | PyPI            | `python -m build`                     | Pending publisher, first OIDC publish from CI                                                   |
+| Go                      | `go.mod`                                      | Go module proxy | `go test ./...`                       | Version tag and proxy request; no central account                                               |
+| C# / .NET               | `*.csproj`, `*.fsproj`, `*.vbproj`            | NuGet           | `dotnet pack --configuration Release` | Trusted-publishing credential                                                                   |
+| Java                    | `pom.xml`, `build.gradle`, `build.gradle.kts` | Maven Central   | `mvn --batch-mode verify`             | Central namespace verification                                                                  |
+| PHP                     | `composer.json`                               | Packagist       | `composer validate --strict`          | Repository submission                                                                           |
+| Container image         | `Dockerfile` + Docker Hub release workflow    | Docker Hub      | Registry lookup                       | Repository, scoped token, `DOCKERHUB_*` variables and secret                                    |
+| Container image         | `Dockerfile` + `ghcr.io` workflow             | GHCR            | `packages: write` check               | Link the package to the repository                                                              |
 
 The generated plan links to the registry and preserves the detected manifest,
 package name, version, repository coordinates, and ordered setup steps. A
@@ -302,11 +302,11 @@ records. Without `--execute` the same command prints the whole flow.
 
 The CLI looks the package up on the registry and chooses a mode:
 
-| Mode | When | What runs |
-| --- | --- | --- |
-| `bootstrap` | the package does not exist | sign in, first publish, attach trusted publisher |
-| `attach` | the package exists without trusted publishing | sign in, attach trusted publisher |
-| `complete` | the latest version came from a trusted publisher | nothing, except the [GitHub Pages checks](#github-pages) |
+| Mode        | When                                             | What runs                                                |
+| ----------- | ------------------------------------------------ | -------------------------------------------------------- |
+| `bootstrap` | the package does not exist                       | sign in, first publish, attach trusted publisher         |
+| `attach`    | the package exists without trusted publishing    | sign in, attach trusted publisher                        |
+| `complete`  | the latest version came from a trusted publisher | nothing, except the [GitHub Pages checks](#github-pages) |
 
 A bootstrap run:
 
@@ -514,10 +514,33 @@ and the [complete requirement and verification inventory](docs/issue-86-requirem
 
 ### Packagist
 
-The CLI strictly validates `composer.json` and opens Packagist's submission
-page. Sign in, submit the public VCS repository URL, and enable the GitHub hook
-when prompted so Packagist observes new tags. See
-[Packagist package submission](https://packagist.org/about#how-to-submit-packages).
+Both CLIs validate the canonical root `composer.json` once and inspect the
+registered package's repository before submitting an absent package. The browser
+reuses its persistent sign-in and approved GitHub authorization; a stale OAuth
+callback starts a fresh login in that same profile. Authentication, account
+registration and unapproved grants pause for the user when required.
+
+Setup reads the **Safe API token** from the authenticated profile in memory,
+stores the selected username/token secrets encrypted through gh-manager, reads
+presence back and independently tests Bearer-authenticated update acceptance.
+The main token is read only for initial package submission and is never stored.
+GitHub hook setup preserves unrelated hooks, repairs the Packagist hook when
+needed, and verifies active JSON push settings and a fresh test delivery.
+
+After configuration is verified, only failed publisher/dependent audit jobs with
+causal log evidence are resumed. Registration and HTTP 202 queue acceptance do
+not establish publication: exact stable version, source SHA, isolated Composer
+installation and matching GitHub release remain separate gates. Delayed indexing,
+failed consumers and unreadable state keep setup incomplete. No tags or published
+packages are renamed, moved or re-uploaded.
+
+The Rust CLI embeds the same Packagist engine as the JS CLI and uses its native
+Browser Commander session through a private stdin protocol. Node/npm are required
+for the existing pinned gh-manager dependency. Both published distributions ship
+the engine; regression tests verify identical sources and installed-manager
+sealed-box encryption. See the [Packagist API](https://packagist.org/apidoc),
+[GitHub update integration](https://packagist.org/about#how-to-update-packages),
+and [verification inventory](docs/issue-88-requirements.md).
 
 ## Configuration
 
@@ -596,37 +619,37 @@ sign-in or approval escalates to a visible window when needed.
 
 The CLIs intentionally use the same options and JSON schema:
 
-| Option | Purpose |
-| --- | --- |
-| `--repository <path>` | Inspect only this repository; online commands otherwise prefer organization/user scope |
-| `--format text\|json` | Human or machine-readable output |
-| `--verbose` | Enable command and browser tracing |
-| `--registry <name>` | Restrict `plan`, or select exactly one registry for `setup` |
-| `--rotate-token <secret>` | Explicitly replace an existing crates.io token during `setup --registry crates-io` |
-| `--migrate` | Convert to OIDC first with token fallback, register trust, and verify publication |
-| `--delete-token-secrets` | Opt in to deletion of unused tokens after verified OIDC publication |
-| `--token-expiry-days <N>` | Read private crates.io token expiry during an online account scan (0–365 days) |
-| `--package <name>` | Plan only this package, or select it for `setup` when a registry has several |
-| `--offline` | Skip the public registry lookups; unknown state keeps every conditional step |
-| `--dry-run` | Print the whole setup flow without running it; the default |
-| `--execute` | Run the setup flow and open the browser |
-| `--verify-release` | Also dispatch and watch the release workflow and confirm provenance |
-| `--yes` | Pre-confirm publishing, secret changes, and form submission; requires `--execute` |
-| `--no-browser` | Print the setup URL after validation; requires `--execute` |
-| `--browser <default\|automated>` | Select the browser for web-auth links; npm always reuses the automation profile unless `--open-with` is set |
-| `--browser-channel <name>` | Choose an installed launchable browser or alias from Browser Commander's catalogue; `--help` lists launchable channels (default: `chrome`) |
-| `--browser-executable <path>` | Launch this browser executable instead of the channel's |
-| `--browser-profile <path>` | Choose the dedicated automation profile used to fill forms (default: per-user state directory) |
-| `--browser-import <browser>[:<profile>]\|default\|auto` | Import from any browser id in Browser Commander's catalogue; `default` selects the system default browser and `auto` discovers a registry sign-in |
-| `--browser-import-scope <full\|domains>` | Import the whole profile, or only registry-domain data; `auto` falls back from cookies to supported saved logins (default: `full` for a named browser, `domains` otherwise) |
-| `--browser-attach snapshot[:<profile>]\|extension` | Fill forms in a temporary copy of your profile, or in your running browser through the Browser Commander extension |
-| `--browser-pref <key=value>` | Set a preference in the automated profile; may be repeated |
-| `--browser-restriction <name>` | Add a launch restriction or preset, such as `no-extensions`; may be repeated |
-| `--open-with <app>` | Open sign-in and approval URLs with this browser application instead of the default browser |
-| `--manual` | crates.io: create, use, and revoke the first-publish token by hand instead of through the crates.io API |
-| `--sign-out` | At the end of setup, run `npm logout` for the npm session the run signed in and remove the crates.io sign-in it brought into the automated profile; without it the next run reuses both sessions |
-| `--workflow <file>` | Trusted-publisher workflow in `.github/workflows`, when detection finds several or the wrong one |
-| `--environment <name>` | GitHub environment of the trusted publisher |
+| Option                                                  | Purpose                                                                                                                                                                                          |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--repository <path>`                                   | Inspect only this repository; online commands otherwise prefer organization/user scope                                                                                                           |
+| `--format text\|json`                                   | Human or machine-readable output                                                                                                                                                                 |
+| `--verbose`                                             | Enable command and browser tracing                                                                                                                                                               |
+| `--registry <name>`                                     | Restrict `plan`, or select exactly one registry for `setup`                                                                                                                                      |
+| `--rotate-token <secret>`                               | Explicitly replace an existing crates.io token during `setup --registry crates-io`                                                                                                               |
+| `--migrate`                                             | Convert to OIDC first with token fallback, register trust, and verify publication                                                                                                                |
+| `--delete-token-secrets`                                | Opt in to deletion of unused tokens after verified OIDC publication                                                                                                                              |
+| `--token-expiry-days <N>`                               | Read private crates.io token expiry during an online account scan (0–365 days)                                                                                                                   |
+| `--package <name>`                                      | Plan only this package, or select it for `setup` when a registry has several                                                                                                                     |
+| `--offline`                                             | Skip the public registry lookups; unknown state keeps every conditional step                                                                                                                     |
+| `--dry-run`                                             | Print the whole setup flow without running it; the default                                                                                                                                       |
+| `--execute`                                             | Run the setup flow and open the browser                                                                                                                                                          |
+| `--verify-release`                                      | Also dispatch and watch the release workflow and confirm provenance                                                                                                                              |
+| `--yes`                                                 | Pre-confirm publishing, secret changes, and form submission; requires `--execute`                                                                                                                |
+| `--no-browser`                                          | Print the setup URL after validation; requires `--execute`                                                                                                                                       |
+| `--browser <default\|automated>`                        | Select the browser for web-auth links; npm always reuses the automation profile unless `--open-with` is set                                                                                      |
+| `--browser-channel <name>`                              | Choose an installed launchable browser or alias from Browser Commander's catalogue; `--help` lists launchable channels (default: `chrome`)                                                       |
+| `--browser-executable <path>`                           | Launch this browser executable instead of the channel's                                                                                                                                          |
+| `--browser-profile <path>`                              | Choose the dedicated automation profile used to fill forms (default: per-user state directory)                                                                                                   |
+| `--browser-import <browser>[:<profile>]\|default\|auto` | Import from any browser id in Browser Commander's catalogue; `default` selects the system default browser and `auto` discovers a registry sign-in                                                |
+| `--browser-import-scope <full\|domains>`                | Import the whole profile, or only registry-domain data; `auto` falls back from cookies to supported saved logins (default: `full` for a named browser, `domains` otherwise)                      |
+| `--browser-attach snapshot[:<profile>]\|extension`      | Fill forms in a temporary copy of your profile, or in your running browser through the Browser Commander extension                                                                               |
+| `--browser-pref <key=value>`                            | Set a preference in the automated profile; may be repeated                                                                                                                                       |
+| `--browser-restriction <name>`                          | Add a launch restriction or preset, such as `no-extensions`; may be repeated                                                                                                                     |
+| `--open-with <app>`                                     | Open sign-in and approval URLs with this browser application instead of the default browser                                                                                                      |
+| `--manual`                                              | crates.io: create, use, and revoke the first-publish token by hand instead of through the crates.io API                                                                                          |
+| `--sign-out`                                            | At the end of setup, run `npm logout` for the npm session the run signed in and remove the crates.io sign-in it brought into the automated profile; without it the next run reuses both sessions |
+| `--workflow <file>`                                     | Trusted-publisher workflow in `.github/workflows`, when detection finds several or the wrong one                                                                                                 |
+| `--environment <name>`                                  | GitHub environment of the trusted publisher                                                                                                                                                      |
 
 Registry aliases such as `cargo`, `python`, `go`, `dotnet`, `maven`, and
 `composer`, `docker`, and `ghcr-io` are accepted. Canonical JSON values are
@@ -682,12 +705,12 @@ link instead of failing, so the source can be set by hand.
 The independently publishable implementations follow the same polyglot layout
 as command-stream and the other maintained multi-language repositories:
 
-| Path | Purpose |
-| --- | --- |
-| `rust/` | Rust crate, tests, examples, changelog, and release helpers |
-| `js/` | npm package, tests, changelog, and JavaScript checks |
-| `tests/fixtures/` | Shared cross-language contract fixtures |
-| `.github/workflows/` | Repository-level CI, release, security, and policy gates |
+| Path                 | Purpose                                                     |
+| -------------------- | ----------------------------------------------------------- |
+| `rust/`              | Rust crate, tests, examples, changelog, and release helpers |
+| `js/`                | npm package, tests, changelog, and JavaScript checks        |
+| `tests/fixtures/`    | Shared cross-language contract fixtures                     |
+| `.github/workflows/` | Repository-level CI, release, security, and policy gates    |
 
 Both implementations expose discovery, plan, browser-script, and execution
 modules and validate the same polyglot fixture.

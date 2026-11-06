@@ -44,6 +44,7 @@ mod migration_cleanup;
 mod nuget_ci;
 mod nuget_session;
 mod pack_session;
+mod packagist_session;
 mod publisher_session;
 mod release_session;
 mod repository_session;
@@ -126,6 +127,7 @@ struct Session<'a> {
     browser_detected: bool,
     /// Structured results of the generated Central/Packagist/SwiftPM steps.
     step_results: Vec<Value>,
+    packagist_results: Vec<Value>,
     /// Generated-step results without evidence; setup stays incomplete.
     incomplete: Vec<Value>,
     /// A generated step returned a structured stop.
@@ -162,6 +164,7 @@ impl<'a> Session<'a> {
             browser_name: None,
             browser_detected: false,
             step_results: Vec::new(),
+            packagist_results: Vec::new(),
             incomplete: Vec::new(),
             stopped: false,
         }

@@ -73,57 +73,11 @@ pub fn packagist_steps(package: &Package) -> Vec<SetupStep> {
         .as_array()
         .cloned()
         .unwrap_or_default();
-    let referenced = api.iter().all(|entry| entry["referenced"] == true);
-    let note = requirements["oidc_note"].as_str().unwrap_or_default();
-    let page = format!("https://packagist.org/packages/{}", package.name);
     vec![
-        SetupStep::new(
-            "verify-packagist-package",
-            "Read back the Packagist package and exact stable tag",
-            StepKind::Check,
-            format!(
-                "Read https://repo.packagist.org/p2/{}.json and require the exact stable version {} from a tag; dev branches do not count.",
-                package.name,
-                package.version.as_deref().unwrap_or("(unresolved)")
-            ),
-        )
-        .url(page.clone()),
-        SetupStep::new(
-            "packagist-github-hook",
-            "Confirm the Packagist GitHub integration",
-            StepKind::Manual,
-            "Packagist updates on tag pushes through its GitHub hook/app integration. GitHub does not expose that installation to this tool, so confirm it on the package page (no \"not auto-updated\" warning).",
-        )
-        .detail("state", json!("manual-prerequisite"))
-        .url(page),
-        SetupStep::new(
-            "packagist-update-api",
-            &if referenced {
-                format!("Keep the update-package API path {}", describe(&api))
-            } else {
-                "Packagist update-package API is not configured".to_owned()
-            },
-            StepKind::Manual,
-            format!(
-                "{note} {}",
-                if referenced {
-                    "The workflow calls the update-package API; keep both secrets as encrypted GitHub secrets. Nothing is rotated or revoked."
-                } else {
-                    "Rely on the GitHub hook, or add PACKAGIST_USERNAME and PACKAGIST_TOKEN (Packagist profile API token) as encrypted GitHub secrets for the update-package API."
-                }
-            ),
-        )
-        .detail(
-            "state",
-            json!(if referenced {
-                "configured"
-            } else {
-                "unsupported-without-credentials"
-            }),
-        )
-        .detail("secrets", json!(api))
-        .detail("oidc", json!("unsupported"))
-        .url("https://packagist.org/profile/"),
+        SetupStep::new("ensure-packagist-package", "Validate and register the root Composer package", StepKind::Api, "Validate composer.json, discover the exact registered repository, recover sign-in in the same browser profile and submit once only if absent. Never rename a published package."),
+        SetupStep::new("packagist-update-api", "Encrypt Safe update credentials and verify acceptance", StepKind::Api, "Select the Safe API token in memory, encrypt the selected secrets through gh-manager, read presence back and independently require HTTP 202 update acceptance.").detail("secrets", json!(api)),
+        SetupStep::new("packagist-github-hook", "Verify the Packagist push hook and test delivery", StepKind::Api, "Inspect/create/repair the Packagist hook through gh-manager; preserve unrelated hooks, read back active JSON push settings and inspect a fresh test delivery."),
+        SetupStep::new("verify-packagist-package", "Verify exact Packagist publication and consumer", StepKind::Api, "Resume only affected failed jobs after configuration verification. Separately verify registration, queued update, exact indexed version/source SHA, Composer consumer and GitHub release."),
     ]
 }
 

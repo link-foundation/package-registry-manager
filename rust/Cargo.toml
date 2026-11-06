@@ -21,6 +21,7 @@ include = [
     "/src/nuget-publish.py",
     "/src/nuget-page.mjs",
     "/src/central-*.mjs",
+    "/src/packagist-*.mjs",
     "/examples/**/*.rs",
     "/README.md",
     "/LICENSE",

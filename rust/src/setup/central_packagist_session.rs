@@ -31,7 +31,9 @@ impl Session<'_> {
     /// Runs one generated step and records its structured result. Results
     /// without evidence keep setup incomplete; `stop` ends the plan.
     pub(super) async fn run_central_packagist_step(&mut self, step: &SetupStep) -> Result<()> {
-        let result = if step.id == "ensure-central-credential-pair" {
+        let result = if self.plan.registry == crate::model::Registry::Packagist {
+            self.run_packagist(step).await?
+        } else if step.id == "ensure-central-credential-pair" {
             self.ensure_central_pair(step).await?
         } else if step.id == "verify-namespace" {
             self.ensure_central_namespace(step).await?

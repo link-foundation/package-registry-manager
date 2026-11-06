@@ -269,98 +269,16 @@ test("Central publication: a root POM alone never certifies the Kotlin variants"
   assert.equal((await instance.runStep(step)).status, "root-metadata-missing");
 });
 
-const packagist = "repo.packagist.org/p2/link-foundation/links-notation";
-for (const [name, routes, status] of [
-  ["unregistered", {}, "unregistered"],
-  ["auth-rejected", { [`${packagist}.json`]: [403, null] }, "auth-rejected"],
-  [
-    "transport-unknown",
-    { [`${packagist}.json`]: [503, null] },
-    "transport-unknown",
-  ],
-  [
-    "dev-only",
-    {
-      [`${packagist}.json`]: [
-        200,
-        { packages: { "link-foundation/links-notation": [] } },
-      ],
-      [`${packagist}~dev.json`]: [
-        200,
-        {
-          packages: {
-            "link-foundation/links-notation": [{ version: "dev-main" }],
-          },
-        },
-      ],
-    },
-    "dev-only",
-  ],
-  [
-    "stable-version-missing",
-    {
-      [`${packagist}.json`]: [
-        200,
-        {
-          packages: {
-            "link-foundation/links-notation": [{ version: "0.29.0" }],
-          },
-        },
-      ],
-    },
-    "stable-version-missing",
-  ],
-  [
-    "verified",
-    {
-      [`${packagist}.json`]: [
-        200,
-        {
-          packages: {
-            "link-foundation/links-notation": [{ version: "0.30.0" }],
-          },
-        },
-      ],
-    },
-    "verified",
-  ],
-]) {
-  test(`Packagist exact stable tag: ${name}`, async () => {
-    const { instance } = session("packagist", { github: fakeGithub(), routes });
-    const step = instance.plan.steps.find(
-      (s) => s.id === "verify-packagist-package",
-    );
-    assert.equal(instance.plan.package.version, "0.30.0");
-    assert.equal((await instance.runStep(step)).status, status);
-  });
-}
-
-test("Packagist run ends incomplete because the hook has no read-back evidence", async () => {
-  const github = fakeGithub({
-    secrets: { PACKAGIST_USERNAME: 1, PACKAGIST_TOKEN: 1 },
-  });
+test("Packagist setup stops at actual authentication with --no-browser", async () => {
   const { instance } = session("packagist", {
-    github,
-    routes: {
-      [`${packagist}.json`]: [
-        200,
-        {
-          packages: {
-            "link-foundation/links-notation": [{ version: "0.30.0" }],
-          },
-        },
-      ],
-    },
+    noBrowser: true,
+    github: fakeGithub(),
   });
-  for (const step of instance.plan.steps.filter((s) =>
-    CENTRAL_PACKAGIST_STEPS.has(s.id),
-  )) {
-    await instance.runStep(step);
-  }
-  assert.deepEqual(
-    instance.incomplete.map((entry) => entry.step),
-    ["packagist-github-hook"],
+  const result = await instance.runStep(
+    instance.plan.steps.find((s) => s.id === "packagist-update-api"),
   );
+  assert.equal(result.status, "authentication-required");
+  assert.equal(instance.outcome.status, "authentication-required");
 });
 
 const encode = (text) => ({
