@@ -245,7 +245,9 @@ test("cleanup preserves a proof repository that has changed identity or gained c
         github: {
           rest: {
             request: async (_endpoint, options = {}) => {
-              if (options.method === "DELETE") deleted = true;
+              if (options.method === "DELETE") {
+                deleted = true;
+              }
               return {
                 id: 1,
                 owner: { id: 12 },

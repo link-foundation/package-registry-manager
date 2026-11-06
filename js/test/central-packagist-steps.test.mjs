@@ -67,8 +67,9 @@ function fakeGithub({
           length: value.length,
           expiresAt: options.expiresAt,
         });
-        if (options.expiresAt)
+        if (options.expiresAt) {
           variables.set(`${name}_EXPIRES_AT`, { value: options.expiresAt });
+        }
         secrets[name] = true;
         return { name, changed: true };
       },
