@@ -41,6 +41,7 @@ async fn signing(
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
+#[allow(clippy::future_not_send)] // Injectable gateway futures are not required to be Send.
 async fn metadata(
     github: &impl GithubGateway,
     slug: &str,

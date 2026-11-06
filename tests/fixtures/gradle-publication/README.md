@@ -10,3 +10,7 @@ The root has inline files and repeated `available-at` references with string
 `component.url`. Tests select its JVM variants, then independently remove a
 required platform/binary or corrupt exact coordinates. The unmodified root is
 also used by the read-only live verification experiment. No artifact is uploaded.
+
+`missing-platform.json` defines the second scenario: the root remains present
+and still requires JVM, but the exact referenced platform module returns 404.
+The verifier must report `partial` without dropping that configured platform.

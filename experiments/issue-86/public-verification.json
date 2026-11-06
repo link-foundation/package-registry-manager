@@ -1,0 +1,21 @@
+{
+  "status": "verified",
+  "variants": [
+    "io.github.link-foundation:links-notation-kotlin-android",
+    "io.github.link-foundation:links-notation-kotlin-iosarm64",
+    "io.github.link-foundation:links-notation-kotlin-iossimulatorarm64",
+    "io.github.link-foundation:links-notation-kotlin-iosx64",
+    "io.github.link-foundation:links-notation-kotlin-js",
+    "io.github.link-foundation:links-notation-kotlin-jvm",
+    "io.github.link-foundation:links-notation-kotlin-wasm-js"
+  ],
+  "files": 19,
+  "evidence": {
+    "root_pom": "available",
+    "artifacts": "referenced-files-available",
+    "signatures": "unverified",
+    "consumers": "unverified",
+    "release": "unverified",
+    "hashes": "unverified"
+  }
+}

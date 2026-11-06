@@ -30,6 +30,7 @@ pub const CENTRAL_PACKAGIST_STEPS: [&str; 10] = [
 pub const COMPLETE_STATUSES: [&str; 4] = ["verified", "present", "configured", "not-used"];
 
 /// Reads the open Central Portal user-token dialog in the page; values stay in memory.
+#[must_use]
 pub fn read_central_pair_script() -> String {
     let source = include_str!("central-token-page.mjs")
         .split_once("export default ")

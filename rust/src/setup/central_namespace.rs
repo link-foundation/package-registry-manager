@@ -5,6 +5,7 @@ use crate::central_packagist::plan_slug;
 use crate::github::{GhManager, GithubGateway};
 use anyhow::Context;
 use serde_json::json;
+use std::io::Write;
 use std::path::Path;
 
 fn script(expected: &Value, action: &str) -> String {
@@ -26,7 +27,6 @@ fn save(path: &Path, value: &Value) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    use std::io::Write;
     let temporary = path.with_extension("json.tmp");
     options
         .open(&temporary)?

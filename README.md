@@ -442,7 +442,10 @@ monorepo), then request that version through `proxy.golang.org`. See
 Configure the explicit NuGet login profile, package owner, exact IDs and push
 operation in `.package-registry-manager.json`. Setup discovers the policy in a
 dedicated authenticated browser, verifies the active saved state, and ensures
-the effective `NUGET_USER` Actions variable through gh-manager. It never registers
+the effective `NUGET_USER` Actions variable through gh-manager. The policy uses
+the actual nested NuGet publishing workflow; CI discovery and retries retain
+the caller filename. Saved scope labels are normalized through the official
+page controls independently of unsaved edits. It never registers
 template placeholders or broadens a policy to work around an incompatible probe.
 
 Generated CI uses official `NuGet/login` first and retains an existing provided
@@ -455,10 +458,55 @@ and [NuGet trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trust
 
 ### Maven Central
 
-The CLI runs the Maven verification lifecycle and opens Central Portal
-namespace management. Sign in, verify the namespace represented by the
-package group ID, and configure the deployment credentials in the CI system.
-See the [Central Portal publishing guide](https://central.sonatype.org/publish/publish-portal-guide/).
+Setup reads namespace ownership from the signed-in Central Portal, including
+namespaces with no public release. With authorization it registers a GitHub
+namespace, creates the exact temporary public proof repository and submits the
+challenge. A local cleanup obligation survives interruptions; unavailable delete
+permission leaves cleanup pending without changing token scopes. Optional
+`central.account` (the portal account ID) and `central.organization` in
+`.package-registry-manager.json` constrain the authenticated identity.
+
+Signing setup uses installed GnuPG and isolated temporary keyrings. Prefer an
+existing key by configuring `central.signing.fingerprint` (optionally `key_home`)
+or `private_key_file`, plus `passphrase_env` naming an environment variable.
+Private material stays out of JSON configuration. For an explicitly authorized
+first release with no existing signing settings, generation can instead use:
+
+```json
+{
+  "central": {
+    "signing": {
+      "generate": true,
+      "identity": "Central acme/library <publishing@acme.example>"
+    }
+  }
+}
+```
+
+Replace the identity with your repository's `owner/name` and contact address.
+Generation creates an RSA4096 primary signing key expiring in one year. Setup
+checks a detached signature, propagates only the public key, independently
+retrieves its fingerprint and verifies the signature in a separate keyring.
+Supported `keyserver` values are `hkps://keyserver.ubuntu.com` (default) and
+`hkps://keys.openpgp.org`; verification remains incomplete until readback succeeds.
+The encrypted signing pair and its actual expiry go through gh-manager. A
+nonsecret `CENTRAL_SIGNING_PROOF` variable binds the public proof to the secret
+metadata, allowing a second run to reuse verified settings. Existing unreadable
+encrypted keys are never silently replaced with newly generated ones.
+
+Central token setup records the server's actual expiry and token name when
+available. Both secret names get nonsecret `<NAME>_EXPIRES_AT` variables so
+health checks can warn before expiration. Existing pairs are retained; absent
+lifetime evidence stays unknown instead of assuming validity or guessing dates.
+
+Public Gradle verification traverses the exact version's metadata, platform
+redirects and referenced files, including root-component identities in platform
+metadata. Results distinguish an unpublished root POM, absent root module
+metadata, partial platform delivery, malformed metadata and transport failures.
+Configuration, deployment, public hashes/signatures, consumers and GitHub release
+checks remain separate evidence. Setup does not re-upload immutable artifacts.
+See the [Central Portal publishing guide](https://central.sonatype.org/publish/publish-portal-guide/)
+and the [complete requirement and verification inventory](docs/issue-86-requirements.md).
 
 ### Packagist
 
