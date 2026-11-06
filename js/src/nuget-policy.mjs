@@ -210,8 +210,10 @@ export function nugetWorkflowIdentity(publisher, pkg) {
   if (
     workflows.some((file) => !/^[\w.-]+\.ya?ml$/.test(file)) ||
     workflows.length > 1 ||
-    (pkg.warnings ?? []).some((warning) =>
-      /publishing jobs.*different environments/.test(warning),
+    (pkg.warnings ?? []).some(
+      (warning) =>
+        warning.includes("publishing jobs") &&
+        warning.includes("different environments"),
     )
   ) {
     throw new Error(
