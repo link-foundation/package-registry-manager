@@ -18,7 +18,7 @@ export const JOB_PATTERNS = new Map([
   ["rubygems", /\bgem\s+push\b|rubygems\/release-gem/],
   [
     "nuget",
-    /\bdotnet\s+nuget\s+push\b|PRM_NUGET_OIDC|\bnuget\s+push\b|PRM_NUGET_OIDC/,
+    /\bdotnet\s+nuget\s+push\b|PRM_NUGET_OIDC|\bnuget\s+push\b|NuGet\/login@/i,
   ],
   ["jsr", /\bdeno\s+publish\b|\bjsr\s+publish\b/],
   ["docker-hub", /docker\/login-action|\bdocker\s+(?:login|push)\b/],
@@ -280,8 +280,7 @@ async function detectPublisherDetails(root, workflows, registry) {
   const found = [];
   for (const workflow of workflows) {
     const parsed = parsedWorkflows.get(workflow.name);
-    // Registries check the caller's identity, so a workflow that only runs
-    // when another workflow calls it can never be the trusted publisher.
+    // Keep CI discovery on the caller; NuGet resolves its OIDC callee separately.
     if (onlyCalled(parsed.header)) {
       continue;
     }
@@ -310,6 +309,9 @@ async function detectPublisherDetails(root, workflows, registry) {
               ),
             ]
           : [];
+      if (!callee && registry === "nuget" && environments.length) {
+        chain.push(`${workflow.name} -> ${job.name}`);
+      }
       if (!environments.length) {
         continue;
       }

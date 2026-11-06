@@ -200,3 +200,32 @@ pub async fn publish(artifact: &str, adapter: &mut impl PublishAdapter) -> Resul
         json!({"selected_method":"none","attempts":attempts,"publication":"unverified","trust_repaired":false}),
     )
 }
+
+/// NuGet evaluates the publishing callee; CI retries continue to use the caller.
+pub fn workflow_identity(
+    caller: &str,
+    chains: &[String],
+    warnings: &[String],
+) -> anyhow::Result<String> {
+    let mut workflows = std::collections::BTreeSet::new();
+    let filename = regex::Regex::new(r"^[\w.-]+\.ya?ml$").expect("static pattern");
+    for chain in chains {
+        let parts: Vec<_> = chain.split(" -> ").collect();
+        let file = parts
+            .get(parts.len().saturating_sub(2))
+            .copied()
+            .unwrap_or("");
+        if !filename.is_match(file) {
+            anyhow::bail!("ambiguous NuGet publishing workflow identity");
+        }
+        workflows.insert(file);
+    }
+    if workflows.len() > 1
+        || warnings.iter().any(|warning| {
+            warning.contains("publishing jobs") && warning.contains("different environments")
+        })
+    {
+        anyhow::bail!("ambiguous NuGet publishing workflow or environment; select an exact publishing identity");
+    }
+    Ok(workflows.first().copied().unwrap_or(caller).to_owned())
+}

@@ -5,7 +5,7 @@ use std::{path::Path, process::Stdio};
 use tokio::{io::AsyncWriteExt, process::Command};
 
 /// Source release used until the scoped npm package is published.
-pub const GH_MANAGER_PACKAGE: &str = "https://codeload.github.com/link-foundation/gh-manager/tar.gz/0b3ceb1590be7eb0340ae088730698b5ae9bebfc";
+pub const GH_MANAGER_PACKAGE: &str = "https://codeload.github.com/link-foundation/gh-manager/tar.gz/cab12f0404d1bc90c72eacea533ce3d5ae8f4894";
 
 /// GitHub command transport, injectable for deterministic discovery tests.
 #[allow(async_fn_in_trait)]
@@ -49,6 +49,17 @@ pub trait GithubGateway {
         anyhow::bail!("GitHub REST read {endpoint} is unsupported by this gateway")
     }
 
+    /// Explicit REST mutation; request bodies use stdin, never shell interpolation.
+    async fn mutate(
+        &self,
+        _method: &str,
+        _endpoint: &str,
+        _body: Option<&Value>,
+        _cwd: &Path,
+    ) -> Result<Value> {
+        anyhow::bail!("GitHub REST mutations are unsupported by this gateway")
+    }
+
     /// The plain-text log of one Actions job, never printed by callers.
     async fn job_log(&self, slug: &str, job: u64, _cwd: &Path) -> Result<String> {
         anyhow::bail!("job log {slug}#{job} is unsupported by this gateway")
@@ -58,6 +69,39 @@ pub trait GithubGateway {
 /// Resolves the pinned package through npm; no ambient gh-manager is required.
 pub struct GhManager;
 impl GithubGateway for GhManager {
+    async fn mutate(
+        &self,
+        method: &str,
+        endpoint: &str,
+        body: Option<&Value>,
+        cwd: &Path,
+    ) -> Result<Value> {
+        let mut command = Command::new("gh");
+        command
+            .args(["api", "--method", method, endpoint])
+            .current_dir(cwd);
+        if body.is_some() {
+            command.args(["--input", "-"]);
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            if let Some(body) = body {
+                stdin.write_all(body.to_string().as_bytes()).await?;
+            }
+        }
+        let result = child.wait_with_output().await?;
+        if !result.status.success() {
+            bail!("GitHub {method} request failed; no credentials were logged");
+        }
+        if result.stdout.is_empty() {
+            return Ok(Value::Null);
+        }
+        Ok(serde_json::from_slice(&result.stdout)?)
+    }
     async fn rest(&self, endpoint: &str, cwd: &Path) -> Result<Option<Value>> {
         let (status, body, _) = github_api(endpoint.trim_start_matches('/'), cwd).await?;
         match status {

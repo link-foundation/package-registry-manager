@@ -196,3 +196,27 @@ export async function publishNugetArtifact(artifact, adapter) {
     trust_repaired: false,
   };
 }
+
+/** NuGet evaluates the publishing callee; CI retries still use the caller. */
+export function nugetWorkflowIdentity(publisher, pkg) {
+  const workflows = [
+    ...new Set(
+      (pkg.workflow_callees ?? []).map((chain) => {
+        const parts = chain.split(" -> ");
+        return parts.at(-2);
+      }),
+    ),
+  ];
+  if (
+    workflows.some((file) => !/^[\w.-]+\.ya?ml$/.test(file)) ||
+    workflows.length > 1 ||
+    (pkg.warnings ?? []).some((warning) =>
+      /publishing jobs.*different environments/.test(warning),
+    )
+  ) {
+    throw new Error(
+      "ambiguous NuGet publishing workflow or environment; select an exact publishing identity",
+    );
+  }
+  return { ...publisher, workflow: workflows[0] ?? publisher.workflow };
+}

@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import nugetPage from "./nuget-page.mjs";
-import { validateNugetPolicy, nugetPolicyState } from "./nuget-policy.mjs";
+import {
+  validateNugetPolicy,
+  nugetPolicyState,
+  nugetWorkflowIdentity,
+} from "./nuget-policy.mjs";
 import { githubServices } from "./github.mjs";
 import { offerSignInImport, signInDomains } from "./sign-in-import.mjs";
 
@@ -32,7 +36,7 @@ export async function nugetSetupPolicy(session, github) {
   );
   const expected = validateNugetPolicy({
     ...settings,
-    ...publisher,
+    ...nugetWorkflowIdentity(publisher, session.plan.package),
     username: settings.username,
     package_owner: settings.package_owner,
     package_ids: settings.package_ids ?? [session.plan.package.name],

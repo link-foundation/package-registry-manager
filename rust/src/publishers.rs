@@ -90,7 +90,7 @@ static TRAILING_COMMENT: LazyLock<Regex> = LazyLock::new(|| regex(r"\s+#.*$"));
 static RUBYGEMS_JOB: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\bgem\s+push\b|rubygems/release-gem"));
 static NUGET_JOB: LazyLock<Regex> = LazyLock::new(|| {
-    regex(r"\bdotnet\s+nuget\s+push\b|PRM_NUGET_OIDC|\bnuget\s+push\b|PRM_NUGET_OIDC")
+    regex(r"\bdotnet\s+nuget\s+push\b|PRM_NUGET_OIDC|\bnuget\s+push\b|(?i:NuGet/login@)")
 });
 static JSR_JOB: LazyLock<Regex> = LazyLock::new(|| regex(r"\b(?:deno|jsr)\s+publish\b"));
 static MAVEN_JOB: LazyLock<Regex> = LazyLock::new(|| {
@@ -373,8 +373,7 @@ fn detect_publisher_details(root: &Path, workflows: &[Workflow], registry: Regis
     let mut found = Vec::new();
     for workflow in workflows {
         let parsed = &parsed_workflows[workflow.name.as_str()];
-        // Registries check the caller's identity, so a workflow that only runs
-        // when another workflow calls it can never be the trusted publisher.
+        // Keep CI discovery on the caller; NuGet resolves its OIDC callee separately.
         if only_called(&parsed.header) {
             continue;
         }
@@ -409,6 +408,9 @@ fn detect_publisher_details(root: &Path, workflows: &[Workflow], registry: Regis
                     )
                 },
             );
+            if callee.is_none() && registry == Registry::NuGet && !environments.is_empty() {
+                chain.push(format!("{} -> {}", workflow.name, job.name));
+            }
             if environments.is_empty() {
                 continue;
             }

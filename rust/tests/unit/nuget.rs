@@ -182,3 +182,28 @@ fn public_nuget_identity_ignores_build_metadata_and_zero_revision() {
         assert_eq!(normalized_nuget_version(invalid), None, "{invalid}");
     }
 }
+
+#[test]
+fn nuget_uses_nested_publishing_callee_and_rejects_ambiguous_identity() {
+    let chains = vec!["publish.yml -> publish-csharp.yml -> upload".into()];
+    assert_eq!(
+        nuget_policy::workflow_identity("js.yml", &chains, &[]).unwrap(),
+        "publish-csharp.yml"
+    );
+    assert_eq!(
+        nuget_policy::workflow_identity("js.yml", &[], &[]).unwrap(),
+        "js.yml"
+    );
+    assert!(nuget_policy::workflow_identity(
+        "js.yml",
+        &["a.yml -> push".into(), "b.yml -> push".into()],
+        &[]
+    )
+    .is_err());
+    assert!(nuget_policy::workflow_identity(
+        "js.yml",
+        &chains,
+        &["the publishing jobs use different environments".into()]
+    )
+    .is_err());
+}

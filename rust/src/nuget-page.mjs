@@ -10,6 +10,34 @@ export default function nugetPage(expected, create = false) {
   }
   const read = (object, name) =>
     typeof object?.[name] === "function" ? object[name]() : object?.[name];
+  // Scope labels and radio values are rendered by the same server formatter.
+  // Normalize persisted labels through that mapping, never through mutable drafts.
+  const scopeLabels = new Map();
+  for (const input of document.querySelectorAll?.(
+    'input[type="radio"], input[type="checkbox"]',
+  ) ?? []) {
+    const label = input
+      .closest("label")
+      ?.querySelector("span")
+      ?.textContent.trim();
+    const binding = input.getAttribute("data-bind") ?? "";
+    const scope = input.value?.startsWith("package:")
+      ? input.value
+      : binding.includes("UnlistScopeChecked")
+        ? "package:unlist"
+        : binding.includes("StageScopeChecked")
+          ? "package:stage"
+          : null;
+    if (label && scope) {
+      scopeLabels.set(label, scope);
+    }
+  }
+  const savedScopes = (policy) =>
+    (read(policy, "PolicyScopes") ?? []).map((scope) =>
+      scope.startsWith("package:")
+        ? scope
+        : (scopeLabels.get(scope) ?? `unresolved:${scope}`),
+    );
   const policies = model
     .Policies()
     .filter((policy) => read(policy, "PublisherName") === "GitHubActions")
@@ -23,7 +51,7 @@ export default function nugetPage(expected, create = false) {
       workflow: read(policy.gitHub, "WorkflowFile"),
       environment: read(policy.gitHub, "Environment") ?? "",
       package_ids: read(policy, "PolicySubjects") ?? [],
-      operations: read(policy, "PolicyScopes") ?? [],
+      operations: savedScopes(policy),
       activation: !read(policy, "IsOwnerValid")
         ? "inactive"
         : read(policy.gitHub, "IsPermanentlyEnabled")
@@ -90,7 +118,9 @@ export default function nugetPage(expected, create = false) {
   draft.PushScopeChecked(true);
   draft.PushScope(expected.operations[0]);
   draft.UnlistScopeChecked(false);
-  draft.StageScopeChecked(false);
+  if (typeof draft.StageScopeChecked === "function") {
+    draft.StageScopeChecked(false);
+  }
   draft.ScopeSubjectsInput(expected.package_ids.join("\n"));
   if (!draft.Valid()) {
     return { ...result, error: "NuGet rejected the exact policy fields" };

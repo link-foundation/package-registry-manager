@@ -130,7 +130,11 @@ impl Session<'_> {
         }
         expected["organization"] = json!(publisher.organization);
         expected["repository"] = json!(publisher.repository);
-        expected["workflow"] = json!(publisher.workflow);
+        expected["workflow"] = json!(crate::nuget_policy::workflow_identity(
+            &publisher.workflow,
+            &self.plan.package.workflow_callees,
+            &self.plan.package.warnings
+        )?);
         expected["environment"] = json!(publisher.environment);
         expected["owner_id"] = json!(repository["owner"]["id"]
             .as_u64()
