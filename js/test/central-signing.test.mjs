@@ -1,0 +1,122 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { readFileSync } from "node:fs";
+import { provisionSigning } from "../src/central-gpg.mjs";
+
+const execute = promisify(execFile);
+const gpgAvailable = await execute("gpg", ["--version"]).then(
+  () => true,
+  () => false,
+);
+
+test(
+  "GnuPG creates a one-year RSA4096 key, signs, independently verifies and reuses proof",
+  { skip: !gpgAvailable, timeout: 90000 },
+  async () => {
+    // Only the external keyserver is replaced; generation, encryption, export,
+    // detached signing and independent verification use the real GnuPG binary.
+    let publicKey;
+    const calls = [];
+    const homes = new Set();
+    const run = async (program, args, input = "", options = {}) => {
+      calls.push([program, ...args]);
+      if (program === "gpg") {
+        homes.add(options.cwd);
+      }
+      const send = args.indexOf("--send-keys");
+      const receive = args.indexOf("--recv-keys");
+      if (send >= 0) {
+        publicKey = await run(
+          "gpg",
+          ["--homedir", ".", "--armor", "--export", args[send + 1]],
+          "",
+          options,
+        );
+        assert.match(publicKey, /BEGIN PGP PUBLIC KEY BLOCK/);
+        assert.doesNotMatch(publicKey, /PRIVATE KEY/);
+        return "";
+      }
+      if (receive >= 0) {
+        return run(
+          "gpg",
+          ["--homedir", ".", "--batch", "--import"],
+          publicKey,
+          options,
+        );
+      }
+      return new Promise((resolve, reject) => {
+        const child = execFile(
+          program,
+          args,
+          { ...options, maxBuffer: 2 * 1024 * 1024 },
+          (error, stdout, stderr) => {
+            if (!error) {
+              resolve(stdout);
+              return;
+            }
+            // Only synthetic test keys are used. Keep stage and GPG diagnostics
+            // for cross-platform failures; never include stdin or private armor.
+            const diagnostic = stderr.replace(
+              /-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]*/g,
+              "[REDACTED]",
+            );
+            reject(
+              new Error(
+                `test GPG command failed (${args.find((arg) => ["--quick-generate-key", "--import", "--export-secret-keys", "--verify", "--detach-sign", "--list-keys", "--list-secret-keys"].includes(arg)) ?? program}): ${input ? diagnostic.replaceAll(input.trim(), "[REDACTED]") : diagnostic}`,
+              ),
+            );
+          },
+        );
+        child.stdin.on("error", () => {});
+        child.stdin.end(input);
+      });
+    };
+    const before = Date.now();
+    const result = await provisionSigning(
+      {
+        generate: true,
+        identity: "Central acme/library <publishing@example.invalid>",
+      },
+      "acme/library",
+      null,
+      run,
+    );
+    assert.match(result.private_key, /BEGIN PGP PRIVATE KEY BLOCK/);
+    assert.ok(result.passphrase.length >= 32);
+    assert.ok(Date.parse(result.proof.expires_at) > before + 364 * 86400000);
+    assert.ok(Date.parse(result.proof.expires_at) < before + 367 * 86400000);
+    assert.ok(
+      calls.some((args) => args.includes("rsa4096") && args.includes("1y")),
+    );
+    const repeated = await provisionSigning(
+      {},
+      "acme/library",
+      result.proof,
+      run,
+    );
+    assert.equal(repeated.private_key, undefined);
+    assert.equal(repeated.proof.fingerprint, result.proof.fingerprint);
+    await assert.rejects(
+      provisionSigning({}, "other/repository", result.proof, run),
+      /identity mismatch/,
+    );
+    for (const home of homes) {
+      assert.throws(() => readFileSync(home), { code: "ENOENT" });
+    }
+  },
+);
+
+test("shared Central browser and GPG adapters ship identically in both runtimes", () => {
+  for (const file of [
+    "central-page.mjs",
+    "central-token-page.mjs",
+    "central-gpg.mjs",
+  ]) {
+    assert.equal(
+      readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8"),
+      readFileSync(new URL(`../../rust/src/${file}`, import.meta.url), "utf8"),
+    );
+  }
+});

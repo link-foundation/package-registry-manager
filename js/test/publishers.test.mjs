@@ -548,3 +548,32 @@ test("warns when an npm wrapper stops tracking its main package version (#36)", 
       ),
   );
 });
+
+test("NuGet traces nested reusable login identity without changing the retry caller", async () => {
+  const root = await repository({
+    "Lib.csproj":
+      "<Project><PropertyGroup><PackageId>Acme.Lib</PackageId><Version>1.0.0</Version></PropertyGroup></Project>",
+    ".github/workflows/js.yml":
+      "on: push\npermissions:\n  id-token: write\njobs:\n  release:\n    uses: ./.github/workflows/publish.yml\n",
+    ".github/workflows/publish.yml":
+      "on: workflow_call\njobs:\n  csharp:\n    uses: ./.github/workflows/publish-csharp.yml\n",
+    ".github/workflows/publish-csharp.yml":
+      "on: workflow_call\njobs:\n  upload:\n    environment: nuget\n    steps:\n      - uses: NuGet/login@pinned\n      - run: dotnet nuget push packages/*.nupkg\n",
+  });
+  const detected = await detectPublisher(
+    root,
+    await readWorkflows(root),
+    "nuget",
+  );
+  assert.equal(detected.workflow, "js.yml");
+  assert.equal(detected.environment, "nuget");
+  assert.deepEqual(detected.callees, [
+    "publish.yml -> publish-csharp.yml -> upload",
+  ]);
+  const { nugetWorkflowIdentity } = await import("../src/nuget-policy.mjs");
+  assert.equal(
+    nugetWorkflowIdentity(detected, { workflow_callees: detected.callees })
+      .workflow,
+    "publish-csharp.yml",
+  );
+});

@@ -15,7 +15,7 @@ const expected = {
   package_ids: ["Org.Library"],
   operations: ["package:pushversion"],
 };
-function page(username, policies = []) {
+function page(username, policies = [], { stage = true, labels = [] } = {}) {
   const values = {};
   const observable = (field, value) => {
     values[field] = value;
@@ -55,6 +55,9 @@ function page(username, policies = []) {
   ]) {
     draft.gitHub[field] = observable(field, "");
   }
+  if (!stage) {
+    delete draft.StageScopeChecked;
+  }
   const model = {
     Policies: () => policies,
     NewPolicy: () => draft,
@@ -63,6 +66,12 @@ function page(username, policies = []) {
   const context = {
     document: {
       body: {},
+      querySelectorAll: () =>
+        labels.map(([value, label, binding = ""]) => ({
+          value,
+          closest: () => ({ querySelector: () => ({ textContent: label }) }),
+          getAttribute: () => binding,
+        })),
       querySelector: () => (username ? { textContent: username } : null),
     },
     ko: { dataFor: () => model },
@@ -123,5 +132,45 @@ test("NuGet browser adapter is identical in both ports", () => {
       new URL("../../rust/src/nuget-page.mjs", import.meta.url),
       "utf8",
     ),
+  );
+});
+
+test("current Gallery without staging still submits exactly one push scope", () => {
+  const { run, values } = page("profile", [], { stage: false });
+  assert.equal(run(true).submitted, true);
+  assert.equal(values.PushScope, "package:pushversion");
+  assert.equal(values.UnlistScopeChecked, false);
+  assert.equal(values.ScopeSubjectsInput, "Org.Library");
+});
+test("persisted labels normalize from server controls, independent of pending edits", () => {
+  const saved = {
+    PublisherName: () => "GitHubActions",
+    PolicyScopes: () => ["Push only new package versions"],
+    PendingPolicyScopes: () => ["package:push", "package:unlist"],
+    PushScope: () => "package:push",
+    gitHub: {},
+  };
+  const labels = [["package:pushversion", "Push only new package versions"]];
+  assert.deepEqual(
+    Array.from(
+      page("profile", [saved], { labels }).run().policies[0].operations,
+    ),
+    ["package:pushversion"],
+  );
+  saved.PolicyScopes = () => ["Publier les nouvelles versions", "Retirer"];
+  labels.push(
+    ["package:pushversion", "Publier les nouvelles versions"],
+    ["on", "Retirer", "checked: UnlistScopeChecked"],
+  );
+  assert.deepEqual(
+    Array.from(
+      page("profile", [saved], { labels }).run().policies[0].operations,
+    ),
+    ["package:pushversion", "package:unlist"],
+  );
+  saved.PolicyScopes = () => ["unknown label"];
+  assert.match(
+    page("profile", [saved], { labels }).run().policies[0].operations[0],
+    /^unresolved:/,
   );
 });

@@ -13,7 +13,7 @@ use anyhow::Result;
 use base64::Engine;
 use package_registry_manager::central_packagist::{
     central_pair_preflight, retry_causal_jobs, run_generated_step, store_central_pair,
-    CentralPairStart, StepContext, CENTRAL_PACKAGIST_STEPS,
+    store_central_pair_with_expiry, CentralPairStart, StepContext, CENTRAL_PACKAGIST_STEPS,
 };
 use package_registry_manager::github::GithubGateway;
 use package_registry_manager::registry_state::{Endpoints, RegistryClient};
@@ -110,6 +110,8 @@ struct FakeGithub {
     logs: BTreeMap<u64, String>,
     verifies: Mutex<Vec<Value>>,
     writes: Mutex<Vec<String>>,
+    expiries: Mutex<Vec<String>>,
+    expiry: Option<String>,
     /// Whether stored secrets become readable metadata.
     reads_back_writes: bool,
 }
@@ -129,7 +131,17 @@ impl GithubGateway for FakeGithub {
                     Value::Null
                 },
             ),
+            ("variable", "get") => Ok(self
+                .expiry
+                .as_ref()
+                .map_or(Value::Null, |expiry| json!({"value":expiry}))),
             ("secret", "set") => {
+                if let Some(index) = args.iter().position(|arg| arg == "--expires-at") {
+                    self.expiries
+                        .lock()
+                        .expect("lock")
+                        .push(args[index + 1].clone());
+                }
                 assert!(input.is_some(), "secret values go on stdin");
                 self.writes.lock().expect("lock").push(args[2].clone());
                 Ok(json!({"changed": true}))
@@ -244,7 +256,7 @@ async fn a_root_pom_alone_never_certifies_the_kotlin_variants() {
         false,
     )
     .await;
-    assert_eq!(result["status"], "partial", "{result}");
+    assert_eq!(result["status"], "root-metadata-missing", "{result}");
 }
 
 #[tokio::test]
@@ -543,4 +555,179 @@ async fn a_stored_central_pair_is_read_back_before_retrying_only_causal_jobs() {
     assert_eq!(*github.writes.lock().expect("lock"), names);
     assert_eq!(result["retry"]["jobs"], json!([1]));
     assert!(!result.to_string().contains("\"u\"") && !result.to_string().contains("\"p\""));
+}
+
+#[tokio::test]
+async fn real_gradle_metadata_pointer_graph_and_publication_failures() {
+    let root: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/gradle-publication/root.module.json"
+    ))
+    .unwrap();
+    let jvm: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/gradle-publication/jvm.module.json"
+    ))
+    .unwrap();
+    let mut root = root;
+    root["variants"].as_array_mut().unwrap().retain(|v| {
+        v.get("available-at").is_none()
+            || v["available-at"]["module"]
+                .as_str()
+                .is_some_and(|m| m.ends_with("-jvm"))
+    });
+    let mut plan = plan(Registry::MavenCentral);
+    let step = plan
+        .steps
+        .iter_mut()
+        .find(|s| s.id == "verify-central-publication")
+        .unwrap();
+    step.details.insert("coordinates".into(), json!({"group":"io.github.link-foundation","artifact":"links-notation-kotlin","version":"0.31.0"}));
+    step.details.insert(
+        "variants".into(),
+        json!(["io.github.link-foundation:links-notation-kotlin-jvm"]),
+    );
+    for case in [
+        "verified",
+        "wrong-version",
+        "object-module",
+        "missing-binary",
+        "missing-module",
+        "invalid-json",
+        "transport",
+        "missing-platform",
+        "absent-platform-fixture",
+    ] {
+        let mut document = root.clone();
+        if case == "wrong-version" {
+            document["variants"][2]["available-at"]["version"] = json!("0.30.0");
+        }
+        if case == "object-module" {
+            document["variants"][2]["available-at"]["module"] = json!({"name":"wrong"});
+        }
+        let mut routes = vec![];
+        if case == "missing-binary" {
+            routes.push(("-jvm-0.31.0.jar".into(), 404, Value::Null));
+        }
+        let module_status = match case {
+            "missing-module" => 404,
+            "transport" => 503,
+            _ => 200,
+        };
+        routes.push((
+            "links-notation-kotlin-0.31.0.module".into(),
+            module_status,
+            if case == "invalid-json" {
+                json!("not metadata")
+            } else {
+                document
+            },
+        ));
+        let absent: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/gradle-publication/missing-platform.json"
+        ))
+        .unwrap();
+        routes.push((
+            "-jvm-0.31.0.module".into(),
+            if case == "absent-platform-fixture" {
+                404
+            } else {
+                200
+            },
+            jvm.clone(),
+        ));
+        routes.push((".pom".into(), 200, Value::Null));
+        routes.push((".jar".into(), 200, Value::Null));
+        let mut selected = plan.clone();
+        if case == "missing-platform" {
+            selected
+                .steps
+                .iter_mut()
+                .find(|s| s.id == "verify-central-publication")
+                .unwrap()
+                .details
+                .insert(
+                    "variants".into(),
+                    json!(["io.github.link-foundation:links-notation-kotlin-js"]),
+                );
+        }
+        let result = run(
+            &FakeGithub::default(),
+            &client(routes),
+            &selected,
+            "verify-central-publication",
+            false,
+        )
+        .await;
+        let expected = match case {
+            "wrong-version" | "object-module" | "invalid-json" => "malformed-metadata",
+            "missing-module" => "root-metadata-missing",
+            "missing-binary" | "missing-platform" | "absent-platform-fixture" => "partial",
+            "transport" => "transport-unknown",
+            _ => "verified",
+        };
+        assert_eq!(result["status"], expected, "{case}: {result}");
+        if case == "absent-platform-fixture" {
+            assert_eq!(result["status"], absent["expected_status"]);
+            assert!(result["missing"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains(absent["platform"].as_str().unwrap())));
+        }
+        assert_eq!(result["evidence"]["signatures"], "unverified");
+        if case == "verified" {
+            assert_eq!(result["files"], 4);
+        }
+    }
+}
+
+#[tokio::test]
+async fn central_expiry_is_preserved_for_storage_and_second_setup() {
+    let names = ["CENTRAL_USERNAME", "CENTRAL_TOKEN"].map(String::from);
+    let expiry = "2099-01-01T00:00:00Z";
+    let github = FakeGithub {
+        reads_back_writes: true,
+        expiry: Some(expiry.into()),
+        ..FakeGithub::default()
+    };
+    let client = client(Vec::new());
+    let plan = plan(Registry::MavenCentral);
+    let context = StepContext {
+        github: &github,
+        client: &client,
+        plan: &plan,
+        cwd: Path::new("."),
+        wait_timeout: Duration::from_secs(5),
+    };
+    let result = store_central_pair_with_expiry(
+        &context,
+        "link-foundation/links-notation",
+        &names,
+        ["private-user", "private-token"],
+        Some(expiry),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["expiry"]["expires_at"], expiry);
+    assert_eq!(*github.expiries.lock().unwrap(), [expiry, expiry]);
+    let CentralPairStart::Done(second) = central_pair_preflight(
+        &github,
+        &plan,
+        step(&plan, "ensure-central-credential-pair"),
+        false,
+        Path::new("."),
+    )
+    .await
+    .unwrap() else {
+        panic!("existing pair must not regenerate")
+    };
+    assert_eq!(second["status"], "present");
+    assert_eq!(second["expiry"]["expires_at"], expiry);
+    assert_eq!(github.writes.lock().unwrap().len(), 2);
+    assert!(
+        !result.to_string().contains("private-user")
+            && !result.to_string().contains("private-token")
+    );
 }

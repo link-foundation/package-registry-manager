@@ -60,3 +60,35 @@ test("NuGet publication controller is identical in both ports", () => {
     ),
   );
 });
+
+test("NuGet resolves the actual nested publishing callee while keeping the caller intact", async () => {
+  const { nugetWorkflowIdentity } = await import("../src/nuget-policy.mjs");
+  const publisher = {
+    workflow: "js.yml",
+    environment: "nuget",
+    organization: "acme",
+    repository: "library",
+  };
+  assert.equal(
+    nugetWorkflowIdentity(publisher, {
+      workflow_callees: ["publish.yml -> publish-csharp.yml -> upload"],
+    }).workflow,
+    "publish-csharp.yml",
+  );
+  assert.equal(publisher.workflow, "js.yml");
+  assert.equal(nugetWorkflowIdentity(publisher, {}).workflow, "js.yml");
+  assert.throws(
+    () =>
+      nugetWorkflowIdentity(publisher, {
+        workflow_callees: ["a.yml -> push", "b.yml -> push"],
+      }),
+    /ambiguous/,
+  );
+  assert.throws(
+    () =>
+      nugetWorkflowIdentity(publisher, {
+        warnings: ["the publishing jobs use different environments"],
+      }),
+    /ambiguous/,
+  );
+});

@@ -130,7 +130,11 @@ impl Session<'_> {
         }
         expected["organization"] = json!(publisher.organization);
         expected["repository"] = json!(publisher.repository);
-        expected["workflow"] = json!(publisher.workflow);
+        expected["workflow"] = json!(crate::nuget_policy::workflow_identity(
+            &publisher.workflow,
+            &self.plan.package.workflow_callees,
+            &self.plan.package.warnings
+        )?);
         expected["environment"] = json!(publisher.environment);
         expected["owner_id"] = json!(repository["owner"]["id"]
             .as_u64()
@@ -190,14 +194,17 @@ impl Session<'_> {
             .context("NuGet policies unavailable")?;
         let mut policy_changed = false;
         let mut state = crate::nuget_policy::state(policies, &expected, account)?;
-        if state["status"] == "missing-or-mismatched" {
+        if matches!(
+            state["status"].as_str(),
+            Some("missing-or-mismatched" | "scope-mismatch" | "shadowed")
+        ) {
             let submitted = self
                 .automated()
                 .await?
                 .evaluate(&script(&expected, true))
                 .await?;
             if submitted["submitted"] != true || !submitted["error"].is_null() {
-                bail!("NuGet policy was not created: {}", submitted["error"]);
+                bail!("NuGet policy was not saved: {}", submitted["error"]);
             }
             loop {
                 tokio::time::sleep(self.options.poll_interval).await;
@@ -207,13 +214,13 @@ impl Session<'_> {
                     .evaluate(&script(&expected, false))
                     .await?;
                 if !pending["error"].is_null() {
-                    bail!("NuGet policy creation failed: {}", pending["error"]);
+                    bail!("NuGet policy save failed: {}", pending["error"]);
                 }
                 if pending["pending"] != true {
                     break;
                 }
                 if tokio::time::Instant::now() >= deadline {
-                    bail!("NuGet policy creation remains pending");
+                    bail!("NuGet policy save remains pending");
                 }
             }
             snapshot = self.inspect_nuget(&expected).await?;

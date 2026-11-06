@@ -1,7 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import nugetPage from "./nuget-page.mjs";
-import { validateNugetPolicy, nugetPolicyState } from "./nuget-policy.mjs";
+import {
+  validateNugetPolicy,
+  nugetPolicyState,
+  nugetWorkflowIdentity,
+} from "./nuget-policy.mjs";
 import { githubServices } from "./github.mjs";
 import { offerSignInImport, signInDomains } from "./sign-in-import.mjs";
 
@@ -32,7 +36,7 @@ export async function nugetSetupPolicy(session, github) {
   );
   const expected = validateNugetPolicy({
     ...settings,
-    ...publisher,
+    ...nugetWorkflowIdentity(publisher, session.plan.package),
     username: settings.username,
     package_owner: settings.package_owner,
     package_ids: settings.package_ids ?? [session.plan.package.name],
@@ -108,11 +112,15 @@ export async function configureNuget(session) {
   }
   let policyChanged = false;
   let state = nugetPolicyState(snapshot.policies, expected, snapshot.username);
-  if (state.status === "missing-or-mismatched") {
+  if (
+    ["missing-or-mismatched", "scope-mismatch", "shadowed"].includes(
+      state.status,
+    )
+  ) {
     const submitted = await session.automation.evaluate(script(true));
     if (!submitted.submitted || submitted.error) {
       throw new Error(
-        `NuGet policy was not created: ${submitted.error ?? "unsupported page"}`,
+        `NuGet policy was not saved: ${submitted.error ?? "unsupported page"}`,
       );
     }
     while (true) {
@@ -121,13 +129,13 @@ export async function configureNuget(session) {
       );
       const pending = await session.automation.evaluate(script());
       if (pending.error) {
-        throw new Error(`NuGet policy creation failed: ${pending.error}`);
+        throw new Error(`NuGet policy save failed: ${pending.error}`);
       }
       if (!pending.pending) {
         break;
       }
       if (Date.now() >= deadline) {
-        throw new Error("NuGet policy creation remains pending");
+        throw new Error("NuGet policy save remains pending");
       }
     }
     snapshot = await inspect();

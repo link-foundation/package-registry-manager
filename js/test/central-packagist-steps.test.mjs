@@ -41,7 +41,15 @@ function fakeGithub({
 } = {}) {
   const writes = [];
   const verifies = [];
+  const variables = new Map();
   return {
+    variables: () => ({
+      get: async (name) => variables.get(name) ?? null,
+      ensure: async (name, value) => {
+        variables.set(name, { value });
+        return { verified: true };
+      },
+    }),
     writes,
     verifies,
     secrets: (scope) => ({
@@ -53,8 +61,15 @@ function fakeGithub({
         }
         return secrets[name] ? { name } : null;
       },
-      set: async (name, value) => {
-        writes.push({ name, length: value.length });
+      set: async (name, value, options = {}) => {
+        writes.push({
+          name,
+          length: value.length,
+          expiresAt: options.expiresAt,
+        });
+        if (options.expiresAt) {
+          variables.set(`${name}_EXPIRES_AT`, { value: options.expiresAt });
+        }
         secrets[name] = true;
         return { name, changed: true };
       },
@@ -231,7 +246,7 @@ test("Central namespace and signing stay incomplete without read-back evidence",
   const github = fakeGithub({
     secrets: { GPG_PRIVATE_KEY: 1, GPG_PASSPHRASE: 1 },
   });
-  const { instance } = session("maven-central", { github });
+  const { instance } = session("maven-central", { github, noBrowser: true });
   for (const id of ["verify-namespace", "ensure-signing-key"]) {
     const result = await instance.runStep(
       instance.plan.steps.find((s) => s.id === id),
@@ -251,7 +266,7 @@ test("Central publication: a root POM alone never certifies the Kotlin variants"
   const step = instance.plan.steps.find(
     (s) => s.id === "verify-central-publication",
   );
-  assert.equal((await instance.runStep(step)).status, "partial");
+  assert.equal((await instance.runStep(step)).status, "root-metadata-missing");
 });
 
 const packagist = "repo.packagist.org/p2/link-foundation/links-notation";
@@ -461,5 +476,68 @@ test("SwiftPM consumer: a failed or skipped consumer step keeps the release unve
       (s) => s.id === "verify-swift-consumer",
     );
     assert.equal((await instance.runStep(step)).status, status, conclusion);
+  }
+});
+
+test("Central token lifetime survives encrypted pair storage and an idempotent second setup", async () => {
+  const github = fakeGithub();
+  const expiry = new Date(Date.now() + 30 * 86400000).toISOString();
+  const { instance, logs } = session("maven-central", {
+    github,
+    yes: true,
+    noRetry: true,
+  });
+  let browserOpens = 0;
+  instance.automatedPage = async () => {
+    browserOpens++;
+    return {
+      goto: async () => {},
+      evaluate: async () => ({
+        username: "private-user",
+        password: "private-token",
+        expires_at: expiry,
+        token_id: "id-1",
+        token_name: "library-publishing",
+      }),
+    };
+  };
+  const step = instance.plan.steps.find(
+    (entry) => entry.id === "ensure-central-credential-pair",
+  );
+  const first = await instance.runStep(step);
+  assert.equal(first.expiry.expires_at, expiry);
+  assert.equal(first.expiry.token_name, "library-publishing");
+  assert.ok(github.writes.every((entry) => entry.expiresAt === expiry));
+  const identity = JSON.parse(
+    (await github.variables().get("CENTRAL_TOKEN_IDENTITY")).value,
+  );
+  assert.equal(identity.name, "library-publishing");
+  const second = await instance.runStep(step);
+  assert.equal(second.expiry.status, "recorded");
+  assert.equal(second.expiry.expires_at, expiry);
+  assert.equal(browserOpens, 1);
+  assert.equal(github.writes.length, 2);
+  assert.doesNotMatch(
+    JSON.stringify([first, second, logs]),
+    /private-user|private-token/,
+  );
+});
+
+test("Central refuses a revoked or expired pair without storing values", async () => {
+  for (const token of [
+    { revoked: true },
+    { expires_at: "2020-01-01T00:00:00Z" },
+  ]) {
+    const github = fakeGithub();
+    const { instance } = session("maven-central", { github, yes: true });
+    instance.automatedPage = async () => ({
+      goto: async () => {},
+      evaluate: async () => ({ username: "user", password: "value", ...token }),
+    });
+    const step = instance.plan.steps.find(
+      (entry) => entry.id === "ensure-central-credential-pair",
+    );
+    assert.equal((await instance.runStep(step)).status, "unverified");
+    assert.equal(github.writes.length, 0);
   }
 });

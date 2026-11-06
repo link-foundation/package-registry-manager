@@ -53,13 +53,13 @@ export function validateNugetPolicy(policy) {
   return policy;
 }
 
-/** Discover an equivalent policy before any creation; activation is fresh evidence. */
+/** Gallery and its OIDC evaluator order by creation, before checking package scopes. */
 export function nugetPolicyState(policies, expected, actualUsername) {
   validateNugetPolicy(expected);
   if (actualUsername?.toLowerCase() !== expected.username.toLowerCase()) {
     return { status: "wrong-account", verified: false };
   }
-  const fields = ["package_owner", "organization", "repository"];
+  const fields = ["organization", "repository"];
   const matches = policies.filter(
     (policy) =>
       fields.every(
@@ -70,33 +70,58 @@ export function nugetPolicyState(policies, expected, actualUsername) {
       ["workflow", "environment"].every(
         (field) =>
           String(policy[field] ?? "") === String(expected[field] ?? ""),
-      ) &&
-      ["package_ids", "operations"].every(
-        (field) =>
-          JSON.stringify(
-            [...(policy[field] ?? [])].map((s) => s.toLowerCase()).sort(),
-          ) ===
-          JSON.stringify(
-            [...expected[field]].map((s) => s.toLowerCase()).sort(),
-          ),
       ),
   );
-  if (matches.length > 1) {
+  if (
+    matches.length > 1 &&
+    (matches.some(
+      (policy) =>
+        !Number.isSafeInteger(policy.evaluation_order) ||
+        policy.evaluation_order < 0,
+    ) ||
+      new Set(matches.map((policy) => policy.evaluation_order)).size !==
+        matches.length)
+  ) {
     return { status: "duplicate", verified: false };
   }
   if (!matches.length) {
     return { status: "missing-or-mismatched", verified: false };
   }
-  const policy = matches[0];
+  matches.sort((a, b) => a.evaluation_order - b.evaluation_order);
+  const eligible = matches.filter((policy) => policy.activation !== "inactive");
+  const policy = eligible[0] ?? matches[0];
+  if (
+    String(policy.package_owner ?? "").toLowerCase() !==
+    expected.package_owner.toLowerCase()
+  ) {
+    return { status: "owner-conflict", verified: false, policy_id: policy.id };
+  }
   const bound = ["owner_id", "repository_id"].every(
     (field) => String(policy[field] ?? "") === String(expected[field]),
   );
+  const scopesMatch = (candidate) =>
+    ["package_ids", "operations"].every(
+      (field) =>
+        JSON.stringify(
+          [...(candidate[field] ?? [])].map((s) => s.toLowerCase()).sort(),
+        ) ===
+        JSON.stringify([...expected[field]].map((s) => s.toLowerCase()).sort()),
+    );
+  const shadowed = eligible
+    .filter((candidate) => candidate !== policy && scopesMatch(candidate))
+    .map((candidate) => candidate.id);
+  const status = !bound
+    ? "immutable-identity-unverified"
+    : !scopesMatch(policy)
+      ? shadowed.length
+        ? "shadowed"
+        : "scope-mismatch"
+      : (policy.activation ?? "unknown");
   return {
-    status: bound
-      ? (policy.activation ?? "unknown")
-      : "immutable-identity-unverified",
-    verified: bound && policy.activation === "active",
+    status,
+    verified: status === "active",
     policy_id: policy.id,
+    ...(shadowed.length ? { shadowed_policy_ids: shadowed } : {}),
   };
 }
 
@@ -195,4 +220,30 @@ export async function publishNugetArtifact(artifact, adapter) {
     publication: "unverified",
     trust_repaired: false,
   };
+}
+
+/** NuGet evaluates the publishing callee; CI retries still use the caller. */
+export function nugetWorkflowIdentity(publisher, pkg) {
+  const workflows = [
+    ...new Set(
+      (pkg.workflow_callees ?? []).map((chain) => {
+        const parts = chain.split(" -> ");
+        return parts.at(-2);
+      }),
+    ),
+  ];
+  if (
+    workflows.some((file) => !/^[\w.-]+\.ya?ml$/.test(file)) ||
+    workflows.length > 1 ||
+    (pkg.warnings ?? []).some(
+      (warning) =>
+        warning.includes("publishing jobs") &&
+        warning.includes("different environments"),
+    )
+  ) {
+    throw new Error(
+      "ambiguous NuGet publishing workflow or environment; select an exact publishing identity",
+    );
+  }
+  return { ...publisher, workflow: workflows[0] ?? publisher.workflow };
 }
