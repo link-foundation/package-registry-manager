@@ -33,10 +33,9 @@ export async function retryPackagistJobs(session) {
     branch: repo.default_branch,
     limit: 20,
   });
-  const run = runs
-    .filter((entry) => entry.conclusion === "failure")
-    .sort((a, b) => b.id - a.id)[0];
-  if (!run) {
+  // A newer success or in-progress run supersedes an older failure.
+  const run = [...runs].sort((a, b) => b.id - a.id)[0];
+  if (!run || run.conclusion !== "failure") {
     return { status: "not-needed" };
   }
   const causal = [];

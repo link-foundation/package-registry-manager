@@ -621,6 +621,15 @@ test("causal retry requires every configuration gate and freshly selects affecte
     );
     assert.equal(jobsRead, 1);
     assert.deepEqual(request.jobIds, [1, 3]);
+    f.session.options.github.runs.list = async () => [
+      { id: 78, conclusion: "success" },
+      { id: 77, conclusion: "failure" },
+    ];
+    assert.equal(
+      (await publication.retryPackagistJobs(f.session)).status,
+      "not-needed",
+    );
+    assert.equal(jobsRead, 1, "a superseded failure must not be retried");
   } finally {
     await f.cleanup();
   }
