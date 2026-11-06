@@ -44,7 +44,14 @@ export async function provisionSigning(
   priorProof,
   run = command,
 ) {
-  const directory = await mkdtemp(path.join(tmpdir(), "prm-central-gpg-"));
+  // macOS's per-user temp path can exceed the Unix-domain socket path limit
+  // once gpg-agent appends its socket name. /tmp keeps isolated homes short.
+  const directory = await mkdtemp(
+    path.join(
+      process.platform === "darwin" ? "/tmp" : tmpdir(),
+      "prm-central-gpg-",
+    ),
+  );
   const signer = path.join(directory, "signer");
   const verifier = path.join(directory, "verifier");
   await mkdir(signer, { mode: 0o700 });
