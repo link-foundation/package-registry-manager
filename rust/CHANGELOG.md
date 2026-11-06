@@ -86,6 +86,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.27.1] - 2026-11-06
+
+### Fixed
+
+- Handle optional NuGet Gallery scope controls and normalize saved policy scopes using server-rendered labels, independently of pending edits.
+- Resolve nested NuGet publishing workflow identities separately from the CI caller, retaining exact package scopes, activation and immutable GitHub identity checks.
+- Use the reviewed gh-manager 1.5.0 release in both runtimes for encrypted settings and verified expiry metadata.
+- Detect older NuGet identity matches shadowing renamed package scopes; edit the effective original in place, wait and reload, preserving its owner and GitHub identity and all unrelated policies.
+
+### Added
+
+- Verify authenticated Central namespace ownership before the first public artifact, with authorized GitHub proof setup and a durable cleanup obligation.
+- Reuse or explicitly provision first-release signing keys using GnuPG, verify detached signatures through an independent public keyring, and record encrypted signing settings with actual expiry metadata.
+
+### Fixed
+
+- Preserve server-reported Central token names and expiration dates for gh-manager health checks without rotating existing credential pairs.
+- Traverse realistic Gradle 1.1 metadata at the exact version, including string module pointers and platform metadata identifying its owning root; verify actual referenced files and keep missing delivery, malformed metadata and transport failures distinct.
+- Keep macOS signing keyrings in short temporary paths so GnuPG agent sockets fit platform limits; use relative paths for native and MSYS Windows GnuPG.
+
 ## [0.27.0] - 2026-11-03
 
 ### Added
