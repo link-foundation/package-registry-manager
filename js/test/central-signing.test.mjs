@@ -49,10 +49,23 @@ test(
           program,
           args,
           { maxBuffer: 2 * 1024 * 1024 },
-          (error, stdout) =>
-            error
-              ? reject(new Error("test GPG command failed"))
-              : resolve(stdout),
+          (error, stdout, stderr) => {
+            if (!error) {
+              resolve(stdout);
+              return;
+            }
+            // Only synthetic test keys are used. Keep stage and GPG diagnostics
+            // for cross-platform failures; never include stdin or private armor.
+            const diagnostic = stderr.replace(
+              /-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]*/g,
+              "[REDACTED]",
+            );
+            reject(
+              new Error(
+                `test GPG command failed (${args.find((arg) => ["--quick-generate-key", "--import", "--export-secret-keys", "--verify", "--detach-sign", "--list-keys", "--list-secret-keys"].includes(arg)) ?? program}): ${input ? diagnostic.replaceAll(input.trim(), "[REDACTED]") : diagnostic}`,
+              ),
+            );
+          },
         );
         child.stdin.on("error", () => {});
         child.stdin.end(input);

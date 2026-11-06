@@ -201,7 +201,7 @@ pub async fn publish(artifact: &str, adapter: &mut impl PublishAdapter) -> Resul
     )
 }
 
-/// NuGet evaluates the publishing callee; CI retries continue to use the caller.
+/// `NuGet` evaluates the publishing callee; CI retries continue to use the caller.
 pub fn workflow_identity(
     caller: &str,
     chains: &[String],

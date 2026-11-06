@@ -51,9 +51,8 @@ export async function provisionSigning(
     priorProof?.keyserver ??
     "hkps://keyserver.ubuntu.com";
   if (
-    !["hkps://keyserver.ubuntu.com", "hkps://keys.openpgp.org"].includes(
-      keyserver,
-    )
+    keyserver !== "hkps://keyserver.ubuntu.com" &&
+    keyserver !== "hkps://keys.openpgp.org"
   ) {
     await rm(directory, { recursive: true, force: true });
     throw new Error("use a supported Central public keyserver");

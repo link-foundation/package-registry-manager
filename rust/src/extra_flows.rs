@@ -57,7 +57,7 @@ pub fn maven_credential_steps(package: &Package) -> Vec<SetupStep> {
             "ensure-signing-key",
             &format!("Ensure the signing prerequisites {}", describe(&signing)),
             StepKind::Manual,
-            "Maven Central rejects unsigned artifacts. Provide an armored GPG private key whose public key is on a public keyserver, and its passphrase, as encrypted GitHub secrets; keys are never written to disk or printed.",
+            "Maven Central rejects unsigned artifacts. Configure central.signing to reuse local private material or explicitly authorize repository-specific key generation. Verify detached signing and independent public-key readback, store the signing pair encrypted with its actual expiry, and remove temporary private material.",
         )
         .confirmed()
         .detail("secrets", json!(signing))

@@ -5,7 +5,7 @@
 //! `configured` or `not-used` when fresh read-back evidence exists.
 use crate::github::GithubGateway;
 use crate::model::{Registry, SetupPlan, SetupStep};
-use crate::registry_state::{encode_uri_component, RegistryClient};
+use crate::registry_state::RegistryClient;
 use anyhow::Result;
 use regex::Regex;
 use serde_json::{json, Value};

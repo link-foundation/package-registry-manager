@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::process::Stdio;
 use tokio::{io::AsyncWriteExt, process::Command};
 
-/// The shared GnuPG driver receives private configuration on stdin only.
+/// The shared `GnuPG` driver receives private configuration on stdin only.
 async fn signing(
     settings: &Value,
     slug: &str,

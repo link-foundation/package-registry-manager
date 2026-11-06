@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import vm from "node:vm";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import centralPage from "../src/central-page.mjs";
@@ -194,4 +194,89 @@ test("token dialog records actual server expiry and name, never a guessed month"
   const unknown = await vm.runInNewContext(`(${readCentralPair})()`, context);
   assert.equal(unknown.expiry_status, "unknown");
   assert.equal(unknown.expires_at, undefined);
+});
+
+test("namespace ownership rejects organization mismatch and suspended accounts", async () => {
+  for (const [entry, expected, status] of [
+    [
+      { name: namespace, state: "VERIFIED", owningOrgName: "Other" },
+      { organization: "Acme" },
+      "wrong-organization",
+    ],
+    [
+      { name: namespace, state: "VERIFIED", userSuspended: true },
+      {},
+      "unverified",
+    ],
+  ]) {
+    const source = portal({ entries: [entry] });
+    const result = await vm.runInNewContext(
+      `(${centralPage})(${JSON.stringify({ namespace, ...expected })})`,
+      source.context,
+    );
+    assert.equal(result.status, status);
+  }
+});
+
+test("cleanup preserves a proof repository that has changed identity or gained content", async () => {
+  for (const changed of [{ id: 999 }, { size: 1 }]) {
+    const repository = await mkdtemp(path.join(tmpdir(), "prm-proof-guard-"));
+    const proof = {
+      namespace,
+      account: "github|123",
+      slug: "acme/proof",
+      id: 1,
+      owner_id: 12,
+      default_branch: "main",
+    };
+    const directory = path.join(repository, ".package-registry-manager");
+    await mkdir(directory);
+    await writeFile(
+      path.join(directory, "central-namespace-proof.json"),
+      JSON.stringify(proof),
+    );
+    const source = portal({
+      entries: [{ name: namespace, state: "VERIFIED" }],
+    });
+    let deleted = false;
+    const session = {
+      options: {
+        repository,
+        github: {
+          rest: {
+            request: async (_endpoint, options = {}) => {
+              if (options.method === "DELETE") deleted = true;
+              return {
+                id: 1,
+                owner: { id: 12 },
+                size: 0,
+                default_branch: "main",
+                ...changed,
+              };
+            },
+          },
+        },
+      },
+      plan: {},
+      automatedPage: async () => ({
+        goto: async () => {},
+        evaluate: (script) => vm.runInNewContext(script, source.context),
+      }),
+    };
+    try {
+      assert.equal(
+        (await verifyNamespace(session, { namespace })).cleanup.status,
+        "pending",
+      );
+      assert.equal(deleted, false);
+      assert.equal(
+        JSON.parse(
+          await readFile(path.join(directory, "central-namespace-proof.json")),
+        ).id,
+        1,
+      );
+    } finally {
+      await rm(repository, { recursive: true, force: true });
+    }
+  }
 });

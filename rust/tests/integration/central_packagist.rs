@@ -13,7 +13,7 @@ use anyhow::Result;
 use base64::Engine;
 use package_registry_manager::central_packagist::{
     central_pair_preflight, retry_causal_jobs, run_generated_step, store_central_pair,
-    CentralPairStart, StepContext, CENTRAL_PACKAGIST_STEPS,
+    store_central_pair_with_expiry, CentralPairStart, StepContext, CENTRAL_PACKAGIST_STEPS,
 };
 use package_registry_manager::github::GithubGateway;
 use package_registry_manager::registry_state::{Endpoints, RegistryClient};
@@ -110,6 +110,8 @@ struct FakeGithub {
     logs: BTreeMap<u64, String>,
     verifies: Mutex<Vec<Value>>,
     writes: Mutex<Vec<String>>,
+    expiries: Mutex<Vec<String>>,
+    expiry: Option<String>,
     /// Whether stored secrets become readable metadata.
     reads_back_writes: bool,
 }
@@ -129,7 +131,17 @@ impl GithubGateway for FakeGithub {
                     Value::Null
                 },
             ),
+            ("variable", "get") => Ok(self
+                .expiry
+                .as_ref()
+                .map_or(Value::Null, |expiry| json!({"value":expiry}))),
             ("secret", "set") => {
+                if let Some(index) = args.iter().position(|arg| arg == "--expires-at") {
+                    self.expiries
+                        .lock()
+                        .expect("lock")
+                        .push(args[index + 1].clone());
+                }
                 assert!(input.is_some(), "secret values go on stdin");
                 self.writes.lock().expect("lock").push(args[2].clone());
                 Ok(json!({"changed": true}))
@@ -669,4 +681,53 @@ async fn real_gradle_metadata_pointer_graph_and_publication_failures() {
             assert_eq!(result["files"], 4);
         }
     }
+}
+
+#[tokio::test]
+async fn central_expiry_is_preserved_for_storage_and_second_setup() {
+    let names = ["CENTRAL_USERNAME", "CENTRAL_TOKEN"].map(String::from);
+    let expiry = "2099-01-01T00:00:00Z";
+    let github = FakeGithub {
+        reads_back_writes: true,
+        expiry: Some(expiry.into()),
+        ..FakeGithub::default()
+    };
+    let client = client(Vec::new());
+    let plan = plan(Registry::MavenCentral);
+    let context = StepContext {
+        github: &github,
+        client: &client,
+        plan: &plan,
+        cwd: Path::new("."),
+        wait_timeout: Duration::from_secs(5),
+    };
+    let result = store_central_pair_with_expiry(
+        &context,
+        "link-foundation/links-notation",
+        &names,
+        ["private-user", "private-token"],
+        Some(expiry),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["expiry"]["expires_at"], expiry);
+    assert_eq!(*github.expiries.lock().unwrap(), [expiry, expiry]);
+    let CentralPairStart::Done(second) = central_pair_preflight(
+        &github,
+        &plan,
+        step(&plan, "ensure-central-credential-pair"),
+        false,
+        Path::new("."),
+    )
+    .await
+    .unwrap() else {
+        panic!("existing pair must not regenerate")
+    };
+    assert_eq!(second["status"], "present");
+    assert_eq!(second["expiry"]["expires_at"], expiry);
+    assert_eq!(github.writes.lock().unwrap().len(), 2);
+    assert!(
+        !result.to_string().contains("private-user")
+            && !result.to_string().contains("private-token")
+    );
 }
