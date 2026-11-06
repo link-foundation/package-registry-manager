@@ -62,6 +62,9 @@ comments and reviews were read (no comments/reviews at initial investigation).
   guessed timestamp from “one month”.
 - [Official GnuPG manual](https://www.gnupg.org/documentation/manuals/gnupg/GPG-Options.html)
   documents isolated homedirs, agent behavior and exact command options.
+- [MSYS2 path handling](https://www.msys2.org/docs/filesystem-paths/) explains
+  the native/Unix path boundary. GPG subprocesses work inside their keyring with
+  relative paths, supporting Git's MSYS GPG and native Windows GPG alike.
 - [Central GPG requirements](https://central.sonatype.org/publish/requirements/gpg/)
   specifies detached signatures, public keyservers and primary-key signing.
   Use installed GnuPG rather than introduce a crypto implementation/library.
@@ -109,7 +112,9 @@ comments and reviews were read (no comments/reviews at initial investigation).
   analyzer warning; direct string checks replace both. Rust doc lint corrected.
   Final current-head CI results are recorded in PR 87. Windows GPG
   diagnostics are restricted to synthetic test keys; actual signing diagnostics
-  remain private.
+  remain private. Windows CI reproduced Git's GPG treating a backslash homedir
+  as relative; the real signing test now uses per-keyring subprocess working
+  directories and relative proof paths, including when temp and repo drives differ.
 
 No live private account setup or keyserver propagation is inferred from mocks.
 No downstream package uploads are performed. The implementation adds the

@@ -19,36 +19,38 @@ test(
     // detached signing and independent verification use the real GnuPG binary.
     let publicKey;
     const calls = [];
-    const run = async (program, args, input = "") => {
+    const homes = new Set();
+    const run = async (program, args, input = "", options = {}) => {
       calls.push([program, ...args]);
+      if (program === "gpg") {
+        homes.add(options.cwd);
+      }
       const send = args.indexOf("--send-keys");
       const receive = args.indexOf("--recv-keys");
       if (send >= 0) {
-        const home = args[args.indexOf("--homedir") + 1];
-        publicKey = await run("gpg", [
-          "--homedir",
-          home,
-          "--armor",
-          "--export",
-          args[send + 1],
-        ]);
+        publicKey = await run(
+          "gpg",
+          ["--homedir", ".", "--armor", "--export", args[send + 1]],
+          "",
+          options,
+        );
         assert.match(publicKey, /BEGIN PGP PUBLIC KEY BLOCK/);
         assert.doesNotMatch(publicKey, /PRIVATE KEY/);
         return "";
       }
       if (receive >= 0) {
-        const home = args[args.indexOf("--homedir") + 1];
         return run(
           "gpg",
-          ["--homedir", home, "--batch", "--import"],
+          ["--homedir", ".", "--batch", "--import"],
           publicKey,
+          options,
         );
       }
       return new Promise((resolve, reject) => {
         const child = execFile(
           program,
           args,
-          { maxBuffer: 2 * 1024 * 1024 },
+          { ...options, maxBuffer: 2 * 1024 * 1024 },
           (error, stdout, stderr) => {
             if (!error) {
               resolve(stdout);
@@ -100,11 +102,7 @@ test(
       provisionSigning({}, "other/repository", result.proof, run),
       /identity mismatch/,
     );
-    const homes = calls
-      .filter(([program]) => program === "gpg")
-      .map((args) => args[args.indexOf("--homedir") + 1])
-      .filter(Boolean);
-    for (const home of new Set(homes)) {
+    for (const home of homes) {
       assert.throws(() => readFileSync(home), { code: "ENOENT" });
     }
   },

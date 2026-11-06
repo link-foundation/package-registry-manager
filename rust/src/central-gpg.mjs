@@ -5,9 +5,12 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 
 /** Run exact GPG arguments; private input/output and diagnostics are never logged. */
-async function command(program, args, input = "") {
+async function command(program, args, input = "", options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(program, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(program, args, {
+      ...options,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     const output = [];
     let length = 0;
     child.stdout.on("data", (chunk) => {
@@ -57,8 +60,12 @@ export async function provisionSigning(
     await rm(directory, { recursive: true, force: true });
     throw new Error("use a supported Central public keyserver");
   }
+  // Native Windows and MSYS GPG share relative paths but disagree on drive paths.
+  // Working inside the keyring avoids conversion and works across temp drives.
   const gpg = (home, args, input) =>
-    run("gpg", ["--homedir", home, "--batch", "--no-tty", ...args], input);
+    run("gpg", ["--homedir", ".", "--batch", "--no-tty", ...args], input, {
+      cwd: home,
+    });
   const listing = async (home, fingerprint) => {
     const result = await gpg(home, [
       "--with-colons",
@@ -105,7 +112,7 @@ export async function provisionSigning(
           const args = [
             "--batch",
             "--no-tty",
-            ...(settings.key_home ? ["--homedir", settings.key_home] : []),
+            ...(settings.key_home ? ["--homedir", "."] : []),
             "--pinentry-mode",
             "loopback",
             "--passphrase-fd",
@@ -114,7 +121,9 @@ export async function provisionSigning(
             "--export-secret-keys",
             fingerprint,
           ];
-          privateKey = await run("gpg", args, `${passphrase}\n`);
+          privateKey = await run("gpg", args, `${passphrase}\n`, {
+            cwd: settings.key_home,
+          });
         }
         await gpg(signer, ["--import"], privateKey);
       } else if (settings.generate === true) {
@@ -177,12 +186,12 @@ export async function provisionSigning(
           "--armor",
           "--detach-sign",
           "--output",
-          signatureFile,
-          dataFile,
+          "../proof.asc",
+          "../proof.txt",
         ],
         `${passphrase}\n`,
       );
-      await gpg(signer, ["--verify", signatureFile, dataFile]);
+      await gpg(signer, ["--verify", "../proof.asc", "../proof.txt"]);
       // send-keys exports public packets only; never upload the private armor.
       await gpg(signer, [
         "--keyserver",
@@ -244,8 +253,8 @@ export async function provisionSigning(
       "--status-fd",
       "1",
       "--verify",
-      signatureFile,
-      dataFile,
+      "../verify.asc",
+      "../verify.txt",
     ]);
     if (!status.includes(`[GNUPG:] VALIDSIG ${fingerprint} `)) {
       throw new Error("independent signature fingerprint verification failed");
@@ -253,9 +262,9 @@ export async function provisionSigning(
     return { proof, private_key: privateKey, passphrase };
   } finally {
     for (const home of [signer, verifier]) {
-      await run("gpgconf", ["--homedir", home, "--kill", "gpg-agent"]).catch(
-        () => {},
-      );
+      await run("gpgconf", ["--homedir", ".", "--kill", "gpg-agent"], "", {
+        cwd: home,
+      }).catch(() => {});
     }
     await rm(directory, { recursive: true, force: true });
   }
