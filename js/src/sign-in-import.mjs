@@ -27,6 +27,7 @@ export const SIGN_IN_DOMAINS = {
   rubygems: ["rubygems.org", "github.com"],
   nuget: ["nuget.org", "login.microsoftonline.com"],
   jsr: ["jsr.io", "github.com"],
+  packagist: ["packagist.org", "github.com"],
   "crates-io": ["crates.io", "github.com"],
   npm: ["npmjs.com"],
   pypi: ["pypi.org", "github.com"],

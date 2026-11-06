@@ -115,13 +115,6 @@ function buildPlan(inspection, packageInfo, options) {
     description,
     command: commandSpec,
   });
-  const browser = (id, title, description, url) => ({
-    id,
-    title,
-    kind: "browser",
-    description,
-    url,
-  });
   let steps;
 
   switch (packageInfo.registry) {
@@ -182,25 +175,7 @@ function buildPlan(inspection, packageInfo, options) {
       steps = tokenFlow(packageInfo);
       break;
     case "packagist":
-      steps = [
-        check(
-          "validate-package",
-          "Validate Composer metadata",
-          "Strictly validate composer.json before submitting it.",
-          command("composer", ["validate", "--strict"]),
-        ),
-        ...(packageInfo.exists_on_registry !== true
-          ? [
-              browser(
-                "submit-repository",
-                "Submit the repository to Packagist",
-                "Sign in and submit the public VCS repository URL. Packagist reads package versions from tags.",
-                "https://packagist.org/packages/submit",
-              ),
-            ]
-          : []),
-        ...packagistSteps(packageInfo),
-      ];
+      steps = packagistSteps(packageInfo);
       break;
     default:
       throw new Error(`no setup plan for registry ${packageInfo.registry}`);

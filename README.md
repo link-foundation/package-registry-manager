@@ -514,10 +514,33 @@ and the [complete requirement and verification inventory](docs/issue-86-requirem
 
 ### Packagist
 
-The CLI strictly validates `composer.json` and opens Packagist's submission
-page. Sign in, submit the public VCS repository URL, and enable the GitHub hook
-when prompted so Packagist observes new tags. See
-[Packagist package submission](https://packagist.org/about#how-to-submit-packages).
+Both CLIs validate the canonical root `composer.json` once and inspect the
+registered package's repository before submitting an absent package. The browser
+reuses its persistent sign-in and approved GitHub authorization; a stale OAuth
+callback starts a fresh login in that same profile. Authentication, account
+registration and unapproved grants pause for the user when required.
+
+Setup reads the **Safe API token** from the authenticated profile in memory,
+stores the selected username/token secrets encrypted through gh-manager, reads
+presence back and independently tests Bearer-authenticated update acceptance.
+The main token is read only for initial package submission and is never stored.
+GitHub hook setup preserves unrelated hooks, repairs the Packagist hook when
+needed, and verifies active JSON push settings and a fresh test delivery.
+
+After configuration is verified, only failed publisher/dependent audit jobs with
+causal log evidence are resumed. Registration and HTTP 202 queue acceptance do
+not establish publication: exact stable version, source SHA, isolated Composer
+installation and matching GitHub release remain separate gates. Delayed indexing,
+failed consumers and unreadable state keep setup incomplete. No tags or published
+packages are renamed, moved or re-uploaded.
+
+The Rust CLI embeds the same Packagist engine as the JS CLI and uses its native
+Browser Commander session through a private stdin protocol. Node/npm are required
+for the existing pinned gh-manager dependency. Both published distributions ship
+the engine; regression tests verify identical sources and installed-manager
+sealed-box encryption. See the [Packagist API](https://packagist.org/apidoc),
+[GitHub update integration](https://packagist.org/about#how-to-update-packages),
+and [verification inventory](docs/issue-88-requirements.md).
 
 ## Configuration
 

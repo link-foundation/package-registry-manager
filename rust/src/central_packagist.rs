@@ -13,11 +13,12 @@ use std::path::Path;
 use std::time::Duration;
 
 /// Generated Central, Packagist, `SwiftPM` and Gradle step ids with their own handlers.
-pub const CENTRAL_PACKAGIST_STEPS: [&str; 10] = [
+pub const CENTRAL_PACKAGIST_STEPS: [&str; 11] = [
     "ensure-central-credential-pair",
     "verify-namespace",
     "ensure-signing-key",
     "verify-central-publication",
+    "ensure-packagist-package",
     "verify-packagist-package",
     "packagist-github-hook",
     "packagist-update-api",
@@ -200,14 +201,15 @@ pub(crate) fn maven_path(
     )
 }
 
-/// Runs one generated step other than the Central pair, which needs the
-/// session's browser. `prior` holds earlier step results of this plan;
+/// Runs a generated step that does not need the session's browser.
+///
+/// Central and Packagist use the session. `prior` holds earlier step results;
 /// `release_verified` records a verified `SwiftPM` release.
 #[allow(clippy::future_not_send)]
 pub async fn run_generated_step(
     context: &StepContext<'_, impl GithubGateway>,
     step: &SetupStep,
-    prior: &[Value],
+    _prior: &[Value],
     release_verified: bool,
 ) -> Result<Value> {
     match step.id.as_str() {
@@ -216,9 +218,12 @@ pub async fn run_generated_step(
         ),
         "ensure-signing-key" => crate::central_signing::ensure(context, step, false).await,
         "verify-central-publication" => Ok(crate::central_publication::verify(context, step).await),
-        "verify-packagist-package" => Ok(verify_packagist_package(context).await),
-        "packagist-github-hook" => Ok(packagist_hook(step, prior)),
-        "packagist-update-api" => packagist_update_api(context, step).await,
+        "ensure-packagist-package"
+        | "verify-packagist-package"
+        | "packagist-github-hook"
+        | "packagist-update-api" => Ok(
+            json!({"status":"session-required","reason":"Packagist steps run through the shared engine and native browser session","stop":true}),
+        ),
         "verify-swift-release" => crate::swift_release::verify_swift_release(context, step).await,
         "verify-swift-consumer" => {
             crate::swift_release::verify_swift_consumer(context, step, release_verified).await
@@ -230,139 +235,6 @@ pub async fn run_generated_step(
             "stop": true,
         })),
     }
-}
-
-fn stable(version: &str) -> bool {
-    !Regex::new(r"(?i)^dev-|-dev$|[-.](?:alpha|beta|rc|dev)")
-        .expect("static pattern")
-        .is_match(version)
-}
-
-/// Exact stable tag read-back from Packagist's p2 metadata. Package
-/// existence or a dev branch never passes.
-#[allow(clippy::future_not_send)]
-async fn verify_packagist_package(context: &StepContext<'_, impl GithubGateway>) -> Value {
-    let item = &context.plan.package;
-    if item.manifest != "composer.json" {
-        return json!({
-            "status": "unsupported",
-            "reason": format!("{} is not the canonical root Composer descriptor Packagist reads", item.manifest),
-        });
-    }
-    let base = context
-        .client
-        .endpoints()
-        .base(Registry::Packagist)
-        .unwrap_or_default();
-    let tagged = http(
-        context.client,
-        &format!("{base}/p2/{}.json", item.name),
-        false,
-    )
-    .await;
-    match tagged.status {
-        Some(404) => {
-            return json!({"status":"unregistered","reason":format!("{} is not on Packagist", item.name)});
-        }
-        Some(status @ (401 | 403)) => {
-            return json!({"status":"auth-rejected","reason":format!("HTTP {status}")});
-        }
-        Some(200) if tagged.json.is_some() => {}
-        _ => {
-            return json!({
-                "status": "transport-unknown",
-                "reason": tagged.reason.clone().unwrap_or_else(|| format!("HTTP {}", tagged.shown())),
-            });
-        }
-    }
-    let versions: Vec<String> = tagged
-        .json
-        .as_ref()
-        .map_or(&Value::Null, |json| &json["packages"][&item.name])
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry["version"].as_str())
-        .filter(|version| !version.is_empty() && stable(version))
-        .map(str::to_owned)
-        .collect();
-    if versions.is_empty() {
-        let dev = http(
-            context.client,
-            &format!("{base}/p2/{}~dev.json", item.name),
-            false,
-        )
-        .await;
-        let has_dev = dev
-            .json
-            .as_ref()
-            .and_then(|json| json["packages"][&item.name].as_array())
-            .is_some_and(|entries| !entries.is_empty());
-        return json!({
-            "status": if has_dev { "dev-only" } else { "stable-version-missing" },
-            "reason": "no stable tagged version",
-        });
-    }
-    let Some(wanted) = item
-        .version
-        .as_deref()
-        .map(|version| version.trim_start_matches('v'))
-    else {
-        return json!({"status":"unknown","reason":"the expected version is unresolved","versions":versions});
-    };
-    if versions
-        .iter()
-        .any(|version| version.trim_start_matches('v') == wanted)
-    {
-        json!({"status":"verified","version":wanted})
-    } else {
-        json!({
-            "status": "stable-version-missing",
-            "reason": format!("{wanted} is not published; latest {}", versions[0]),
-        })
-    }
-}
-
-/// The GitHub hook is invisible to this tool: it stays a prerequisite.
-fn packagist_hook(step: &SetupStep, prior: &[Value]) -> Value {
-    let exact = prior
-        .iter()
-        .any(|entry| entry["step"] == "verify-packagist-package" && entry["status"] == "verified");
-    json!({
-        "status": "manual-prerequisite",
-        "reason": format!(
-            "confirm the GitHub integration at {}{}",
-            step.url.as_deref().unwrap_or("https://packagist.org"),
-            if exact { "; the exact tag reached Packagist, but that does not prove the hook" } else { "" }
-        ),
-    })
-}
-
-#[allow(clippy::future_not_send)]
-async fn packagist_update_api(
-    context: &StepContext<'_, impl GithubGateway>,
-    step: &SetupStep,
-) -> Result<Value> {
-    if step.details.get("state").and_then(Value::as_str) != Some("configured") {
-        return Ok(json!({
-            "status": "not-used",
-            "reason": "the workflow does not call the update-package API; the GitHub hook is the only update path",
-        }));
-    }
-    let names = step_setting_names(step);
-    let (present, missing) = match plan_slug(context.plan) {
-        Some(slug) => setting_presence(context.github, &slug, &names, context.cwd).await?,
-        None => (Vec::new(), names),
-    };
-    Ok(if missing.is_empty() {
-        json!({"status":"configured","secrets":present})
-    } else {
-        json!({
-            "status": "manual-prerequisite",
-            "missing": missing,
-            "reason": format!("{} missing; add the Packagist API token as encrypted secrets", missing.join(" + ")),
-        })
-    })
 }
 
 /// Where the Central pair stands before any browser opens.

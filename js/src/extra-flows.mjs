@@ -147,35 +147,36 @@ export function packagistSteps(item) {
   const requirements =
     item.credential_requirements ?? credentialRequirements("packagist");
   const api = requirements.secrets;
-  const referenced = api.every((entry) => entry.referenced);
   return [
     {
-      id: "verify-packagist-package",
-      title: "Read back the Packagist package and exact stable tag",
-      kind: "check",
-      description: `Read https://repo.packagist.org/p2/${item.name}.json and require the exact stable version ${item.version ?? "(unresolved)"} from a tag; dev branches do not count.`,
-      url: `https://packagist.org/packages/${item.name}`,
-    },
-    {
-      id: "packagist-github-hook",
-      title: "Confirm the Packagist GitHub integration",
-      kind: "manual",
-      state: "manual-prerequisite",
+      id: "ensure-packagist-package",
+      title: "Validate and register the root Composer package",
+      kind: "api",
+      secrets: api,
       description:
-        'Packagist updates on tag pushes through its GitHub hook/app integration. GitHub does not expose that installation to this tool, so confirm it on the package page (no "not auto-updated" warning).',
-      url: `https://packagist.org/packages/${item.name}`,
+        "Validate composer.json, discover the exact registered repository, recover sign-in in the same browser profile and submit once only if absent. Never rename a published package.",
     },
     {
       id: "packagist-update-api",
-      title: referenced
-        ? `Keep the update-package API path ${api.map((entry) => entry.secret).join(" + ")}`
-        : "Packagist update-package API is not configured",
-      kind: "manual",
-      state: referenced ? "configured" : "unsupported-without-credentials",
+      title: "Encrypt Safe update credentials and verify acceptance",
+      kind: "api",
       secrets: api,
-      oidc: "unsupported",
-      description: `${requirements.oidc_note} ${referenced ? "The workflow calls the update-package API; keep both secrets as encrypted GitHub secrets. Nothing is rotated or revoked." : "Rely on the GitHub hook, or add PACKAGIST_USERNAME and PACKAGIST_TOKEN (Packagist profile API token) as encrypted GitHub secrets for the update-package API."}`,
-      url: "https://packagist.org/profile/",
+      description:
+        "Select the Safe API token in memory, encrypt the selected secrets through gh-manager, read presence back and independently require HTTP 202 update acceptance.",
+    },
+    {
+      id: "packagist-github-hook",
+      title: "Verify the Packagist push hook and test delivery",
+      kind: "api",
+      description:
+        "Inspect/create/repair the Packagist hook through gh-manager; preserve unrelated hooks, read back active JSON push settings and inspect a fresh test delivery.",
+    },
+    {
+      id: "verify-packagist-package",
+      title: "Verify exact Packagist publication and consumer",
+      kind: "api",
+      description:
+        "Resume only affected failed jobs after configuration verification. Separately verify registration, queued update, exact indexed version/source SHA, Composer consumer and GitHub release.",
     },
   ];
 }

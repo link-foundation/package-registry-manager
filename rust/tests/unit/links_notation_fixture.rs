@@ -138,14 +138,8 @@ fn links_notation_maven_and_packagist_expose_credential_states() {
         .iter()
         .find(|p| p.package.registry == Registry::Packagist)
         .expect("packagist plan");
-    assert_eq!(
-        step(packagist, "packagist-update-api")["state"],
-        "configured"
-    );
-    assert_eq!(
-        step(packagist, "packagist-github-hook")["state"],
-        "manual-prerequisite"
-    );
+    assert_eq!(step(packagist, "packagist-update-api")["kind"], "api");
+    assert_eq!(step(packagist, "packagist-github-hook")["kind"], "api");
 }
 
 #[test]

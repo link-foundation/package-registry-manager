@@ -150,9 +150,6 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
     {
         return base_plan(inspection,package,vec![SetupStep::new("add-publishing-workflow", "Convert token publishing in a reviewed pull request", StepKind::Manual, "Convert existing publishing jobs and reusable callers to OIDC, preserve release commands and environment, and retain token secrets as fallback. Review and merge the PR, then re-run setup --migrate to register trust and verify an OIDC release while retaining fallback secrets by default.").confirmed()]);
     }
-    let browser = |id: &str, title: &str, description: &str, url: &str| {
-        SetupStep::new(id, title, StepKind::Browser, description).url(url)
-    };
 
     let steps = match package.registry {
         Registry::Npm
@@ -190,25 +187,7 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
             if package.workflow.is_none() && options.workflow.is_none() { return SetupPlan { skipped_reason: Some(format!("no workflow publishes {} to {}; pass --workflow <file> for an explicit setup target",package.name,package.registry)), ..base_plan(inspection,package,Vec::new()) }; }
             crate::extra_flows::token_flow(package)
         },
-        Registry::Packagist => {
-            let mut steps = vec![check(
-                    "validate-package",
-                    "Validate Composer metadata",
-                    "Strictly validate composer.json before submitting it.",
-                    "composer",
-                    &["validate", "--strict"],
-                )];
-            if package.exists_on_registry != Some(true) {
-                steps.push(browser(
-                    "submit-repository",
-                    "Submit the repository to Packagist",
-                    "Sign in and submit the public VCS repository URL. Packagist reads package versions from tags.",
-                    "https://packagist.org/packages/submit"
-                ));
-            }
-            steps.extend(crate::extra_flows::packagist_steps(package));
-            steps
-        }
+        Registry::Packagist => crate::extra_flows::packagist_steps(package),
     };
 
     base_plan(inspection, package, steps)

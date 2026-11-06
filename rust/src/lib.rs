@@ -32,6 +32,7 @@ pub mod npm_similarity;
 pub mod nuget_policy;
 pub mod organization_scan;
 pub mod package_coverage;
+pub mod packagist;
 pub mod pages;
 pub mod plan;
 pub mod prerequisites;
