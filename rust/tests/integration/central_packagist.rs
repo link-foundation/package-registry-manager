@@ -262,10 +262,14 @@ async fn a_root_pom_alone_never_certifies_the_kotlin_variants() {
 #[test]
 fn packagist_embedded_engine_requires_authentication_without_browser() {
     use base64::{engine::general_purpose::STANDARD, Engine};
+    use std::io::Write;
     let driver = STANDARD.encode(include_str!("../../src/packagist-driver.mjs"));
     let script = format!("const {{loadPackagistEngine}} = await import('data:text/javascript;base64,{driver}'); const {{engine}} = await loadPackagistEngine({}); console.log(JSON.stringify(await engine.acquirePackagistCredential({{options:{{noBrowser:true}}}})));", package_registry_manager::packagist::engine_sources());
+    let mut program = tempfile::Builder::new().suffix(".mjs").tempfile().unwrap();
+    program.write_all(script.as_bytes()).unwrap();
+    program.flush().unwrap();
     let output = std::process::Command::new("node")
-        .args(["--input-type=module", "-e", &script])
+        .arg(program.path())
         .output()
         .expect("Node is required by gh-manager");
     assert!(

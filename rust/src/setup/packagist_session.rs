@@ -43,10 +43,8 @@ impl Session<'_> {
                 Some("evaluate") => self.visible_automated().await?.evaluate(argument).await,
                 _ => bail!("unknown Packagist browser protocol operation"),
             };
-            let reply = match response {
-                Ok(value) => json!({"value":value}),
-                Err(_) => json!({"error":true}),
-            };
+            let reply =
+                response.map_or_else(|_| json!({"error":true}), |value| json!({"value":value}));
             child
                 .stdin
                 .as_mut()
@@ -59,10 +57,11 @@ impl Session<'_> {
         if !status.success() || result.get("error").is_some() {
             bail!("Packagist engine failed; sensitive output withheld");
         }
-        self.packagist_results = result["results"]
-            .as_array()
-            .context("Packagist results missing")?
-            .clone();
+        self.packagist_results.clone_from(
+            result["results"]
+                .as_array()
+                .context("Packagist results missing")?,
+        );
         self.packagist_results
             .iter()
             .find(|entry| entry["step"] == step.id)

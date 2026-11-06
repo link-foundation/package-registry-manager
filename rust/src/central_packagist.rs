@@ -201,8 +201,9 @@ pub(crate) fn maven_path(
     )
 }
 
-/// Runs one generated step other than the Central pair, which needs the
-/// session's browser. `prior` holds earlier step results of this plan;
+/// Runs a generated step that does not need the session's browser.
+///
+/// Central and Packagist use the session. `prior` holds earlier step results;
 /// `release_verified` records a verified `SwiftPM` release.
 #[allow(clippy::future_not_send)]
 pub async fn run_generated_step(

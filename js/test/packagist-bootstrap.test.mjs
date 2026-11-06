@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import sodium from "libsodium-wrappers";
-import { createRestClient } from "@link-foundation/gh-manager";
+import {
+  createRestClient,
+  createSecretManager,
+} from "@link-foundation/gh-manager";
 import { githubServices } from "../src/github.mjs";
 import * as native from "../src/packagist-setup.mjs";
 import * as publication from "../src/packagist-publication.mjs";
@@ -161,6 +164,17 @@ async function fixture(options = {}) {
     },
   });
   const github = githubServices({ rest });
+  // Keep the actual installed encryption/readback implementation, but fail
+  // absent fixture metadata immediately instead of waiting 15 seconds twice.
+  github.secrets = ({ repo }) => {
+    const [owner, name] = repo.split("/");
+    return createSecretManager({
+      rest,
+      scope: { repo: { owner, name } },
+      verificationTimeout: 0,
+      log: { debug() {} },
+    });
+  };
   const navigation = [];
   const readKinds = [];
   let profileReads = 0;
@@ -636,24 +650,32 @@ test("installed driver uses the native browser protocol and emits only redacted 
   const sources = await readSources("../../rust/src");
   const driver = new URL("../src/packagist-driver.mjs", import.meta.url).href;
   const script = `import {runPackagistDriver} from ${JSON.stringify(driver)}; await runPackagistDriver(${JSON.stringify(sources)});`;
+  const directory = await mkdtemp(path.join(tmpdir(), "prm-driver-test-"));
+  const program = path.join(directory, "driver.mjs");
+  await writeFile(program, script);
   // Use a real process and the installed gh-manager resolution path. No network
   // call or test account is needed to prove the authentication boundary.
-  const result = await new Promise((resolve, reject) => {
-    const child = execFile(
-      process.execPath,
-      ["--input-type=module", "-e", script],
-      {
-        env: {
-          ...process.env,
-          PATH: `${fileURLToPath(new URL("../node_modules/.bin", import.meta.url))}${path.delimiter}${process.env.PATH}`,
+  let result;
+  try {
+    result = await new Promise((resolve, reject) => {
+      const child = execFile(
+        process.execPath,
+        [program],
+        {
+          env: {
+            ...process.env,
+            PATH: `${fileURLToPath(new URL("../node_modules/.bin", import.meta.url))}${path.delimiter}${process.env.PATH}`,
+          },
         },
-      },
-      (error, stdout) => (error ? reject(error) : resolve(stdout)),
-    );
-    child.stdin.end(
-      `${JSON.stringify({ plan: { steps: [{ id: "packagist-update-api" }] }, options: { noBrowser: true } })}\n`,
-    );
-  });
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+      );
+      child.stdin.end(
+        `${JSON.stringify({ plan: { steps: [{ id: "packagist-update-api" }] }, options: { noBrowser: true } })}\n`,
+      );
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
   assert.equal(JSON.parse(result).results[0].status, "authentication-required");
   assert.ok(!result.includes(SAFE));
 });

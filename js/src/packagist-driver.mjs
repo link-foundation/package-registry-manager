@@ -23,6 +23,20 @@ export async function runPackagistDriver(sources) {
     const input = await receive();
     let gh;
     for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
+      // npm writes regular .cmd/shell shims on Windows, not Unix symlinks.
+      try {
+        gh = await import(
+          pathToFileURL(
+            path.resolve(
+              directory,
+              "../@link-foundation/gh-manager/src/index.js",
+            ),
+          ).href
+        );
+        break;
+      } catch {
+        /* Global Unix installs resolve through the executable symlink below. */
+      }
       try {
         const binary = await realpath(path.join(directory, "gh-manager"));
         gh = await import(
