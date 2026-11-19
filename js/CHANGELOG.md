@@ -7,6 +7,34 @@ currently shares its release version with the Rust implementation.
 
 ### Added
 
+- PyPI setup submits a prefilled sign-in form automatically, retries once after
+  an invalid login or an expired two-factor login, never reads the credential
+  values, and tells the user when passkey/2FA or unrecognized-device email
+  confirmation is required. A 2FA page gets "Remember this device for 30 days"
+  checked automatically, including immediately after the initial sign-in, and
+  the confirmation page is detected in the current tab or another tab of the
+  automated browser.
+- Automated Chromium launches suppress Chrome product-promo tabs and disable
+  split-view drag-and-drop by default, so browser tips do not cover the slot
+  where sign-in and approval pages open.
+- npm web login, crates.io GitHub login, NuGet, credential pages and repository
+  repair submit a prefilled username/password form automatically. Autofilled
+  values trigger the input events sites need to enable their submit button, so
+  a prefilled npm "Sign In" button no longer waits for a manual click.
+- A failed `gh workflow run` re-reads the workflow YAML and retries with
+  declared `workflow_dispatch` defaults or the first choice option, so required
+  inputs such as `bump_type` no longer stop a first release.
+- The automated browser closes tabs restored from an earlier profile session
+  and keeps only the working tab, so repeated runs no longer fill the window
+  with `about:blank` pages. It matches the working page by identity and URL, so
+  a Playwright wrapper is never mistaken for an extra tab. Extension mode closes
+  the tab it opened.
+- npm security-key approvals check the 5-minute cooldown box and click "Use
+  security key" automatically; Touch ID or the physical key remains the only
+  manual confirmation.
+- Visible automated browsers start maximized on Chromium (including profiles
+  that saved a small window) and Firefox, while headless launches keep their
+  default size.
 - `setup --registry npm --execute` takes a never-published package to OIDC
   trusted publishing in one run: web login, a confirmed first publish from a
   temporary worktree of the default branch, `npm trust github`, and cleanup of

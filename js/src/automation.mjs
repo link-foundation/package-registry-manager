@@ -48,10 +48,22 @@ export function launchOptions(
   if (browser.executable) {
     options.executablePath = browser.executable;
   }
-  if (browser.restrictions.length > 0) {
-    options.restrictions = browser.restrictions;
+  const restrictions = [...browser.restrictions];
+  if (!headless && !restrictions.includes("start-maximized")) {
+    restrictions.push("start-maximized");
   }
-  if (Object.keys(browser.preferences).length > 0) {
+  if (restrictions.length > 0) {
+    options.restrictions = restrictions;
+  }
+  const chromium =
+    findBrowserSource(browser.channel)?.controlProtocol === "cdp";
+  if (chromium) {
+    options.disableFeatures = ["ChromeWhatsNewUI", "PromotionalTabs"];
+    const preferences = JSON.parse(JSON.stringify(browser.preferences));
+    preferences.browser ??= {};
+    preferences.browser.split_view_drag_and_drop_enabled ??= false;
+    options.preferences = preferences;
+  } else if (Object.keys(browser.preferences).length > 0) {
     options.preferences = browser.preferences;
   }
   if (browser.attach?.mode === "snapshot") {
@@ -84,6 +96,68 @@ export function extensionInstructions(directory) {
 }
 
 /**
+ * Whether a context page is the page the caller is working with. Playwright
+ * can hand back a different wrapper for the same tab, so compare the URL too;
+ * closing the working page would abort the flow with “Target page, context or
+ * browser has been closed”.
+ */
+export function isSamePage(candidate, page) {
+  if (candidate === page) {
+    return true;
+  }
+  try {
+    const url = typeof page?.url === "function" ? page.url() : "";
+    return Boolean(url) && candidate?.url?.() === url;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Closes every tab in the automated context except the working page. A
+ * persistent profile can restore earlier tabs, and each restored about:blank
+ * would otherwise accumulate across runs.
+ */
+export async function closeExtraPages(page) {
+  const pages = page?.context?.()?.pages?.() ?? [];
+  let closed = 0;
+  for (const candidate of pages) {
+    if (isSamePage(candidate, page)) {
+      continue;
+    }
+    try {
+      await candidate.close();
+      closed += 1;
+    } catch {
+      // A tab can close itself while this loop runs; keep the working page.
+    }
+  }
+  return closed;
+}
+
+/**
+ * Maximizes the visible Chromium window through CDP. A profile that saved a
+ * small window placement ignores the launch switch, so set the bounds after
+ * the browser is ready.
+ */
+export async function maximizeWindow(page) {
+  const client = await page?.context?.()?.newCDPSession?.(page);
+  if (!client) {
+    return false;
+  }
+  try {
+    const { windowId } = await client.send("Browser.getWindowForTarget");
+    await client.send("Browser.setWindowBounds", {
+      windowId,
+      bounds: { windowState: "maximized" },
+    });
+    return true;
+  } finally {
+    await client.detach?.().catch(() => {});
+  }
+}
+
+/**
  * Connects the browser that fills forms and returns a page with `goto`,
  * `evaluate`, `close`, and, for a launched profile, `clearCookies(domains)`.
  */
@@ -106,10 +180,18 @@ export async function connectAutomation(
   const connection = await (
     dependencies.launchRealBrowser ?? launchRealBrowser
   )(launchOptions(browser, profile, verbose, domains, headless));
+  await closeExtraPages(connection.page);
+  if (!headless) {
+    await maximizeWindow(connection.page).catch(() => {});
+  }
   return {
     headless,
     goto: (url) => connection.page.goto(url),
+    click: (selector) => connection.page.click(selector),
+    pid: () => connection.pid?.(),
     evaluate: (script) => connection.page.evaluate(script),
+    url: () => connection.page.url(),
+    pages: () => connection.page.context().pages(),
     close: () => connection.close(),
     async clearCookies(names) {
       for (const name of names) {
@@ -130,14 +212,25 @@ async function connectExtension() {
     onListening: () => console.log(extensionInstructions(directory)),
   });
   let session = null;
-  return {
+  let currentUrl = "";
+  const api = {
     async goto(url) {
+      currentUrl = url;
       if (session) {
         await session.send("Page.navigate", { url });
       } else {
         const { tabId } = await relay.newTab(url);
         session = await relay.session(tabId);
       }
+    },
+    url: () => currentUrl,
+    pages: () => [api],
+    async click(selector) {
+      await api.evaluate(`(() => {
+        const element = document.querySelector(${JSON.stringify(selector)});
+        if (!element) throw new Error('selector not found: ' + ${JSON.stringify(selector)});
+        element.click();
+      })()`);
     },
     async evaluate(expression) {
       const { result, exceptionDetails } = await session.send(
@@ -152,8 +245,10 @@ async function connectExtension() {
       return result.value;
     },
     async close() {
+      await session?.send("Page.close").catch(() => {});
       await session?.detach().catch(() => {});
       await relay.close();
     },
   };
+  return api;
 }

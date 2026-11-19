@@ -9,6 +9,7 @@ import path from "node:path";
 
 import { registryEndpoint, USER_AGENT } from "./registry-state.mjs";
 import { offerSignInImport, signInDomains } from "./sign-in-import.mjs";
+import { submitPrefilledSignIn } from "./publisher-form.mjs";
 import { checkCratesToken, CRATES_TOKENS_URL } from "./tokens.mjs";
 
 /** Where the automated browser signs in to crates.io. */
@@ -115,6 +116,12 @@ export async function signIn(page, options = {}) {
     if (!(await page.evaluate(LOGIN_CLICK_SCRIPT))) {
       log('  Click "Log in with GitHub" on crates.io.');
     }
+    await submitPrefilledSignIn(page, {
+      timeoutMs: options.timeoutMs ?? SIGN_IN_TIMEOUT_MS,
+      pollIntervalMs: options.pollIntervalMs ?? 2_000,
+      formGraceMs: 5_000,
+      log,
+    });
     const deadline = Date.now() + (options.timeoutMs ?? SIGN_IN_TIMEOUT_MS);
     const interval = options.pollIntervalMs ?? 2_000;
     while (!session.signedIn) {

@@ -160,6 +160,7 @@ export function pypiRemovalScript(id) {
 async function pypiPublishers(session) {
   const url = `https://pypi.org/manage/project/${encodeURIComponent(session.plan.package.name)}/settings/publishing/`;
   await session.open(url, true);
+  await session.submitPrefilledSignIn?.({ formGraceMs: 5_000 });
   await session.prompt(
     "Sign in and show the project's trusted publishers, then press Enter...",
   );
