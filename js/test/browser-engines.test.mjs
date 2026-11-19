@@ -84,6 +84,13 @@ test("BiDi launcher fills pages, imports sign-in cookies and clears only registr
           assert.equal(options.userDataDir, profile);
           return {
             close: async () => calls.push(["close"]),
+            driver: {
+              manage: () => ({
+                window: () => ({
+                  maximize: async () => calls.push(["maximize"]),
+                }),
+              }),
+            },
             page: {
               goto: async (url) => calls.push(["goto", url]),
               evaluate: async (script) => {
@@ -114,6 +121,7 @@ test("BiDi launcher fills pages, imports sign-in cookies and clears only registr
     );
     assert.equal(deleted.length, 1);
     assert.equal(deleted[0][1].filter.domain, ".npmjs.com");
+    assert.ok(calls.some(([method]) => method === "maximize"));
     assert.ok(
       calls.some(
         ([method, value]) => method === "evaluate" && value === script,

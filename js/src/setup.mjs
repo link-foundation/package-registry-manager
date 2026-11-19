@@ -18,6 +18,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout, stderr } from "node:process";
 
 import { exec } from "./exec.mjs";
+import { dispatchInputArgs } from "./workflow-inputs.mjs";
 
 import {
   ANSI,
@@ -631,6 +632,9 @@ export class SetupSession {
         return;
       }
       if (step.id === "trigger-release") {
+        if (await this.dispatchWithInputs(step, result)) {
+          return;
+        }
         console.error(
           "warning: could not dispatch the workflow; watching its latest run",
         );
@@ -727,6 +731,7 @@ export class SetupSession {
       await this.prefill(step.id === "create-pending-publisher");
       return;
     }
+    await this.submitPrefilledSignIn({ formGraceMs: 3_000 });
     await this.prompt("Finish this step in the browser, then press Enter...");
     if (step.id === "create-pending-publisher") {
       this.conditions.delete("trust-missing");
@@ -736,6 +741,28 @@ export class SetupSession {
   async prefill(pending = this.plan.mode !== "attach") {
     const { fillPublisherForm } = await import("./publisher-form.mjs");
     await fillPublisherForm(this, pending);
+  }
+
+  /** Submit a login form the browser prefilled, without reading its values. */
+  async submitPrefilledSignIn(options = {}) {
+    if (!this.automation) {
+      return undefined;
+    }
+    const { submitPrefilledSignIn } = await import("./publisher-form.mjs");
+    return submitPrefilledSignIn(this.automation, {
+      log: (message) => console.log(message),
+      ...options,
+    });
+  }
+
+  async approveNpmChallenge() {
+    if (!this.automation) {
+      return undefined;
+    }
+    const { approveNpmChallenge } = await import("./publisher-form.mjs");
+    return approveNpmChallenge(this.automation, {
+      log: (message) => console.log(message),
+    });
   }
 
   async open(url, automate = false) {
@@ -863,6 +890,60 @@ export class SetupSession {
     return result;
   }
 
+  /**
+   * `gh workflow run` fails with HTTP 422 when a workflow_dispatch input is
+   * required. Read the workflow YAML and retry with declared defaults or the
+   * first choice option, so a release does not need a manual command.
+   */
+  async dispatchWithInputs(step, result) {
+    const output = String(result.stderr ?? "") + String(result.stdout ?? "");
+    if (!/Required input .* not provided|HTTP 422/i.test(output)) {
+      return false;
+    }
+    const workflow = step.command.args[2];
+    if (!workflow) {
+      return false;
+    }
+    const repoFlags = step.command.args.slice(3);
+    const view = await exec(
+      "gh",
+      ["workflow", "view", workflow, "--yaml", ...repoFlags],
+      {
+        cwd: this.cwd(step),
+        env: process.env,
+        capture: true,
+        mirror: this.options.verbose,
+        stdin: "ignore",
+      },
+    );
+    if (view.code !== 0) {
+      return false;
+    }
+    let inputFlags;
+    try {
+      inputFlags = dispatchInputArgs(String(view.stdout ?? ""));
+    } catch (error) {
+      console.error(`warning: ${error.message}`);
+      return false;
+    }
+    if (inputFlags.length === 0) {
+      return false;
+    }
+    const retry = await exec("gh", [...step.command.args, ...inputFlags], {
+      cwd: this.cwd(step),
+      env: process.env,
+      capture: true,
+      mirror: this.options.verbose,
+      stdin: "ignore",
+    });
+    if (retry.code !== 0) {
+      return false;
+    }
+    const values = inputFlags.filter((_, index) => index % 2 === 1).join(", ");
+    console.log(`  Dispatched the workflow with ${values}.`);
+    return true;
+  }
+
   /** Runs a step's command; `extra` is added to that child's environment only. */
   async runProcess(step, mirror, extra = undefined) {
     const { command, cwd } = this.prepare(step);
@@ -885,7 +966,7 @@ export class SetupSession {
         env,
         mirror,
         stopOnLegacyLogin: npm,
-        watchStderr: npm,
+        watchStderr: npm || step.id === "trigger-release",
         onUrl: (url, kind) => this.openLink(url, kind),
       });
     // npm's links expire after about 5 minutes; ask npm for a fresh one.
@@ -900,6 +981,12 @@ export class SetupSession {
     await this.open(url, !this.options.openWith).catch((error) =>
       console.error(`warning: could not open ${url}: ${error.message}`),
     );
+    await this.submitPrefilledSignIn({
+      formGraceMs: kind === "login" ? 15_000 : 5_000,
+    });
+    if (kind === "approve" && this.plan.registry === "npm") {
+      await this.approveNpmChallenge();
+    }
   }
 
   expand(command) {

@@ -157,6 +157,7 @@ export async function setupCredential(session) {
           new Date(Date.now() + days * 86_400_000).toISOString(),
         ),
       );
+      await session.submitPrefilledSignIn?.({ formGraceMs: 5_000 });
       await session.prompt(
         `Review the publishing scope (${provider.scope}) and expiry, create the token in this browser, then press Enter (never paste its value)...`,
       );
@@ -237,6 +238,7 @@ export async function setupCredential(session) {
     },
     revoke: async (id) => {
       await page.goto(provider.url.replace(/\/create$/, ""));
+      await session.submitPrefilledSignIn?.({ formGraceMs: 5_000 });
       await session.prompt(
         `Revoke registry token ${id} in this browser, then press Enter...`,
       );

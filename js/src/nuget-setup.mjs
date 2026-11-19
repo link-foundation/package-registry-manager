@@ -102,6 +102,7 @@ export async function configureNuget(session) {
         "NuGet sign-in requires interaction; local session reuse did not verify the configured identity",
       );
     }
+    await session.submitPrefilledSignIn?.({ formGraceMs: 5_000 });
     await session.prompt(
       `Sign in with the configured NuGet profile using ${route}; complete password, 2FA or platform passkey authentication, then press Enter...`,
     );

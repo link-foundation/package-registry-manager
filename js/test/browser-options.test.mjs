@@ -33,8 +33,24 @@ test("keeps a fresh dedicated profile by default", () => {
     channel: "chrome",
     headless: false,
     verbose: false,
+    restrictions: ["start-maximized"],
+    disableFeatures: ["ChromeWhatsNewUI", "PromotionalTabs"],
+    preferences: {
+      browser: { split_view_drag_and_drop_enabled: false },
+    },
     userDataDir: PROFILE,
   });
+});
+
+test("visible launches are maximized and headless launches are not", () => {
+  const browser = parseBrowserOptions();
+  assert.deepEqual(launchOptions(browser, PROFILE).restrictions, [
+    "start-maximized",
+  ]);
+  assert.equal(
+    launchOptions(browser, PROFILE, false, [], true).restrictions,
+    undefined,
+  );
 });
 
 test("passes the executable, preferences, and restrictions to the launch", () => {
@@ -55,10 +71,14 @@ test("passes the executable, preferences, and restrictions to the launch", () =>
     headless: false,
     verbose: true,
     executablePath: path.resolve("bin/edge"),
-    restrictions: ["no-extensions", "legacy-defaults"],
+    restrictions: ["no-extensions", "legacy-defaults", "start-maximized"],
+    disableFeatures: ["ChromeWhatsNewUI", "PromotionalTabs"],
     preferences: {
       intl: { accept_languages: "en-US" },
-      browser: { show_home_button: true },
+      browser: {
+        show_home_button: true,
+        split_view_drag_and_drop_enabled: false,
+      },
       session: { restore_on_startup: 4 },
       download: { default_directory: "/tmp/x=y" },
     },

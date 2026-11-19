@@ -69,6 +69,13 @@ export async function connectWebDriverAutomation(
     bidi: true,
     verbose,
   });
+  if (!headless) {
+    await connection.driver
+      ?.manage()
+      .window()
+      .maximize()
+      .catch(() => {});
+  }
   try {
     await connection.page.bidiCommand("storage.getCookies", {});
     if (browser.import && !IMPORT_CHOICES.includes(browser.import.browser)) {
