@@ -30,6 +30,19 @@ test("extra restored tabs are closed and the working page is kept", async () => 
   assert.deepEqual(pages, [working]);
 });
 
+test("extra blank tabs are closed when the working page is blank", async () => {
+  const pages = [];
+  const one = contextWith(pages, "one");
+  one.url = () => "about:blank";
+  const working = contextWith(pages, "working");
+  working.url = () => "about:blank";
+  const two = contextWith(pages, "two");
+  two.url = () => "about:blank";
+  pages.push(one, working, two);
+  assert.equal(await closeExtraPages(working), 2);
+  assert.deepEqual(pages, [working]);
+});
+
 test("a tab that closes during cleanup does not stop the others", async () => {
   const pages = [];
   const failing = contextWith(pages, "failing", true);
