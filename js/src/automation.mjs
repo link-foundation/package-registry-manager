@@ -107,7 +107,10 @@ export function isSamePage(candidate, page) {
   }
   try {
     const url = typeof page?.url === "function" ? page.url() : "";
-    return Boolean(url) && candidate?.url?.() === url;
+    // Every blank tab has the same URL, so a URL match would keep restored
+    // about:blank tabs forever. Only use the URL fallback once a page has a
+    // real address.
+    return Boolean(url) && url !== "about:blank" && candidate?.url?.() === url;
   } catch {
     return false;
   }
