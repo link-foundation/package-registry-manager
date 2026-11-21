@@ -577,3 +577,84 @@ test("NuGet traces nested reusable login identity without changing the retry cal
     "publish-csharp.yml",
   );
 });
+
+const SCRIPT_WRAPPED_RELEASES = fileURLToPath(
+  new URL("../../tests/fixtures/script-wrapped-releases/", import.meta.url),
+);
+
+for (const [fixture, name, registry, workflow, job] of [
+  [
+    "relative-meta-logic",
+    "relative-meta-logic",
+    "npm",
+    "crates-release.yml",
+    "prm-publish-npm-1",
+  ],
+  ["router", "@link-assistant/router", "npm", "release.yml", "publish-npm"],
+  [
+    "router",
+    "link-assistant-router",
+    "crates-io",
+    "release.yml",
+    "finalize-release",
+  ],
+  [
+    "formal-ai",
+    "@link-assistant/formal-ai-engine",
+    "npm",
+    "publish-engine.yml",
+    "package",
+  ],
+]) {
+  test(`finds ${fixture}'s ${registry} publisher and offers no new publishing job (#99)`, async () => {
+    const inspection = await inspectRepository(
+      path.join(SCRIPT_WRAPPED_RELEASES, fixture),
+    );
+    const pkg = inspection.packages.find(
+      (item) => item.name === name && item.registry === registry,
+    );
+    assert.equal(pkg.workflow, workflow);
+    assert.deepEqual(pkg.workflow_jobs, [job]);
+    for (const addPublishJob of [false, true]) {
+      const plan = buildPlans(inspection, [registry], { addPublishJob }).find(
+        (item) => item.package.name === name,
+      );
+      assert.equal(plan.skipped_reason, undefined);
+      assert.equal(
+        plan.steps.some((step) => step.id === "add-publishing-workflow"),
+        false,
+      );
+    }
+  });
+}
+
+test("a tarball upload selects its npm manifest and leaves sibling packages unbound (#99)", async () => {
+  const root = path.join(SCRIPT_WRAPPED_RELEASES, "router");
+  const inspection = await inspectRepository(root);
+  assert.equal(
+    inspection.packages.find((pkg) => pkg.name === "unrelated").workflow,
+    undefined,
+  );
+  assert.deepEqual(
+    inspection.packages.find((pkg) => pkg.name === "release-tools")
+      .workflow_jobs,
+    ["publish-tools"],
+  );
+});
+
+test("follows shell publishers under a step's working directory (#99)", async () => {
+  const root = await repository({
+    "js/package.json": '{"name":"shell-release","version":"1.0.0"}',
+    "package.json": '{"name":"other","version":"1.0.0"}',
+    "js/release.sh": "npm publish --provenance # upload the package\n",
+    ".github/workflows/release.yml":
+      "jobs:\n  release:\n    steps:\n      - working-directory: js\n        run: bash release.sh\n",
+  });
+  const inspection = await inspectRepository(root);
+  assert.deepEqual(
+    Object.fromEntries(
+      inspection.packages.map(({ name, workflow }) => [name, workflow]),
+    ),
+    { other: undefined, "shell-release": "release.yml" },
+  );
+});

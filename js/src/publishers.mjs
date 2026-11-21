@@ -3,6 +3,7 @@ import { authenticationFacts, publishingPolicy } from "./publishing-state.mjs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { stripComments, commandPosition } from "./source-code.mjs";
+import { publishesWithWrapper } from "./publishing-scripts.mjs";
 
 /** Registries whose trusted publisher is bound to a workflow file. */
 export const TRUSTED_REGISTRIES = Object.freeze([
@@ -486,13 +487,30 @@ export async function jobPublishes(root, parsed, job, registry) {
   }
   const directories = workingDirectories([...parsed.header, ...job.lines]);
   const scripts = [];
-  for (const script of scriptReferences(executable)) {
-    const contents = await readInside(root, directories, script);
-    const lines = contents === null ? [] : codeLines(contents, script);
-    if (scriptPublishes(lines, registry)) {
-      return true;
+  const followed = new Map();
+  const followsPublisher = async (commands) => {
+    for (const line of commands) {
+      for (const script of scriptReferences([line])) {
+        if (!followed.has(script)) {
+          followed.set(script, await readInside(root, directories, script));
+        }
+        const contents = followed.get(script);
+        if (contents === null || checksScript(line, script, contents)) {
+          continue;
+        }
+        const lines = codeLines(contents, script);
+        if (scriptPublishes(lines, registry, script)) {
+          return true;
+        }
+        for (const line of lines) {
+          scripts.push(line);
+        }
+      }
     }
-    scripts.push(...lines);
+    return false;
+  };
+  if (await followsPublisher(executable)) {
+    return true;
   }
   const commands = job.lines.some((line) => /changesets\/action@/.test(line))
     ? job.lines
@@ -500,7 +518,7 @@ export async function jobPublishes(root, parsed, job, registry) {
         .filter(Boolean)
         .map(unquote)
     : [];
-  if (publishingLine(commands, pattern)) {
+  if (publishingLine(commands, pattern) || (await followsPublisher(commands))) {
     return true;
   }
   // A package script may run from the job, its changesets command, or a
@@ -515,7 +533,11 @@ export async function jobPublishes(root, parsed, job, registry) {
         manifest === null
           ? null
           : packageScript(manifest, match[1] ?? match[2]);
-      if (command && publishingLine([command], pattern)) {
+      if (
+        command &&
+        (publishingLine([command], pattern) ||
+          (await followsPublisher([command])))
+      ) {
         return true;
       }
     }
@@ -589,24 +611,17 @@ export function executableLines(lines) {
 }
 
 function codeLines(contents, script) {
-  return stripComments(contents, script)
-    .split(/\r?\n/)
-    .filter((line) => !line.includes("--dry-run"));
+  return stripComments(contents, script).split(/\r?\n/);
 }
 
-function scriptPublishes(lines, registry) {
+function scriptPublishes(lines, registry, script) {
   const pattern = new RegExp(JOB_PATTERNS.get(registry).source, "g");
-  if (
-    lines.some((line) =>
-      [...line.matchAll(pattern)].some((match) =>
-        commandPosition(line.slice(0, match.index)),
-      ),
-    )
-  ) {
+  if (publishingLine(lines, pattern)) {
     return true;
   }
+  const active = lines.filter((line) => !line.includes("--dry-run"));
   const commands = new Set();
-  for (const line of lines) {
+  for (const line of active) {
     const declaration = /\b(?:const|let|var)\s+(\w+)\s*=/.exec(line);
     if (
       declaration &&
@@ -624,33 +639,35 @@ function scriptPublishes(lines, registry) {
       return true;
     }
   }
+  if (publishesWithWrapper(lines, registry, script)) {
+    return true;
+  }
   const patterns = SCRIPT_PATTERNS.get(registry);
   if (!patterns) {
     return false;
   }
   const [program, subcommand] = patterns;
   const variables = new Set();
-  for (const line of lines) {
+  for (const line of active) {
     const declaration = /\b(?:const|let|var)\s+(\w+)\s*=/.exec(line);
     if (declaration && program.test(line.slice(declaration.index))) {
       variables.add(declaration[1]);
     }
   }
-  return lines.some(
-    (line, index) =>
+  return lines.some((line, index) => {
+    const nearby = lines.slice(index, index + SCRIPT_WINDOW);
+    return (
       (program.test(line) ||
         [...variables].some((name) =>
-          new RegExp(`\\b${name}\\b`).test(
-            lines.slice(index, index + 3).join("\n"),
-          ),
+          new RegExp(`\\b${name}\\b`).test(nearby.slice(0, 3).join("\n")),
         )) &&
       /(?:exec|spawn|run|Command::new|subprocess|system|(?:npm|pnpm|yarn)\s*\(\s*\[)/.test(
         line,
       ) &&
-      lines
-        .slice(index, index + SCRIPT_WINDOW)
-        .some((nearby) => subcommand.test(nearby)),
-  );
+      !nearby.some((line) => line.includes("--dry-run")) &&
+      nearby.some((line) => subcommand.test(line))
+    );
+  });
 }
 
 function packageScript(contents, name) {
@@ -664,21 +681,40 @@ function packageScript(contents, name) {
 
 /** Lists repository script paths that a job's lines run, such as `node x.mjs`. */
 export function scriptReferences(lines) {
-  const references = [];
+  const references = new Set();
   for (const line of lines) {
-    for (const token of line.split(/[\s"'=;()|&]+/)) {
-      if (SCRIPT_REFERENCE.test(token) && !references.includes(token)) {
-        references.push(token);
+    // A release can run a copy of a script under a runtime directory.
+    // Only the literal suffix can be resolved against the checkout.
+    const text = line.replace(
+      /\$\{\{\s*github\.workspace\s*\}\}/g,
+      "$GITHUB_WORKSPACE",
+    );
+    for (const token of text.split(/[\s"'=;()|&]+/)) {
+      const reference = token.replace(/^\$(?:\{\w+\}|\w+)\//, "");
+      if (SCRIPT_REFERENCE.test(reference)) {
+        references.add(reference);
       }
     }
   }
-  return references;
+  return [...references];
+}
+
+function checksScript(line, script, contents) {
+  // A script with an argv-based release dispatcher also serves preflight and
+  // verification steps. Those explicit subcommands do not publish.
+  if (!/\bprocess\.argv\b/.test(contents)) {
+    return false;
+  }
+  const suffix = line.slice(line.indexOf(script) + script.length);
+  return /^["']?\s+["']?(?:check|verify)(?:["'\s;&|]|$)/.test(suffix);
 }
 
 function workingDirectories(lines) {
   const directories = [""];
   for (const line of lines) {
-    const value = /^\s*working-directory\s*:\s*(.+?)\s*$/.exec(line)?.[1];
+    const value = /^\s*(?:-\s+)?working-directory\s*:\s*(.+?)\s*$/.exec(
+      line,
+    )?.[1];
     const directory = value && unquote(value);
     if (
       directory &&

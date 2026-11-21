@@ -235,3 +235,74 @@ test("special default branches retry without a branch filter and reject other-br
   assert.deepEqual(branches, ["@release", undefined, "@release", undefined]);
   assert.equal(scan.findings.length, 0);
 });
+
+test("npm recovers from a stalled latest body and treats exact-version 404 as absent (#100)", async () => {
+  const requests = [];
+  const errors = [];
+  const item = { registry: "npm", name: "meta-language", version: "2.0.0" };
+  const state = await probePackage(item, {
+    sleep: async () => {},
+    onError: (error) => errors.push(error),
+    fetch: async (url, { signal }) => {
+      requests.push([url.split("/").at(-1), signal]);
+      if (requests.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new globalThis.DOMException("body timed out", "TimeoutError");
+          },
+        };
+      }
+      return url.endsWith("/latest")
+        ? globalThis.Response.json({ version: "1.0.0" })
+        : new globalThis.Response(null, { status: 404 });
+    },
+  });
+  assert.deepEqual(
+    requests.map(([endpoint]) => endpoint),
+    ["latest", "latest", "2.0.0"],
+  );
+  assert.notEqual(requests[0][1], requests[1][1]);
+  assert.deepEqual(errors, []);
+  assert.equal(state.exists, true);
+  assert.equal(state.latest_version, "1.0.0");
+  assert.equal(state.manifest_version_exists, false);
+  assert.equal(state.version_state, "manifest-version-absent");
+});
+
+test("registry lookup retries a fetch abort and fails fast on malformed JSON (#100)", async () => {
+  let attempts = 0;
+  assert.equal(
+    await getJson("https://example.com/metadata", {
+      sleep: async () => {},
+      fetch: async () => {
+        attempts++;
+        if (attempts === 1) {
+          throw new globalThis.DOMException("fetch aborted", "AbortError");
+        }
+        return new globalThis.Response("{");
+      },
+    }),
+    undefined,
+  );
+  assert.equal(attempts, 2);
+});
+
+test("npm records exact-version absence when the latest tag also returns 404 (#100)", async () => {
+  const urls = [];
+  const state = await probePackage(
+    { registry: "npm", name: "missing", version: "2.0.0" },
+    {
+      fetch: async (url) => {
+        urls.push(url);
+        return new globalThis.Response(null, { status: 404 });
+      },
+    },
+  );
+  assert.equal(urls.length, 2);
+  assert.equal(state.exists, false);
+  assert.equal(state.manifest_version_exists, false);
+  assert.equal(state.version_state, "manifest-version-absent");
+  assert.equal(state.version_evidence_url, urls[1]);
+});

@@ -83,3 +83,69 @@ async fn concurrent_crates_clients_share_one_request_start_queue() {
     tokio::join!(crates_permit(), crates_permit(), crates_permit());
     assert!(start.elapsed() >= Duration::from_secs(2));
 }
+
+#[tokio::test]
+async fn retries_incomplete_registry_body_and_preserves_exact_404() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for (path, response) in [
+            ("/meta-language/latest", "HTTP/1.1 200 OK\r\nContent-Length: 99\r\nConnection: close\r\n\r\n{"),
+            ("/meta-language/latest", "HTTP/1.1 200 OK\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"version\":\"1.0.0\"}"),
+            ("/meta-language/2.0.0", "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+        ] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(stream.read_u8().await.unwrap());
+            }
+            assert!(String::from_utf8_lossy(&request).starts_with(&format!("GET {path} ")));
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.shutdown().await.unwrap();
+        }
+    });
+    let client = RegistryClient::new(
+        Endpoints::default().with("PACKAGE_REGISTRY_MANAGER_NPM_REGISTRY", &base),
+        false,
+    );
+    let package = Package::new(
+        Registry::Npm,
+        "meta-language".into(),
+        Some("2.0.0".into()),
+        "package.json".into(),
+    );
+    let state = tokio::time::timeout(Duration::from_secs(5), client.probe_package(&package))
+        .await
+        .expect("lookup recovers within its test budget");
+    assert_eq!(state.exists, Some(true));
+    assert_eq!(state.audit["latest_version"], "1.0.0");
+    assert_eq!(state.audit["manifest_version_exists"], false);
+    assert_eq!(state.audit["version_state"], "manifest-version-absent");
+    tokio::time::timeout(Duration::from_secs(1), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn exact_version_404_is_absent_when_the_latest_tag_is_missing() {
+    let server = MockRegistry::start(|_| None);
+    let client = RegistryClient::new(
+        Endpoints::default().with("PACKAGE_REGISTRY_MANAGER_NPM_REGISTRY", &server.base),
+        false,
+    );
+    let package = Package::new(
+        Registry::Npm,
+        "missing".into(),
+        Some("2.0.0".into()),
+        "package.json".into(),
+    );
+    let state = client.probe_package(&package).await;
+    assert_eq!(server.requests(), ["/missing/latest", "/missing/2.0.0"]);
+    assert_eq!(state.exists, Some(false));
+    assert_eq!(state.audit["manifest_version_exists"], false);
+    assert_eq!(state.audit["version_state"], "manifest-version-absent");
+}

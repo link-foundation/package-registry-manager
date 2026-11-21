@@ -1,0 +1,10 @@
+on: workflow_dispatch
+jobs:
+  dry-run:
+    steps:
+      - run: node scripts/validate-release.js
+  package:
+    permissions: {id-token: write}
+    steps:
+      - working-directory: packages/formal-ai-engine
+        run: node "$FORMAL_AI_RELEASE_PROTOCOL_DIR/scripts/publish-browser-engine.mjs"

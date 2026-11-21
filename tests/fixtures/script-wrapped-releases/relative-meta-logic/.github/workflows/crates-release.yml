@@ -1,0 +1,9 @@
+on: workflow_dispatch
+jobs:
+  validate:
+    steps:
+      - run: node scripts/npm-release.mjs check
+  prm-publish-npm-1:
+    permissions: {id-token: write}
+    steps:
+      - run: node "${GITHUB_WORKSPACE}/scripts/npm-release.mjs" publish # trusted publication

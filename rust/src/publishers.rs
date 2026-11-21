@@ -1,6 +1,8 @@
 //! Job-aware detection of the workflow that publishes to a registry, so the
 //! trusted publisher names the workflow file CI actually publishes from.
 
+mod script_wrappers;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -64,10 +66,6 @@ static PYPI_PROGRAM: LazyLock<Regex> =
 static PUBLISH_ARGUMENT: LazyLock<Regex> = LazyLock::new(|| regex(r#"["'`]publish["'`]"#));
 static UPLOAD_ARGUMENT: LazyLock<Regex> =
     LazyLock::new(|| regex(r#"["'`](?:upload|publish)["'`]"#));
-static SCRIPT_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
-    regex(r"^(?:\.{1,2}/)?[\w@.-]+(?:/[\w@.-]+)*\.(?:mjs|cjs|js|mts|cts|ts|rs|sh|bash|py)$")
-});
-static REFERENCE_SEPARATOR: LazyLock<Regex> = LazyLock::new(|| regex(r#"[\s"'=;()|&]+"#));
 static RUN_SCRIPT: LazyLock<Regex> = LazyLock::new(|| {
     regex(r"\bnpm\s+run(?:-script)?\s+([\w:.-]+)|\b(?:pnpm|yarn|bun)\s+(?:run\s+)?([\w:.-]+)")
 });
@@ -78,7 +76,7 @@ static LOCAL_WORKFLOW: LazyLock<Regex> =
     LazyLock::new(|| regex(r#"^\s*uses\s*:\s*["']?\./\.github/workflows/([\w.-]+\.ya?ml)"#));
 static JOB_HEADER: LazyLock<Regex> = LazyLock::new(|| regex(r#"^\s*["']?([\w-]+)["']?\s*:\s*$"#));
 static WORKING_DIRECTORY: LazyLock<Regex> =
-    LazyLock::new(|| regex(r"^\s*working-directory\s*:\s*(.+?)\s*$"));
+    LazyLock::new(|| regex(r"^\s*(?:-\s+)?working-directory\s*:\s*(.+?)\s*$"));
 static INLINE_ID_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| regex(r#"\bid-token\s*:\s*['"]?write\b"#));
 static NESTED_ID_TOKEN: LazyLock<Regex> =
@@ -619,14 +617,30 @@ pub fn job_publishes(root: &Path, parsed: &ParsedWorkflow, job: &Job, registry: 
     }
     let directories = working_directories(parsed.header.iter().chain(&job.lines));
     let mut scripts = Vec::new();
-    for script in script_references(&executable) {
-        let lines = read_inside(root, &directories, &script)
-            .map(|contents| code_lines(&contents, &script))
-            .unwrap_or_default();
-        if script_publishes(&lines, registry) {
-            return true;
+    let mut followed = BTreeMap::new();
+    let mut follows_publisher = |commands: &[String], script_lines: &mut Vec<String>| {
+        for line in commands {
+            for script in script_references(std::slice::from_ref(line)) {
+                let Some(contents) = followed
+                    .entry(script.clone())
+                    .or_insert_with(|| read_inside(root, &directories, &script))
+                else {
+                    continue;
+                };
+                if script_wrappers::checks_script(line, &script, contents) {
+                    continue;
+                }
+                let lines = code_lines(contents, &script);
+                if script_publishes(&lines, registry, &script) {
+                    return true;
+                }
+                script_lines.extend(lines);
+            }
         }
-        scripts.extend(lines);
+        false
+    };
+    if follows_publisher(&executable, &mut scripts) {
+        return true;
     }
     let commands = if job
         .lines
@@ -641,7 +655,7 @@ pub fn job_publishes(root: &Path, parsed: &ParsedWorkflow, job: &Job, registry: 
     } else {
         Vec::new()
     };
-    if publishing_line(&commands, pattern) {
+    if publishing_line(&commands, pattern) || follows_publisher(&commands, &mut scripts) {
         return true;
     }
     // A package script may run from the job, its changesets command, or a
@@ -657,8 +671,13 @@ pub fn job_publishes(root: &Path, parsed: &ParsedWorkflow, job: &Job, registry: 
                 .map_or("", |name| name.as_str());
             let command = read_inside(root, &directories, "package.json")
                 .and_then(|manifest| package_script(&manifest, name));
-            if command.is_some_and(|command| publishing_line(&[command], pattern)) {
-                return true;
+            if let Some(command) = command {
+                let command = [command];
+                if publishing_line(&command, pattern)
+                    || follows_publisher(&command, &mut Vec::new())
+                {
+                    return true;
+                }
             }
         }
     }
@@ -746,32 +765,28 @@ pub fn executable_lines(lines: &[String]) -> Vec<String> {
 fn code_lines(contents: &str, script: &str) -> Vec<String> {
     strip_comments(contents, script)
         .lines()
-        .filter(|line| !line.contains("--dry-run"))
         .map(str::to_owned)
         .collect()
 }
 
-fn script_publishes(lines: &[String], registry: Registry) -> bool {
+fn script_publishes(lines: &[String], registry: Registry, script: &str) -> bool {
     let (Some(pattern), Some((program, subcommand))) =
         (job_pattern(registry), script_pattern(registry))
     else {
         return false;
     };
-    if lines.iter().any(|line| {
-        pattern
-            .find_iter(line)
-            .any(|found| command_position(&line[..found.start()]))
-    }) {
+    if publishing_line(lines, pattern) || script_wrappers::publishes(lines, registry, script) {
         return true;
     }
-    let commands: Vec<_> = lines
-        .iter()
+    let active = lines.iter().filter(|line| !line.contains("--dry-run"));
+    let commands: Vec<_> = active
+        .clone()
         .filter_map(|line| {
             let captures = DECLARATION.captures(line)?;
             pattern.is_match(line).then(|| captures[1].to_owned())
         })
         .collect();
-    if lines.iter().any(|line| {
+    if active.clone().any(|line| {
         commands.iter().any(|name| {
             regex(&format!(
                 r"(?:exec(?:Sync)?|spawn(?:Sync)?|run|system)\s*\(\s*{name}\b"
@@ -781,23 +796,22 @@ fn script_publishes(lines: &[String], registry: Registry) -> bool {
     }) {
         return true;
     }
-    let variables: Vec<_> = lines
-        .iter()
+    let variables: Vec<_> = active
         .filter_map(|line| {
             let captures = DECLARATION.captures(line)?;
             program.is_match(line).then(|| captures[1].to_owned())
         })
         .collect();
     lines.iter().enumerate().any(|(index, line)| {
+        let nearby = &lines[index..(index + SCRIPT_WINDOW).min(lines.len())];
         (program.is_match(line)
             || variables.iter().any(|name| {
-                let nearby = lines[index..(index + 3).min(lines.len())].join("\n");
-                regex(&format!(r"\b{name}\b")).is_match(&nearby)
+                let context = nearby[..3.min(nearby.len())].join("\n");
+                regex(&format!(r"\b{name}\b")).is_match(&context)
             }))
             && SPAWN_CALL.is_match(line)
-            && lines[index..(index + SCRIPT_WINDOW).min(lines.len())]
-                .iter()
-                .any(|nearby| subcommand.is_match(nearby))
+            && !nearby.iter().any(|line| line.contains("--dry-run"))
+            && nearby.iter().any(|line| subcommand.is_match(line))
     })
 }
 
@@ -813,13 +827,7 @@ fn package_script(contents: &str, name: &str) -> Option<String> {
 /// List repository script paths that a job's lines run, such as `node x.mjs`.
 #[must_use]
 pub fn script_references(lines: &[String]) -> Vec<String> {
-    unique(
-        lines
-            .iter()
-            .flat_map(|line| REFERENCE_SEPARATOR.split(line))
-            .filter(|token| SCRIPT_REFERENCE.is_match(token))
-            .map(str::to_owned),
-    )
+    unique(script_wrappers::references(lines))
 }
 
 fn working_directories<'a>(lines: impl Iterator<Item = &'a String>) -> Vec<String> {

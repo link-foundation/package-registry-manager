@@ -113,6 +113,16 @@ pub async fn evidence(
     doc: &Value,
     url: &str,
 ) -> BTreeMap<String, Value> {
+    evidence_from(client, item, doc, url, None).await
+}
+
+pub(crate) async fn evidence_from(
+    client: &RegistryClient,
+    item: &Package,
+    doc: &Value,
+    url: &str,
+    observed_exact_url: Option<String>,
+) -> BTreeMap<String, Value> {
     let mut out = BTreeMap::from([("registry_evidence_url".into(), json!(url))]);
     let latest = match item.registry {
         Registry::Npm => &doc["version"],
@@ -138,7 +148,9 @@ pub async fn evidence(
         Registry::Jsr => &doc["latest"],
         _ => &Value::Null,
     };
-    insert(&mut out, "latest_version", latest);
+    if observed_exact_url.is_none() {
+        insert(&mut out, "latest_version", latest);
+    }
     if item.registry == Registry::Npm {
         insert(
             &mut out,
@@ -173,7 +185,10 @@ pub async fn evidence(
         Registry::CratesIo => Some(format!("{url}/{}", encode(version))),
         _ => None,
     };
-    let exists = if let Some(exact_url) = exact_url {
+    let exists = if let Some(observed) = observed_exact_url {
+        out.insert("version_evidence_url".into(), json!(observed));
+        Some(true)
+    } else if let Some(exact_url) = exact_url {
         out.insert("version_evidence_url".into(), json!(exact_url));
         match client.get_json(&exact_url).await {
             Lookup::Missing => Some(false),

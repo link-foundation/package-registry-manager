@@ -84,7 +84,7 @@ fn reusable_caller_environment_and_migration_match_javascript_golden_files() {
             ..PlanOptions::default()
         },
     );
-    assert_eq!(plans[0].steps[0].id, "add-publishing-workflow");
+    assert_eq!(plans[0].steps[0].id, "migrate-publishing-workflow");
     let files = package_registry_manager::workflow_migration::workflow_migration_proposal(
         &root,
         &inspection.packages,

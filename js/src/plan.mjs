@@ -181,12 +181,16 @@ function buildSetupPlan(inspection, packageInfo, options) {
     (options.migrate || options.addPublishJob) &&
     ["crates-io", "npm", "pypi", "nuget"].includes(packageInfo.registry) &&
     (packageInfo.publishing_policy
-      ? packageInfo.publishing_policy !== "oidc-with-token-fallback"
+      ? packageInfo.publishing_policy !== "oidc-with-token-fallback" &&
+        (options.migrate ||
+          ["token-only", "mixed-authentication"].includes(
+            packageInfo.publishing_policy,
+          ))
       : packageInfo.token_secrets?.length)
   ) {
     return basePlan(inspection, packageInfo, [
       {
-        id: "add-publishing-workflow",
+        id: "migrate-publishing-workflow",
         title: "Convert token publishing in a reviewed pull request",
         kind: "manual",
         confirm: true,
