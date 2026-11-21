@@ -217,6 +217,17 @@ pub struct PackageState {
     pub configured_publishers: Option<Vec<PublisherIdentity>>,
 }
 
+fn invalid_version_metadata(package: &Package, url: &str, reason: &str) -> BTreeMap<String, Value> {
+    let mut audit = BTreeMap::from([
+        ("registry_state_reason".into(), json!(reason)),
+        ("registry_evidence_url".into(), json!(url)),
+    ]);
+    if package.version.is_some() {
+        audit.insert("version_state".into(), json!("manifest-version-unknown"));
+    }
+    audit
+}
+
 /// HTTP client for registry lookups.
 #[derive(Debug, Clone)]
 pub struct RegistryClient {
@@ -433,6 +444,21 @@ impl RegistryClient {
             Lookup::Unknown => {
                 return PackageState {
                     registry_http_status,
+                    audit: if latest_missing {
+                        BTreeMap::from([(
+                            "version_state".into(),
+                            json!("manifest-version-unknown"),
+                        )])
+                    } else if package.version.is_some()
+                        && matches!(package.registry, Registry::NuGet | Registry::Packagist)
+                    {
+                        BTreeMap::from([
+                            ("version_state".into(), json!("manifest-version-unknown")),
+                            ("version_evidence_url".into(), json!(url)),
+                        ])
+                    } else {
+                        BTreeMap::new()
+                    },
                     ..PackageState::default()
                 }
             }
@@ -450,19 +476,15 @@ impl RegistryClient {
             && document["packages"][&package.name]
                 .as_array()
                 .is_none_or(|versions| {
-                    versions
-                        .iter()
-                        .any(|version| !version["version"].is_string())
+                    versions.iter().any(|version| {
+                        version["version"]
+                            .as_str()
+                            .is_none_or(|tag| tag.trim().is_empty())
+                    })
                 })
         {
             return PackageState {
-                audit: BTreeMap::from([
-                    (
-                        "registry_state_reason".into(),
-                        json!("invalid Packagist metadata"),
-                    ),
-                    ("registry_evidence_url".into(), json!(url)),
-                ]),
+                audit: invalid_version_metadata(package, &url, "invalid Packagist metadata"),
                 ..PackageState::default()
             };
         }
@@ -477,13 +499,7 @@ impl RegistryClient {
             })
         {
             return PackageState {
-                audit: BTreeMap::from([
-                    (
-                        "registry_state_reason".into(),
-                        json!("invalid NuGet metadata"),
-                    ),
-                    ("registry_evidence_url".into(), json!(url)),
-                ]),
+                audit: invalid_version_metadata(package, &url, "invalid NuGet metadata"),
                 ..PackageState::default()
             };
         }
@@ -612,6 +628,8 @@ impl RegistryClient {
                 continue;
             };
             let package = &mut probed.packages[index];
+            package.audit.remove("manifest_version_exists");
+            package.audit.remove("version_state");
             package.audit.extend(state.audit);
             package.registry_http_status = state.registry_http_status;
             package.publisher_settings_reason = state.publisher_settings_reason;

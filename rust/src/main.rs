@@ -103,6 +103,10 @@ enum Commands {
     Inspect,
     /// Produce an ordered, machine-readable registry setup plan.
     Plan {
+        /// Plan all packages (the default when no target is selected).
+        #[arg(long)]
+        all: bool,
+
         /// Restrict plans to one or more registries. May be repeated.
         #[arg(long, value_parser = parse_registry)]
         registry: Vec<Registry>,
@@ -387,11 +391,11 @@ async fn main() -> Result<()> {
     match args.command {
         Commands::Inspect => Ok(()),
         Commands::Plan {
-            registry: _,
             verify_release,
             package,
             manual,
             publisher,
+            ..
         } => {
             let options = PlanOptions {
                 migrate: false,

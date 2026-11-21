@@ -48,9 +48,8 @@ See the [bootstrap, wrapper and credential guide](docs/registry-setup.md) for br
   build, virtual-environment, and vendor directories.
 - Supports npm, crates.io, PyPI, Go modules, NuGet, Maven Central, Packagist,
   and container images on Docker Hub and GitHub Container Registry.
-- Looks packages up on the public registry and plans exactly what is still
-  missing: a first publish (`bootstrap`), attaching trusted publishing to an
-  existing package (`attach`), or nothing at all (`complete`).
+- Checks package presence and exact manifest versions. Plans first publication,
+  trusted publishing setup, and later releases through the existing release workflow.
 - Takes a never-published npm package to OIDC trusted publishing with one
   command. The only maintainer input is browser sign-in and 2FA; the CLI never
   reads, creates, or asks for an npm access token.
@@ -306,7 +305,10 @@ The CLI looks the package up on the registry and chooses a mode:
 | --- | --- | --- |
 | `bootstrap` | the package does not exist | sign in, first publish, attach trusted publisher |
 | `attach` | the package exists without trusted publishing | sign in, attach trusted publisher |
-| `complete` | the latest version came from a trusted publisher | nothing, except the [GitHub Pages checks](#github-pages) |
+| `release` | the package exists and its manifest version is missing | publish that version through the reviewed CI workflow or existing tag process |
+| `stale-version` | the missing manifest version is older than the latest registry version | review the source version |
+| `unknown-version` | the exact version lookup failed or returned invalid metadata | recheck registry evidence |
+| `complete` | the latest version came from a trusted publisher and there is no missing or failed exact version check | run any [GitHub Pages checks](#github-pages) |
 
 A bootstrap run:
 
@@ -731,8 +733,8 @@ without coupling registry metadata to unrelated components.
 repository files
     -> manifest discovery
     -> normalized inspection JSON
-    -> public registry lookup (exists? trusted publishing?)
-    -> bootstrap / attach / complete setup plans
+    -> public registry lookup (package, exact version, trusted publishing)
+    -> setup and release plans
     -> exact-argv commands (opt in)
     -> web login and npm approvals in a shared dedicated profile (opt in)
     -> publisher form polling, filling and submission

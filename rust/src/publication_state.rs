@@ -195,14 +195,22 @@ pub async fn evidence(
         match item.registry {
             Registry::PyPi => doc["releases"].as_object().map(|v| v.contains_key(version)),
             Registry::Jsr => doc["versions"].as_object().map(|v| v.contains_key(version)),
-            Registry::NuGet => doc["versions"].as_array().map(|v| {
-                v.iter().any(|s| {
-                    s.as_str()
-                        .and_then(normalized_nuget_version)
-                        .zip(normalized_nuget_version(version))
-                        .is_some_and(|(a, b)| a == b)
-                })
-            }),
+            Registry::NuGet => {
+                if let Some(expected) = normalized_nuget_version(version) {
+                    doc["versions"].as_array().map(|versions| {
+                        versions.iter().any(|value| {
+                            value.as_str().and_then(normalized_nuget_version).as_ref()
+                                == Some(&expected)
+                        })
+                    })
+                } else {
+                    out.insert(
+                        "registry_state_reason".into(),
+                        json!("invalid NuGet manifest version"),
+                    );
+                    None
+                }
+            }
             Registry::Packagist => doc["packages"][&item.name].as_array().map(|v| {
                 v.iter().any(|v| {
                     v["version"].as_str().is_some_and(|v| {
@@ -301,7 +309,7 @@ impl RegistryClient {
                     let exact = match self.publication_text(&url).await {
                         Ok(None) => Some(false),
                         Ok(Some(text))
-                            if regex::Regex::new(r"<project[\s>]")
+                            if regex::Regex::new(r"(?s)<project(?:\s[^>]*)?>.*</project\s*>")
                                 .expect("regex")
                                 .is_match(&text) =>
                         {
@@ -309,6 +317,9 @@ impl RegistryClient {
                         }
                         _ => {
                             state.audit.insert("registry_state_reason".into(),json!("Maven exact-version lookup failed or returned invalid metadata"));
+                            state
+                                .audit
+                                .insert("version_state".into(), json!("manifest-version-unknown"));
                             None
                         }
                     };
@@ -396,18 +407,12 @@ impl RegistryClient {
             // tag has been fetched, independent of @latest or a stale list cache.
             if let Some(version) = item.version.as_deref().filter(|v| canonical_go_version(v)) {
                 let evidence = format!("{base}/{module}/@v/{}.info", encode_component(version));
-                let found = match self.publication_text(&evidence).await {
-                    Ok(None) => Some(None),
-                    Ok(Some(text)) => serde_json::from_str::<Value>(&text)
-                        .ok()
-                        .map(|doc| doc["Version"].as_str().map(str::to_owned)),
-                    Err(()) => None,
-                };
+                let exact = self.publication_text(&evidence).await;
                 state
                     .audit
                     .insert("version_evidence_url".into(), json!(evidence));
-                match found {
-                    Some(None) => {
+                match exact {
+                    Ok(None) => {
                         let outdated = older(
                             version,
                             state
@@ -428,7 +433,10 @@ impl RegistryClient {
                             }),
                         );
                     }
-                    Some(Some(found)) if found == version => {
+                    Ok(Some(text))
+                        if serde_json::from_str::<Value>(&text)
+                            .is_ok_and(|doc| doc["Version"].as_str() == Some(version)) =>
+                    {
                         state
                             .audit
                             .insert("manifest_version_exists".into(), json!(true));
