@@ -73,7 +73,9 @@ export function packageFindings(inspection) {
           },
         });
       }
-      if (item.manifest_version_exists === false || item.version_state) {
+      if (item.exists_on_registry === false) {
+        findings.push({ ...common, type: "unpublished" });
+      } else if (item.manifest_version_exists === false || item.version_state) {
         findings.push({
           ...common,
           type: item.version_state ?? "manifest-version-absent",
@@ -83,9 +85,6 @@ export function packageFindings(inspection) {
             url: item.version_evidence_url ?? item.registry_evidence_url,
           },
         });
-      }
-      if (item.exists_on_registry === false) {
-        findings.push({ ...common, type: "unpublished" });
       }
       if (
         item.exists_on_registry === true &&

@@ -114,7 +114,7 @@ pub fn findings(inspection: &Inspection) -> Vec<Value> {
                 (package.audit.get("manifest_version_exists") == Some(&json!(false)))
                     .then_some("manifest-version-absent")
             });
-        if let Some(kind) = version_state {
+        if let Some(kind) = version_state.filter(|_| package.exists_on_registry != Some(false)) {
             push(
                 kind,
                 json!({"expected_version":package.version,"latest_version":package.audit.get("latest_version"),"url":package.audit.get("version_evidence_url").or_else(||package.audit.get("registry_evidence_url"))}),
