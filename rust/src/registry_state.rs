@@ -270,8 +270,9 @@ impl RegistryClient {
     }
 
     async fn get_json_status(&self, url: &str) -> (Lookup, Option<u16>) {
+        const ATTEMPTS: u32 = 4;
         let crates = reqwest::Url::parse(url).is_ok_and(|url| url.host_str() == Some("crates.io"));
-        for attempt in 0..4 {
+        for attempt in 0..ATTEMPTS {
             if crates {
                 crate::request_policy::crates_permit().await;
             }
@@ -281,13 +282,16 @@ impl RegistryClient {
                 .header("accept", "application/json")
                 .send()
                 .await;
-            match response {
+            let (error, status) = match response {
                 Ok(response) => {
                     let status = response.status();
                     if self.verbose {
-                        eprintln!("GET {url} -> {}", status.as_u16());
+                        eprintln!("GET {url} -> {status} (attempt {})", attempt + 1);
                     }
-                    if matches!(status.as_u16(), 403 | 429) && attempt < 3 {
+                    if status == reqwest::StatusCode::NOT_FOUND {
+                        return (Lookup::Missing, None);
+                    }
+                    if matches!(status.as_u16(), 403 | 429) && attempt + 1 < ATTEMPTS {
                         let delay = crate::request_policy::retry_delay(
                             response
                                 .headers()
@@ -295,32 +299,41 @@ impl RegistryClient {
                                 .and_then(|value| value.to_str().ok()),
                             attempt,
                         );
+                        drop(response);
                         tokio::time::sleep(delay).await;
                         continue;
                     }
-                    if status == reqwest::StatusCode::NOT_FOUND {
-                        return (Lookup::Missing, None);
+                    if !status.is_success() {
+                        return (Lookup::Unknown, Some(status.as_u16()));
                     }
-                    if status.is_success() {
-                        return (
-                            response
-                                .bytes()
-                                .await
-                                .ok()
-                                .and_then(|body| serde_json::from_slice(&body).ok())
-                                .map_or(Lookup::Unknown, Lookup::Found),
-                            Some(status.as_u16()),
-                        );
+                    match response.bytes().await {
+                        Ok(body) => {
+                            let lookup = serde_json::from_slice(&body)
+                                .map_or(Lookup::Unknown, Lookup::Found);
+                            return (lookup, Some(status.as_u16()));
+                        }
+                        Err(error) => (error, Some(status.as_u16())),
                     }
-                    return (Lookup::Unknown, Some(status.as_u16()));
                 }
-                Err(error) => {
-                    if self.verbose {
-                        eprintln!("GET {url} failed: {error}");
-                    }
-                    return (Lookup::Unknown, None);
-                }
+                Err(error) => (error, None),
+            };
+            let retry = attempt + 1 < ATTEMPTS
+                && (error.is_timeout()
+                    || error.is_connect()
+                    || error.is_request()
+                    || error.is_body()
+                    || error.is_decode());
+            if self.verbose {
+                let action = if retry { "; retrying" } else { "" };
+                eprintln!(
+                    "GET {url} failed (attempt {}): {error}{action}",
+                    attempt + 1
+                );
             }
+            if !retry {
+                return (Lookup::Unknown, status);
+            }
+            tokio::time::sleep(crate::request_policy::retry_delay(None, attempt)).await;
         }
         unreachable!("bounded request attempts return a result")
     }
@@ -422,17 +435,16 @@ impl RegistryClient {
             };
         };
         let (mut lookup, registry_http_status) = self.get_json_status(&url).await;
-        let mut latest_missing = false;
+        let mut exact_url = None;
         if matches!(lookup, Lookup::Missing) && package.registry == Registry::Npm {
             if let Some(version) = &package.version {
-                lookup = self
-                    .get_json(&format!(
-                        "{}{}",
-                        url.trim_end_matches("latest"),
-                        encode_uri_component(version)
-                    ))
-                    .await;
-                latest_missing = true;
+                let exact = format!(
+                    "{}{}",
+                    url.trim_end_matches("latest"),
+                    encode_uri_component(version)
+                );
+                lookup = self.get_json(&exact).await;
+                exact_url = Some(exact);
                 if let Lookup::Found(document) = &lookup {
                     if document["version"].as_str() != Some(version.as_str()) {
                         lookup = Lookup::Unknown;
@@ -444,7 +456,7 @@ impl RegistryClient {
             Lookup::Unknown => {
                 return PackageState {
                     registry_http_status,
-                    audit: if latest_missing {
+                    audit: if exact_url.is_some() {
                         BTreeMap::from([(
                             "version_state".into(),
                             json!("manifest-version-unknown"),
@@ -466,7 +478,13 @@ impl RegistryClient {
                 return PackageState {
                     exists: Some(false),
                     trusted: (package.registry != Registry::DockerHub).then_some(false),
-                    version: None,
+                    audit: exact_url.map_or_else(BTreeMap::new, |exact| {
+                        BTreeMap::from([
+                            ("manifest_version_exists".into(), json!(false)),
+                            ("version_state".into(), json!("manifest-version-absent")),
+                            ("version_evidence_url".into(), json!(exact)),
+                        ])
+                    }),
                     ..PackageState::default()
                 }
             }
@@ -566,10 +584,9 @@ impl RegistryClient {
                 ..PackageState::default()
             },
         };
-        state.audit = crate::publication_state::evidence(self, package, &document, &url).await;
-        if latest_missing {
-            state.audit.remove("latest_version");
-        }
+        state.audit =
+            crate::publication_state::evidence_from(self, package, &document, &url, exact_url)
+                .await;
         state
     }
 

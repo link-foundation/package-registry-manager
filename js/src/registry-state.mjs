@@ -257,15 +257,14 @@ export async function probePackage(packageInfo, options = {}) {
         : {}),
     };
   }
-  let latestMissing = false;
+  let exactUrl;
   if (
     document === null &&
     packageInfo.registry === "npm" &&
     packageInfo.version
   ) {
-    const exactUrl = `${url.slice(0, -"latest".length)}${encodeURIComponent(packageInfo.version)}`;
+    exactUrl = `${url.slice(0, -"latest".length)}${encodeURIComponent(packageInfo.version)}`;
     document = await getJson(exactUrl, options);
-    latestMissing = true;
     if (
       document !== null &&
       document !== undefined &&
@@ -288,7 +287,15 @@ export async function probePackage(packageInfo, options = {}) {
   if (document === null) {
     return packageInfo.registry === "docker-hub"
       ? { exists: false }
-      : { exists: false, trusted: false };
+      : {
+          exists: false,
+          trusted: false,
+          ...(exactUrl && {
+            manifest_version_exists: false,
+            version_state: "manifest-version-absent",
+            version_evidence_url: exactUrl,
+          }),
+        };
   }
   if (
     packageInfo.registry === "packagist" &&
@@ -327,9 +334,9 @@ export async function probePackage(packageInfo, options = {}) {
     document,
     url,
     options,
-    getJson,
+    exactUrl ? async () => document : getJson,
   );
-  if (latestMissing) {
+  if (exactUrl) {
     delete audit.latest_version;
   }
   switch (packageInfo.registry) {
@@ -416,10 +423,9 @@ async function pypiProvenance(document, options) {
 export async function getJson(url, options = {}) {
   const fetcher = options.fetch ?? globalThis.fetch;
   const crates = new URL(url).hostname === "crates.io";
-  const attempts = crates ? 4 : 1;
-  try {
-    for (let attempt = 0; attempt < attempts; attempt++) {
-      // Test fetches do not contact the service. An injected limiter can exercise pacing.
+  const attempts = 4;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
       if (crates) {
         await (options.requestLimiter ?? cratesPermit)();
       }
@@ -432,14 +438,18 @@ export async function getJson(url, options = {}) {
           `GET ${url} -> ${response.status} (attempt ${attempt + 1})`,
         );
       }
-      if ([403, 429].includes(response.status) && attempt + 1 < attempts) {
+      if (response.status === 404) {
+        return null;
+      }
+      if (
+        crates &&
+        [403, 429].includes(response.status) &&
+        attempt + 1 < attempts
+      ) {
         const wait = retryDelay(response.headers?.get("retry-after"), attempt);
         await response.body?.cancel();
         await (options.sleep ?? delay)(wait);
         continue;
-      }
-      if (response.status === 404) {
-        return null;
       }
       if (!response.ok) {
         options.onError?.({
@@ -450,15 +460,25 @@ export async function getJson(url, options = {}) {
         return undefined;
       }
       return (await response.json()) ?? undefined;
-    }
-  } catch (error) {
-    options.onError?.({
-      stage: "registry",
-      message: `registry lookup failed (${error.name})`,
-    });
-    if (options.verbose) {
-      console.error(`GET ${url} failed: ${error.message}`);
+    } catch (error) {
+      const transient = ["AbortError", "TimeoutError", "TypeError"].includes(
+        error.name,
+      );
+      const retry = transient && attempt + 1 < attempts;
+      if (options.verbose) {
+        console.error(
+          `GET ${url} failed (attempt ${attempt + 1}): ${error.message}${retry ? "; retrying" : ""}`,
+        );
+      }
+      if (retry) {
+        await (options.sleep ?? delay)(retryDelay(null, attempt));
+        continue;
+      }
+      options.onError?.({
+        stage: "registry",
+        message: `registry lookup failed (${error.name})`,
+      });
+      return undefined;
     }
   }
-  return undefined;
 }
