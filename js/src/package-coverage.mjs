@@ -47,7 +47,10 @@ export function packageWorkflows(
   const working = (lines) =>
     lines
       .map(
-        (line) => /^\s*working-directory\s*:\s*['"]?([\w./-]+)/.exec(line)?.[1],
+        (line) =>
+          /^\s*(?:-\s+)?working-directory\s*:\s*['"]?([\w./-]+)/.exec(
+            line,
+          )?.[1],
       )
       .filter(Boolean)
       .at(-1);

@@ -712,7 +712,9 @@ function checksScript(line, script, contents) {
 function workingDirectories(lines) {
   const directories = [""];
   for (const line of lines) {
-    const value = /^\s*working-directory\s*:\s*(.+?)\s*$/.exec(line)?.[1];
+    const value = /^\s*(?:-\s+)?working-directory\s*:\s*(.+?)\s*$/.exec(
+      line,
+    )?.[1];
     const directory = value && unquote(value);
     if (
       directory &&

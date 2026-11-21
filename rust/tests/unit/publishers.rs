@@ -554,3 +554,22 @@ fn finds_script_wrapped_publishers_and_attributes_the_router_archive() {
         .unwrap();
     assert_eq!(tools.workflow_jobs, ["publish-tools"]);
 }
+
+#[test]
+fn follows_shell_publishers_under_the_step_working_directory() {
+    let root = repository(&[
+        ("js/package.json", r#"{"name":"shell-release","version":"1.0.0"}"#),
+        ("package.json", r#"{"name":"other","version":"1.0.0"}"#),
+        ("js/release.sh", "npm publish --provenance # upload the package\n"),
+        (".github/workflows/release.yml", "jobs:\n  release:\n    steps:\n      - working-directory: js\n        run: bash release.sh\n"),
+    ]);
+    let inspection = inspect_repository(root.path()).unwrap();
+    for (name, workflow) in [("other", None), ("shell-release", Some("release.yml"))] {
+        let package = inspection
+            .packages
+            .iter()
+            .find(|pkg| pkg.name == name)
+            .unwrap();
+        assert_eq!(package.workflow.as_deref(), workflow);
+    }
+}

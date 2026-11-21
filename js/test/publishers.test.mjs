@@ -641,3 +641,20 @@ test("a tarball upload selects its npm manifest and leaves sibling packages unbo
     ["publish-tools"],
   );
 });
+
+test("follows shell publishers under a step's working directory (#99)", async () => {
+  const root = await repository({
+    "js/package.json": '{"name":"shell-release","version":"1.0.0"}',
+    "package.json": '{"name":"other","version":"1.0.0"}',
+    "js/release.sh": "npm publish --provenance # upload the package\n",
+    ".github/workflows/release.yml":
+      "jobs:\n  release:\n    steps:\n      - working-directory: js\n        run: bash release.sh\n",
+  });
+  const inspection = await inspectRepository(root);
+  assert.deepEqual(
+    Object.fromEntries(
+      inspection.packages.map(({ name, workflow }) => [name, workflow]),
+    ),
+    { other: undefined, "shell-release": "release.yml" },
+  );
+});

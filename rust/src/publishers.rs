@@ -76,7 +76,7 @@ static LOCAL_WORKFLOW: LazyLock<Regex> =
     LazyLock::new(|| regex(r#"^\s*uses\s*:\s*["']?\./\.github/workflows/([\w.-]+\.ya?ml)"#));
 static JOB_HEADER: LazyLock<Regex> = LazyLock::new(|| regex(r#"^\s*["']?([\w-]+)["']?\s*:\s*$"#));
 static WORKING_DIRECTORY: LazyLock<Regex> =
-    LazyLock::new(|| regex(r"^\s*working-directory\s*:\s*(.+?)\s*$"));
+    LazyLock::new(|| regex(r"^\s*(?:-\s+)?working-directory\s*:\s*(.+?)\s*$"));
 static INLINE_ID_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| regex(r#"\bid-token\s*:\s*['"]?write\b"#));
 static NESTED_ID_TOKEN: LazyLock<Regex> =

@@ -6,7 +6,8 @@ use crate::source_code::command_position;
 use crate::workflows::Workflow;
 
 fn working(lines: &[String]) -> Option<String> {
-    let pattern = crate::publishers::regex(r#"^\s*working-directory\s*:\s*['"]?([\w./-]+)"#);
+    let pattern =
+        crate::publishers::regex(r#"^\s*(?:-\s+)?working-directory\s*:\s*['"]?([\w./-]+)"#);
     lines
         .iter()
         .filter_map(|line| pattern.captures(line).map(|value| value[1].to_owned()))
