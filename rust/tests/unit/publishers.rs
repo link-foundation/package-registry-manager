@@ -477,3 +477,74 @@ fn inert_workflow_text_is_not_a_publisher() {
         []
     );
 }
+
+#[test]
+fn finds_script_wrapped_publishers_and_attributes_the_router_archive() {
+    let fixtures =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/script-wrapped-releases");
+    for (repository, name, registry, workflow, job) in [
+        (
+            "relative-meta-logic",
+            "relative-meta-logic",
+            Registry::Npm,
+            "crates-release.yml",
+            "prm-publish-npm-1",
+        ),
+        (
+            "router",
+            "@link-assistant/router",
+            Registry::Npm,
+            "release.yml",
+            "publish-npm",
+        ),
+        (
+            "router",
+            "link-assistant-router",
+            Registry::CratesIo,
+            "release.yml",
+            "finalize-release",
+        ),
+        (
+            "formal-ai",
+            "@link-assistant/formal-ai-engine",
+            Registry::Npm,
+            "publish-engine.yml",
+            "package",
+        ),
+    ] {
+        let inspection = inspect_repository(&fixtures.join(repository)).expect("inspect fixture");
+        let package = inspection
+            .packages
+            .iter()
+            .find(|package| package.registry == registry && package.name == name)
+            .expect("package in fixture");
+        assert_eq!(package.workflow.as_deref(), Some(workflow), "{repository}");
+        assert_eq!(package.workflow_jobs, [job], "{repository}");
+        for add_publish_job in [false, true] {
+            let plans = build_plans_with(
+                &inspection,
+                &BTreeSet::from([registry]),
+                &PlanOptions {
+                    add_publish_job,
+                    ..PlanOptions::default()
+                },
+            );
+            let plan = plans.iter().find(|plan| plan.package.name == name).unwrap();
+            assert_eq!(plan.skipped_reason, None, "{repository}");
+            assert!(
+                !plan
+                    .steps
+                    .iter()
+                    .any(|step| step.id == "add-publishing-workflow"),
+                "{repository}"
+            );
+        }
+    }
+    let router = inspect_repository(&fixtures.join("router")).unwrap();
+    let unrelated = router
+        .packages
+        .iter()
+        .find(|pkg| pkg.name == "unrelated")
+        .unwrap();
+    assert_eq!(unrelated.workflow, None);
+}

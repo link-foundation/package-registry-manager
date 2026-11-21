@@ -213,7 +213,10 @@ export async function inspectRepository(repository, options = {}) {
     .filter((item) => !ignored(item) && kept(item, true));
   const counts = new Map();
   for (const item of parsed.filter(Boolean)) {
-    if (!testDirectory(item.manifest)) {
+    if (
+      !testDirectory(item.manifest) &&
+      (item.registry !== "npm" || item.publishable)
+    ) {
       counts.set(item.registry, (counts.get(item.registry) ?? 0) + 1);
     }
   }
@@ -242,16 +245,18 @@ export async function inspectRepository(repository, options = {}) {
             : kept(item.manifest, item.publishable),
         )
         .map(async (item) => {
-          const scoped =
+          const matchDirectories =
             (counts.get(item.registry) > 1 &&
               TRUSTED_REGISTRIES.includes(item.registry)) ||
-            SCOPED_REGISTRIES.includes(item.registry)
+            SCOPED_REGISTRIES.includes(item.registry);
+          const scoped =
+            matchDirectories || item.registry === "npm"
               ? new Map([
                   [
                     item.registry,
                     await detectPublisher(
                       root,
-                      packageWorkflows(workflows, item),
+                      packageWorkflows(workflows, item, matchDirectories),
                       item.registry,
                     ),
                   ],

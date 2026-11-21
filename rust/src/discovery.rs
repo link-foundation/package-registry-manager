@@ -153,7 +153,10 @@ pub fn inspect_repository_recovering(
         // JS skip records carry no registry, except Packagist development copies.
         let uncounted =
             item.audit.contains_key("discovery_skip") && item.registry != Registry::Packagist;
-        if test_directory(&item.manifest).is_none() && !uncounted {
+        if test_directory(&item.manifest).is_none()
+            && !uncounted
+            && (item.registry != Registry::Npm || item.publishable)
+        {
             *counts.entry(item.registry).or_insert(0_usize) += 1;
         }
     }
@@ -177,6 +180,9 @@ pub fn inspect_repository_recovering(
                 .get("publisher_scope")
                 .and_then(JsonValue::as_str)
                 .map(str::to_owned);
+            let match_directories = (counts.get(&item.registry).copied().unwrap_or(0) > 1
+                && TRUSTED_REGISTRIES.contains(&item.registry))
+                || SCOPED_REGISTRIES.contains(&item.registry);
             if let Some(scope) = scope {
                 let mut scoped = item.clone();
                 scoped.manifest = scope;
@@ -184,11 +190,9 @@ pub fn inspect_repository_recovering(
                 let publisher = detect_publisher(&root, &scoped, item.registry);
                 let publishers = BTreeMap::from([(item.registry, publisher)]);
                 with_publisher(item, &workflows, &publishers)
-            } else if (counts.get(&item.registry).copied().unwrap_or(0) > 1
-                && TRUSTED_REGISTRIES.contains(&item.registry))
-                || SCOPED_REGISTRIES.contains(&item.registry)
-            {
-                let scoped = crate::package_coverage::package_workflows(&workflows, &item);
+            } else if match_directories || item.registry == Registry::Npm {
+                let scoped =
+                    crate::package_coverage::scoped_workflows(&workflows, &item, match_directories);
                 let publisher = detect_publisher(&root, &scoped, item.registry);
                 let publishers = BTreeMap::from([(item.registry, publisher)]);
                 with_publisher(item, &workflows, &publishers)

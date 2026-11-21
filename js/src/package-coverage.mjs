@@ -5,9 +5,44 @@ import {
   parseWorkflow,
   scriptReferences,
 } from "./publishers.mjs";
+import { commandPosition } from "./source-code.mjs";
+
+function npmTarballTargets(commands) {
+  const targets = [];
+  for (const line of commands) {
+    const text = line.replace(/\?\$\{\{[^}]+\}\}/g, "$VERSION");
+    for (const match of text.matchAll(
+      /\bnpm\s+publish\s+("[^"]*"|'[^']*'|[^\s;&|]+)/g,
+    )) {
+      const file = match[1].replace(/^['"]|['"]$/g, "");
+      if (
+        file.endsWith(".tgz") &&
+        commandPosition(text.slice(0, match.index))
+      ) {
+        targets.push(path.posix.basename(file).slice(0, -4));
+      }
+    }
+  }
+  return targets;
+}
+
+function matchesNpmTarball(name, stem) {
+  // npm pack flattens @scope/name to scope-name. Require a version-like
+  // suffix so e.g. foo-extra-1.0.0.tgz does not cover foo.
+  const expected = name.replace(/^@/, "").replace("/", "-");
+  return (
+    stem === expected ||
+    (stem.startsWith(`${expected}-`) &&
+      /^(?:v?\d|\$)/.test(stem.slice(expected.length + 1)))
+  );
+}
 
 /** Keep executable steps for this manifest, preserving the job's OIDC identity. */
-export function packageWorkflows(workflows, packageInfo) {
+export function packageWorkflows(
+  workflows,
+  packageInfo,
+  matchDirectories = true,
+) {
   const directory = path.posix.dirname(packageInfo.manifest);
   const working = (lines) =>
     lines
@@ -61,6 +96,17 @@ export function packageWorkflows(workflows, packageInfo) {
         const commands = executableLines(block);
         if (!commands.length) {
           return false;
+        }
+        if (packageInfo.registry === "npm") {
+          const targets = npmTarballTargets(commands);
+          if (targets.length > 0) {
+            return targets.some((stem) =>
+              matchesNpmTarball(packageInfo.name, stem),
+            );
+          }
+        }
+        if (!matchDirectories) {
+          return true;
         }
         const text = commands.join("\n");
         if (/--workspaces|--recursive|\bpublish\s+--all\b/.test(text)) {

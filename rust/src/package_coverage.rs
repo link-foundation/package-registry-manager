@@ -1,7 +1,8 @@
 //! Manifest-specific executable publishing steps for wrapper packages.
-use crate::model::Package;
+use crate::model::{Package, Registry};
 use crate::plan::package_directory;
 use crate::publishers::{executable_lines, parse_workflow, script_references};
+use crate::source_code::command_position;
 use crate::workflows::Workflow;
 
 fn working(lines: &[String]) -> Option<String> {
@@ -41,9 +42,54 @@ fn names_package(package: &Package, text: &str, cwd: &str) -> bool {
         })
 }
 
+fn tarball_match(package: &Package, commands: &[String]) -> Option<bool> {
+    let expression = crate::publishers::regex(r"\$\{\{[^}]+\}\}");
+    let publish = crate::publishers::regex(r#"npm\s+publish\s+("[^"]*"|'[^']*'|[^\s;&|]+)"#);
+    let version = crate::publishers::regex(r"^(?:v?\d|\$)");
+    let expected = package.name.trim_start_matches('@').replace('/', "-");
+    let mut matched = None;
+    for line in commands {
+        let text = expression.replace_all(line, "$$VERSION");
+        for target in publish.captures_iter(&text) {
+            let start = target.get(0).expect("publish command").start();
+            if !command_position(&text[..start]) {
+                continue;
+            }
+            let Some(stem) = target[1]
+                .trim_matches(['"', '\''])
+                .rsplit('/')
+                .next()
+                .and_then(|file| file.strip_suffix(".tgz"))
+            else {
+                continue;
+            };
+            // npm pack flattens @scope/name to scope-name. An optional
+            // version suffix must not mistake foo-extra for foo.
+            if stem == expected
+                || stem
+                    .strip_prefix(&expected)
+                    .and_then(|value| value.strip_prefix('-'))
+                    .is_some_and(|suffix| version.is_match(suffix))
+            {
+                return Some(true);
+            }
+            matched = Some(false);
+        }
+    }
+    matched
+}
+
 /// Keep executable steps for this manifest, preserving the job's OIDC identity.
 #[must_use]
 pub fn package_workflows(workflows: &[Workflow], package: &Package) -> Vec<Workflow> {
+    scoped_workflows(workflows, package, true)
+}
+
+pub(crate) fn scoped_workflows(
+    workflows: &[Workflow],
+    package: &Package,
+    match_directories: bool,
+) -> Vec<Workflow> {
     let directory = package_directory(&package.manifest);
     let step = crate::publishers::regex(r"^\s*-\s+[\w-]+\s*:");
     let cd = crate::publishers::regex(r#"\bcd\s+['"]?([\w./-]+)"#);
@@ -92,6 +138,14 @@ pub fn package_workflows(workflows: &[Workflow], package: &Package) -> Vec<Workf
                             let commands = executable_lines(block);
                             if commands.is_empty() {
                                 return false;
+                            }
+                            if package.registry == Registry::Npm {
+                                if let Some(matched) = tarball_match(package, &commands) {
+                                    return matched;
+                                }
+                            }
+                            if !match_directories {
+                                return true;
                             }
                             let text = commands.join("\n");
                             if text.contains("--workspaces")

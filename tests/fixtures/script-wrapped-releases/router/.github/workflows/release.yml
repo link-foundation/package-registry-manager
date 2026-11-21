@@ -1,0 +1,10 @@
+on: workflow_dispatch
+jobs:
+  publish-npm:
+    permissions: {id-token: write}
+    steps:
+      - run: npm publish "link-assistant-router-${RELEASE_VERSION}.tgz" --access public --provenance
+  finalize-release:
+    permissions: {id-token: write}
+    steps:
+      - run: rust-script scripts/publish-crate.rs
