@@ -261,15 +261,20 @@ test(
       assert.equal(state.remembered, true);
 
       const confirmation = await context.newPage();
-      await confirmation.setContent(
-        "Your login has been confirmed and this device is now recognized.",
+      await confirmation.route("https://pypi.example/confirmed", (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body: "Your login has been confirmed and this device is now recognized.",
+        }),
       );
-      await prepareLoginDevice(page, { state });
-      assert.equal(state.confirmed, true);
+      await confirmation.goto("https://pypi.example/confirmed");
       assert.equal(
         (await confirmation.evaluate(loginDeviceScript())).confirmed,
         true,
       );
+      await prepareLoginDevice(page, { state });
+      assert.equal(state.confirmed, true);
+      assert.equal(confirmation.isClosed(), true);
     } finally {
       await browser.close();
     }
