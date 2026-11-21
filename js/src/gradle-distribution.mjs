@@ -227,12 +227,17 @@ export function kmpVariants(code, group, artifact) {
   const variants = [];
   const names = [...KMP_TARGETS.keys()].join("|");
   const expression = new RegExp(
-    `(?<![\\w.])(${names})\\s*(?:\\(\\s*(?:"[^"]*")?\\s*\\)|\\{)|KotlinMultiplatformAndroidLibraryTarget>\\s*\\(\\s*"(android)"`,
+    String.raw`(?<![\w.])(?<factory>${names})\s*(?:\(\s*(?:"(?<name>[A-Za-z0-9_.-]+)"(?:\s*,\s*IR)?|IR)?\s*\)|\{)|KotlinMultiplatformAndroidLibraryTarget>\s*\(\s*"(?<extension>android)"`,
     "g",
   );
   for (const match of block.text.matchAll(expression)) {
-    const target = match[1] ?? match[2];
-    const suffix = KMP_TARGETS.get(target);
+    const { factory, name, extension } = match.groups;
+    const target = factory ?? extension;
+    const defaultSuffix = KMP_TARGETS.get(target);
+    if (!defaultSuffix) {
+      continue;
+    }
+    const suffix = name?.toLowerCase() ?? defaultSuffix;
     if (variants.some((item) => item.suffix === suffix)) {
       continue;
     }

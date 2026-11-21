@@ -468,3 +468,26 @@ fn links_notation_kotlin_multiplatform_stays_in_central_with_gradle_steps() {
         Some(variants.len())
     );
 }
+
+#[test]
+fn kotlin_multiplatform_discovers_custom_desktop_android_and_js_ir() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/fixtures/gradle-publication/ui-kotlin");
+    let inspection = inspect_repository(&root).expect("inspect ui-kotlin");
+    let kotlin = &inspection.packages[0];
+    assert_eq!(kotlin.name, "foundation.link.ui:ui-kotlin");
+    let variants = kotlin.audit["variants"].as_array().expect("variants");
+    let coordinates: Vec<_> = variants
+        .iter()
+        .map(|variant| variant["coordinates"].as_str().expect("coordinates"))
+        .collect();
+    assert_eq!(
+        coordinates,
+        [
+            "foundation.link.ui:ui-kotlin-desktop",
+            "foundation.link.ui:ui-kotlin-android",
+            "foundation.link.ui:ui-kotlin-js",
+        ]
+    );
+    assert_eq!(variants[1]["requires"], "Android SDK");
+}

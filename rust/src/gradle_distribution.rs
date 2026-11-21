@@ -369,18 +369,28 @@ pub fn kmp_variants(code: &str, group: &str, artifact: &str) -> Vec<Value> {
         .collect::<Vec<_>>()
         .join("|");
     let expression = regex(&format!(
-        r#"(?:^|[^\w.])({names})\s*(?:\(\s*(?:"[^"]*")?\s*\)|\{{)|KotlinMultiplatformAndroidLibraryTarget>\s*\(\s*"(android)""#
+        r#"(?:^|[^\w.])(?<factory>{names})\s*(?:\(\s*(?:"(?<name>[A-Za-z0-9_.-]+)"(?:\s*,\s*IR)?|IR)?\s*\)|\{{)|KotlinMultiplatformAndroidLibraryTarget>\s*\(\s*"(?<extension>android)""#
     ));
     let mut variants: Vec<Value> = Vec::new();
     for captures in expression.captures_iter(block) {
-        let Some(found) = captures.get(1).or_else(|| captures.get(2)) else {
+        let Some(found) = captures
+            .name("factory")
+            .or_else(|| captures.name("extension"))
+        else {
             continue;
         };
         let target = found.as_str();
-        let Some((_, suffix)) = KMP_TARGETS.iter().find(|(name, _)| *name == target) else {
+        let Some((_, default_suffix)) = KMP_TARGETS.iter().find(|(name, _)| *name == target) else {
             continue;
         };
-        if variants.iter().any(|item| item["suffix"] == *suffix) {
+        let suffix = captures.name("name").map_or_else(
+            || (*default_suffix).to_owned(),
+            |name| name.as_str().to_ascii_lowercase(),
+        );
+        if variants
+            .iter()
+            .any(|item| item["suffix"] == suffix.as_str())
+        {
             continue;
         }
         let mut variant = json!({
