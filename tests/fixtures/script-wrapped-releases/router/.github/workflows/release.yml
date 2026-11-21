@@ -9,6 +9,7 @@ jobs:
     steps:
       - run: npm publish "release-tools-${{ inputs.version }}.tgz"
   finalize-release:
-    permissions: {id-token: write}
     steps:
       - run: rust-script scripts/publish-crate.rs
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -8,6 +8,15 @@ use crate::model::{Inspection, PlanMode, SetupPlan};
 use crate::profile::protect_legacy_profile;
 use crate::workflow_proposal::offer_workflow;
 
+fn proposes_workflow(plan: &SetupPlan) -> bool {
+    plan.steps.iter().any(|step| {
+        matches!(
+            step.id.as_str(),
+            "add-publishing-workflow" | "migrate-publishing-workflow"
+        )
+    })
+}
+
 fn validate_plan(plan: &SetupPlan, execute: bool) -> Result<()> {
     if !plan.package.publishable {
         bail!(
@@ -17,12 +26,7 @@ fn validate_plan(plan: &SetupPlan, execute: bool) -> Result<()> {
         );
     }
     if let Some(reason) = &plan.skipped_reason {
-        if !plan
-            .steps
-            .iter()
-            .any(|step| step.id == "add-publishing-workflow")
-            && execute
-        {
+        if execute && !proposes_workflow(plan) {
             bail!("{reason}");
         }
     }
@@ -133,11 +137,7 @@ pub async fn execute_plans_with(
     }
     let missing: Vec<_> = plans
         .iter()
-        .filter(|plan| {
-            plan.steps
-                .iter()
-                .any(|step| step.id == "add-publishing-workflow")
-        })
+        .filter(|plan| proposes_workflow(plan))
         .collect();
     if !missing.is_empty() {
         if options.repository_batch {

@@ -6,6 +6,12 @@ import { offerWorkflow } from "./workflow-proposal.mjs";
 import { signInDomains } from "./sign-in-import.mjs";
 import { oidcReleaseNote } from "./approvals.mjs";
 
+function proposesWorkflow(plan) {
+  return plan.steps.some(({ id }) =>
+    ["add-publishing-workflow", "migrate-publishing-workflow"].includes(id),
+  );
+}
+
 /** Validates a plan before running any registry or repository mutations. */
 export function validatePlan(plan, execute = true) {
   if (!plan.package.publishable) {
@@ -13,11 +19,7 @@ export function validatePlan(plan, execute = true) {
       `${plan.package.name} is not publishable: ${(plan.package.problems ?? []).join("; ")}`,
     );
   }
-  if (
-    execute &&
-    plan.skipped_reason &&
-    !plan.steps.some((step) => step.id === "add-publishing-workflow")
-  ) {
+  if (execute && plan.skipped_reason && !proposesWorkflow(plan)) {
     throw new Error(plan.skipped_reason);
   }
   const python = plan.prerequisites?.find(
@@ -92,9 +94,7 @@ export async function executePlans(plans, options, summary = true) {
     );
     return [];
   }
-  const missing = plans.filter((plan) =>
-    plan.steps.some((step) => step.id === "add-publishing-workflow"),
-  );
+  const missing = plans.filter(proposesWorkflow);
   if (missing.length) {
     if (options.accountScan) {
       const outcomes = [];

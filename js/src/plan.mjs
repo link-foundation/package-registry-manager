@@ -190,7 +190,7 @@ function buildSetupPlan(inspection, packageInfo, options) {
   ) {
     return basePlan(inspection, packageInfo, [
       {
-        id: "add-publishing-workflow",
+        id: "migrate-publishing-workflow",
         title: "Convert token publishing in a reviewed pull request",
         kind: "manual",
         confirm: true,

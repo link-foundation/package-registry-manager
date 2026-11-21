@@ -101,7 +101,14 @@ test("account workflow proposals target each repository and remaining plans shar
       github_owner: "team",
       github_repository: name,
     },
-    steps: [{ id: "add-publishing-workflow" }],
+    steps: [
+      {
+        id:
+          name === "one"
+            ? "add-publishing-workflow"
+            : "migrate-publishing-workflow",
+      },
+    ],
   }));
   const ready = plan("pypi", "ready");
   ready.repository = {

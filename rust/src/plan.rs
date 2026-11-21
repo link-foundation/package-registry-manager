@@ -240,7 +240,7 @@ fn build_setup_plan(
                         || matches!(policy.as_str(), "token-only" | "mixed-authentication"))
             })
     {
-        return base_plan(inspection,package,vec![SetupStep::new("add-publishing-workflow", "Convert token publishing in a reviewed pull request", StepKind::Manual, "Convert existing publishing jobs and reusable callers to OIDC, preserve release commands and environment, and retain token secrets as fallback. Review and merge the PR, then re-run setup --migrate to register trust and verify an OIDC release while retaining fallback secrets by default.").confirmed()]);
+        return base_plan(inspection,package,vec![SetupStep::new("migrate-publishing-workflow", "Convert token publishing in a reviewed pull request", StepKind::Manual, "Convert existing publishing jobs and reusable callers to OIDC, preserve release commands and environment, and retain token secrets as fallback. Review and merge the PR, then re-run setup --migrate to register trust and verify an OIDC release while retaining fallback secrets by default.").confirmed()]);
     }
 
     let steps = match package.registry {

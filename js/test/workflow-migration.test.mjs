@@ -208,7 +208,7 @@ test("migrate and add-publish-job convert existing token publication before atta
   const inspection = await inspectRepository(root);
   for (const options of [{ migrate: true }, { addPublishJob: true }]) {
     const [plan] = buildPlans(inspection, ["crates-io"], options);
-    assert.equal(plan.steps[0].id, "add-publishing-workflow");
+    assert.equal(plan.steps[0].id, "migrate-publishing-workflow");
     assert.match(plan.steps[0].description, /convert/i);
   }
 });
