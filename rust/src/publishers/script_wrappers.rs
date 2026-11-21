@@ -44,7 +44,7 @@ fn node_publishes(source: &str, registry: Registry) -> bool {
         if let Some(enclosing) = functions
             .iter()
             .rev()
-            .find(|func| func.get(0).expect("function header").start() < call.start())
+            .find(|func| func.get(0).expect("function header").end() <= call.start())
         {
             let header = enclosing.get(0).expect("function header");
             let between = &source[header.end()..call.start()];

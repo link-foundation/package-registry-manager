@@ -10,7 +10,7 @@ import { commandPosition } from "./source-code.mjs";
 function npmTarballTargets(commands) {
   const targets = [];
   for (const line of commands) {
-    const text = line.replace(/\?\$\{\{[^}]+\}\}/g, "$VERSION");
+    const text = line.replace(/\$\{\{[^}]+\}\}/g, "$VERSION");
     for (const match of text.matchAll(
       /\bnpm\s+publish\s+("[^"]*"|'[^']*'|[^\s;&|]+)/g,
     )) {

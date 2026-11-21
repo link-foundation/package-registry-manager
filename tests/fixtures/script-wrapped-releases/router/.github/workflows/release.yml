@@ -4,6 +4,10 @@ jobs:
     permissions: {id-token: write}
     steps:
       - run: npm publish "link-assistant-router-${RELEASE_VERSION}.tgz" --access public --provenance
+  publish-tools:
+    permissions: {id-token: write}
+    steps:
+      - run: npm publish "release-tools-${{ inputs.version }}.tgz"
   finalize-release:
     permissions: {id-token: write}
     steps:

@@ -611,9 +611,7 @@ export function executableLines(lines) {
 }
 
 function codeLines(contents, script) {
-  return stripComments(contents, script)
-    .split(/\r?\n/)
-    .filter((line) => !line.includes("--dry-run"));
+  return stripComments(contents, script).split(/\r?\n/);
 }
 
 function scriptPublishes(lines, registry, script) {
@@ -641,8 +639,7 @@ function scriptPublishes(lines, registry, script) {
       return true;
     }
   }
-  const wrapper = publishesWithWrapper(lines, registry, script);
-  if (wrapper) {
+  if (publishesWithWrapper(lines, registry, script)) {
     return true;
   }
   const patterns = SCRIPT_PATTERNS.get(registry);
@@ -657,21 +654,20 @@ function scriptPublishes(lines, registry, script) {
       variables.add(declaration[1]);
     }
   }
-  return active.some(
-    (line, index) =>
+  return lines.some((line, index) => {
+    const nearby = lines.slice(index, index + SCRIPT_WINDOW);
+    return (
       (program.test(line) ||
         [...variables].some((name) =>
-          new RegExp(`\\b${name}\\b`).test(
-            active.slice(index, index + 3).join("\n"),
-          ),
+          new RegExp(`\\b${name}\\b`).test(nearby.slice(0, 3).join("\n")),
         )) &&
       /(?:exec|spawn|run|Command::new|subprocess|system|(?:npm|pnpm|yarn)\s*\(\s*\[)/.test(
         line,
       ) &&
-      active
-        .slice(index, index + SCRIPT_WINDOW)
-        .some((nearby) => subcommand.test(nearby)),
-  );
+      !nearby.some((line) => line.includes("--dry-run")) &&
+      nearby.some((line) => subcommand.test(line))
+    );
+  });
 }
 
 function packageScript(contents, name) {

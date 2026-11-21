@@ -1,5 +1,8 @@
 on: workflow_dispatch
 jobs:
+  dry-run:
+    steps:
+      - run: node scripts/validate-release.js
   package:
     permissions: {id-token: write}
     steps:

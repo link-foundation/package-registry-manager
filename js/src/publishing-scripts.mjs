@@ -3,10 +3,11 @@ const NODE_CALL =
   /\b(?:exec(?:File)?|spawn|run)(?:Sync)?\s*\(\s*(["'])(npm|pnpm|yarn|cargo)\1\s*,\s*/g;
 
 function publishArray(args) {
-  const array = /^\[\s*(["'])publish\1\s*(?:,|\])/u.exec(args);
+  const end = args.indexOf("]");
   return (
-    array !== null &&
-    !args.slice(0, args.indexOf("]") + 1).includes("--dry-run")
+    end >= 0 &&
+    /^\[\s*(["'])publish\1\s*(?:,|\])/u.test(args) &&
+    !args.slice(0, end + 1).includes("--dry-run")
   );
 }
 
@@ -23,7 +24,9 @@ function nodePublishes(source, registry) {
     if (publishArray(args)) {
       return true;
     }
-    const enclosing = functions.findLast((item) => item.index < call.index);
+    const enclosing = functions.findLast(
+      (item) => item.index + item[0].length <= call.index,
+    );
     if (
       enclosing &&
       !/^}/m.test(
@@ -91,5 +94,5 @@ export function publishesWithWrapper(lines, registry, script) {
   if (script.endsWith(".rs") && registry === "crates-io") {
     return rustPublishes(lines.join("\n"));
   }
-  return null;
+  return false;
 }

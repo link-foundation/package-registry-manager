@@ -778,19 +778,15 @@ fn script_publishes(lines: &[String], registry: Registry, script: &str) -> bool 
     if publishing_line(lines, pattern) || script_wrappers::publishes(lines, registry, script) {
         return true;
     }
-    let lines: Vec<_> = lines
-        .iter()
-        .filter(|line| !line.contains("--dry-run"))
-        .cloned()
-        .collect();
-    let commands: Vec<_> = lines
-        .iter()
+    let active = lines.iter().filter(|line| !line.contains("--dry-run"));
+    let commands: Vec<_> = active
+        .clone()
         .filter_map(|line| {
             let captures = DECLARATION.captures(line)?;
             pattern.is_match(line).then(|| captures[1].to_owned())
         })
         .collect();
-    if lines.iter().any(|line| {
+    if active.clone().any(|line| {
         commands.iter().any(|name| {
             regex(&format!(
                 r"(?:exec(?:Sync)?|spawn(?:Sync)?|run|system)\s*\(\s*{name}\b"
@@ -800,23 +796,22 @@ fn script_publishes(lines: &[String], registry: Registry, script: &str) -> bool 
     }) {
         return true;
     }
-    let variables: Vec<_> = lines
-        .iter()
+    let variables: Vec<_> = active
         .filter_map(|line| {
             let captures = DECLARATION.captures(line)?;
             program.is_match(line).then(|| captures[1].to_owned())
         })
         .collect();
     lines.iter().enumerate().any(|(index, line)| {
+        let nearby = &lines[index..(index + SCRIPT_WINDOW).min(lines.len())];
         (program.is_match(line)
             || variables.iter().any(|name| {
-                let nearby = lines[index..(index + 3).min(lines.len())].join("\n");
-                regex(&format!(r"\b{name}\b")).is_match(&nearby)
+                let context = nearby[..3.min(nearby.len())].join("\n");
+                regex(&format!(r"\b{name}\b")).is_match(&context)
             }))
             && SPAWN_CALL.is_match(line)
-            && lines[index..(index + SCRIPT_WINDOW).min(lines.len())]
-                .iter()
-                .any(|nearby| subcommand.is_match(nearby))
+            && !nearby.iter().any(|line| line.contains("--dry-run"))
+            && nearby.iter().any(|line| subcommand.is_match(line))
     })
 }
 

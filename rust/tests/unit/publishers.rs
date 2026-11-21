@@ -547,4 +547,10 @@ fn finds_script_wrapped_publishers_and_attributes_the_router_archive() {
         .find(|pkg| pkg.name == "unrelated")
         .unwrap();
     assert_eq!(unrelated.workflow, None);
+    let tools = router
+        .packages
+        .iter()
+        .find(|pkg| pkg.name == "release-tools")
+        .unwrap();
+    assert_eq!(tools.workflow_jobs, ["publish-tools"]);
 }

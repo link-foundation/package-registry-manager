@@ -635,4 +635,9 @@ test("a tarball upload selects its npm manifest and leaves sibling packages unbo
     inspection.packages.find((pkg) => pkg.name === "unrelated").workflow,
     undefined,
   );
+  assert.deepEqual(
+    inspection.packages.find((pkg) => pkg.name === "release-tools")
+      .workflow_jobs,
+    ["publish-tools"],
+  );
 });
