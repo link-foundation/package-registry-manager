@@ -97,7 +97,7 @@ async fn plans_use_exact_manifest_version_evidence() {
             );
             let inspection: Inspection = serde_json::from_value(json!({
                 "schema_version": 1,
-                "repository": { "root": ".", "github_owner": "org", "github_repository": "repo" },
+                "repository": { "root": ".", "github_owner": "org", "github_repository": "repo", "pages_workflow": "docs.yml" },
                 "packages": [package],
                 "skipped": []
             }))
@@ -115,6 +115,9 @@ async fn plans_use_exact_manifest_version_evidence() {
                 .steps
                 .iter()
                 .all(|step| !matches!(step.id.as_str(), "first-publish" | "publish-tag")));
+            if registry == Registry::Npm {
+                assert!(plan.steps.iter().any(|step| step.id == "check-pages"));
+            }
             assert_eq!(
                 plan.steps.iter().any(|step| step.id == "publish-version"),
                 expected == PlanMode::Release

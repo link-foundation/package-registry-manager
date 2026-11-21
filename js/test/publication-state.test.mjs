@@ -306,7 +306,11 @@ for (const [registry, name, metadata] of releaseRegistries) {
         expectedMode === "unknown-version" ? undefined : false,
       );
       const [plan] = buildPlans({
-        repository: { github_owner: "org", github_repository: "repo" },
+        repository: {
+          github_owner: "org",
+          github_repository: "repo",
+          pages_workflow: "docs.yml",
+        },
         packages: [
           {
             ...item,
@@ -322,6 +326,11 @@ for (const [registry, name, metadata] of releaseRegistries) {
       assert.ok(step);
       assert.equal(step.kind, "manual");
       assert.equal(step.command, undefined);
+      if (registry === "npm") {
+        assert.ok(
+          plan.steps.some((candidate) => candidate.id === "check-pages"),
+        );
+      }
       assert.ok(
         !plan.steps.some(
           (candidate) =>

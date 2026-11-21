@@ -70,15 +70,25 @@ function buildPlan(inspection, packageInfo, options) {
               "Retry the registry lookup and verify the exact version before deciding whether to release it.",
           };
     const plan = buildSetupPlan(inspection, packageInfo, options);
-    if (plan.mode === "repair" || options.migrate || options.addPublishJob) {
-      plan.mode = planMode(packageInfo);
-      plan.steps.push({ ...step, kind: "manual" });
-      return plan;
+    if (plan.mode !== "repair") {
+      plan.mode = versionMode;
     }
-    return {
-      ...basePlan(inspection, packageInfo, [{ ...step, kind: "manual" }]),
-      mode: versionMode,
-    };
+    if (plan.mode !== "repair" && !options.migrate && !options.addPublishJob) {
+      plan.steps = plan.steps.filter(({ id }) =>
+        ["check-pages", "enable-pages", "use-pages-workflow"].includes(id),
+      );
+      delete plan.prerequisites;
+      const prerequisites = planPrerequisites(
+        plan,
+        options.environment,
+        options.browser,
+      );
+      if (prerequisites.length > 0) {
+        plan.prerequisites = prerequisites;
+      }
+    }
+    plan.steps.push({ ...step, kind: "manual" });
+    return plan;
   }
 
   const plan = buildSetupPlan(inspection, packageInfo, options);

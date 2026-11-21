@@ -7,7 +7,7 @@ use crate::model::{
     Inspection, Package, PlanMode, Registry, SetupPlan, SetupStep, StepKind,
     TrustedPublisherPrefill,
 };
-use crate::pages::pages_steps;
+use crate::pages::{pages_steps, PAGES_CHANGES};
 use crate::prerequisites::{plan_prerequisites, BrowserDisplay, Environment};
 use crate::publishers::TRUSTED_REGISTRIES;
 use crate::registry_state::Endpoints;
@@ -112,8 +112,11 @@ fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions)
     let step = version_step(package, options, version_mode);
     if version_mode != PlanMode::Release {
         if !repairing && !options.migrate && !options.add_publish_job {
-            plan = base_plan(inspection, package, Vec::new());
-            plan.mode = Some(version_mode);
+            plan.steps.retain(|step| {
+                step.id == "check-pages" || PAGES_CHANGES.contains(&step.id.as_str())
+            });
+            plan.prerequisites =
+                plan_prerequisites(&plan, options.environment.as_ref(), &options.browser);
         }
         plan.steps.push(step);
     } else if let Some(index) = plan.steps.iter().position(|step| {
