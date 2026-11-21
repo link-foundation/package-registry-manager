@@ -440,7 +440,13 @@ fn version_plan_mode(package: &Package) -> Option<PlanMode> {
         .audit
         .get("version_state")
         .and_then(serde_json::Value::as_str);
-    if state == Some("manifest-version-unknown") {
+    if state == Some("manifest-version-unknown")
+        && package
+            .audit
+            .get("registry_state_reason")
+            .and_then(serde_json::Value::as_str)
+            != Some("exact-version lookup is unsupported for this provider")
+    {
         return Some(PlanMode::UnknownVersion);
     }
     if package.exists_on_registry == Some(true)

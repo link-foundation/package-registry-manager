@@ -1,6 +1,8 @@
 use super::mock_registry::MockRegistry;
 use package_registry_manager::registry_state::{Endpoints, RegistryClient};
-use package_registry_manager::{build_plans, Inspection, Package, PlanMode, Registry, StepKind};
+use package_registry_manager::{
+    build_plans, plan::plan_mode, Inspection, Package, PlanMode, Registry, StepKind,
+};
 use serde_json::json;
 
 #[tokio::test]
@@ -119,4 +121,23 @@ async fn plans_use_exact_manifest_version_evidence() {
             );
         }
     }
+}
+
+#[test]
+fn unsupported_exact_lookup_preserves_rubygems_setup() {
+    let mut package = Package::new(
+        Registry::RubyGems,
+        "library".into(),
+        Some("1.1.0".into()),
+        "library.gemspec".into(),
+    );
+    package.exists_on_registry = Some(true);
+    package
+        .audit
+        .insert("version_state".into(), json!("manifest-version-unknown"));
+    package.audit.insert(
+        "registry_state_reason".into(),
+        json!("exact-version lookup is unsupported for this provider"),
+    );
+    assert_eq!(plan_mode(&package), Some(PlanMode::Attach));
 }

@@ -178,7 +178,9 @@ pub async fn evidence(
         match client.get_json(&exact_url).await {
             Lookup::Missing => Some(false),
             Lookup::Found(value)
-                if value["version"] == *version || value["version"]["num"] == *version =>
+                if (item.registry == Registry::Npm && value["version"] == *version)
+                    || (item.registry == Registry::CratesIo
+                        && value["version"]["num"] == *version) =>
             {
                 Some(true)
             }

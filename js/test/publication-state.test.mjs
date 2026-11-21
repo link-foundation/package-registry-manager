@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { probePackage } from "../src/registry-state.mjs";
-import { buildPlans } from "../src/plan.mjs";
+import { buildPlans, planMode } from "../src/plan.mjs";
 
 const pkg = (registry, name, version = "1.1.0") => ({
   registry,
@@ -45,6 +45,18 @@ test("failed or invalid exact metadata remains unknown, never absent", async () 
     assert.equal(state.exists, true);
     assert.equal(state.manifest_version_exists, undefined);
   }
+});
+
+test("an unsupported exact lookup preserves package setup for RubyGems", async () => {
+  const item = pkg("rubygems", "library");
+  const state = await probePackage(item, {
+    fetch: fetchWith(() => ({ body: { name: "library", version: "1.0.0" } })),
+  });
+  assert.equal(state.version_state, "manifest-version-unknown");
+  assert.equal(
+    planMode({ ...state, exists_on_registry: state.exists }),
+    "attach",
+  );
 });
 
 test("absent older source is stale and exact public URL is retained", async () => {

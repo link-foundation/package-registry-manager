@@ -411,7 +411,11 @@ export function planMode(packageInfo) {
 }
 
 function versionPlanMode(packageInfo) {
-  if (packageInfo.version_state === "manifest-version-unknown") {
+  if (
+    packageInfo.version_state === "manifest-version-unknown" &&
+    packageInfo.registry_state_reason !==
+      "exact-version lookup is unsupported for this provider"
+  ) {
     return "unknown-version";
   }
   if (

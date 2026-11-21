@@ -266,7 +266,11 @@ export async function probePackage(packageInfo, options = {}) {
     const exactUrl = `${url.slice(0, -"latest".length)}${encodeURIComponent(packageInfo.version)}`;
     document = await getJson(exactUrl, options);
     latestMissing = true;
-    if (document && document.version !== packageInfo.version) {
+    if (
+      document !== null &&
+      document !== undefined &&
+      document.version !== packageInfo.version
+    ) {
       return {
         version_state: "manifest-version-unknown",
         registry_state_reason: "invalid exact npm metadata",
