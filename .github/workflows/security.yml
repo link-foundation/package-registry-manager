@@ -28,13 +28,16 @@ jobs:
         with:
           tool: cargo-audit@0.22.2
 
+      - name: Test the Cargo audit gate
+        run: node --test scripts/audit-cargo-lock.test.mjs
+
       - name: Audit committed Cargo.lock
         # `unmaintained`, `unsound` and `yanked` are *warnings*, and a warning
         # does not move `cargo audit`'s exit status -- it prints
         # "warning: N allowed warnings found" and exits 0. Without this flag the
         # step reports a passing audit while displaying the findings; a yanked
         # release ("we shipped a vulnerability") is exactly such a warning.
-        run: cargo audit --file rust/Cargo.lock --deny warnings
+        run: bash scripts/audit-cargo-lock.sh
 
   codeql:
     name: CodeQL (${{ matrix.language }})

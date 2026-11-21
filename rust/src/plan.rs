@@ -7,7 +7,7 @@ use crate::model::{
     Inspection, Package, PlanMode, Registry, SetupPlan, SetupStep, StepKind,
     TrustedPublisherPrefill,
 };
-use crate::pages::pages_steps;
+use crate::pages::{pages_steps, PAGES_CHANGES};
 use crate::prerequisites::{plan_prerequisites, BrowserDisplay, Environment};
 use crate::publishers::TRUSTED_REGISTRIES;
 use crate::registry_state::Endpoints;
@@ -97,6 +97,96 @@ fn base_plan(inspection: &Inspection, package: &Package, steps: Vec<SetupStep>) 
 }
 
 fn build_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) -> SetupPlan {
+    let Some(version_mode) = version_plan_mode(package).filter(|_| {
+        package.publishable
+            && !(package.registry == Registry::CratesIo && options.rotate_token.is_some())
+    }) else {
+        return build_setup_plan(inspection, package, options);
+    };
+
+    let mut plan = build_setup_plan(inspection, package, options);
+    let repairing = plan.mode == Some(PlanMode::Repair);
+    if !repairing {
+        plan.mode = Some(version_mode);
+    }
+    let step = version_step(package, options, version_mode);
+    if version_mode != PlanMode::Release {
+        if !repairing && !options.migrate && !options.add_publish_job {
+            plan.steps.retain(|step| {
+                step.id == "check-pages" || PAGES_CHANGES.contains(&step.id.as_str())
+            });
+            plan.prerequisites =
+                plan_prerequisites(&plan, options.environment.as_ref(), &options.browser);
+        }
+        plan.steps.push(step);
+    } else if let Some(index) = plan.steps.iter().position(|step| {
+        matches!(
+            step.id.as_str(),
+            "publish-tag"
+                | "verify-oidc-release"
+                | "verify-central-publication"
+                | "verify-nuget-release"
+                | "verify-packagist-package"
+        )
+    }) {
+        if plan.steps[index].id == "publish-tag" {
+            plan.steps[index] = step;
+        } else {
+            plan.steps.insert(index, step);
+        }
+    } else {
+        plan.steps.push(step);
+    }
+    plan
+}
+
+fn version_step(package: &Package, options: &PlanOptions, mode: PlanMode) -> SetupStep {
+    let version = package.version.as_deref().unwrap_or("(unresolved)");
+    match mode {
+        PlanMode::StaleVersion => {
+            let latest = package
+                .audit
+                .get("latest_version")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("a newer version");
+            SetupStep::new(
+                "review-manifest-version",
+                &format!("Review stale manifest version {version}"),
+                StepKind::Manual,
+                format!("The registry already reports {latest}. Reconcile the source version with the published releases before planning another release."),
+            )
+        }
+        PlanMode::UnknownVersion => SetupStep::new(
+            "recheck-manifest-version",
+            "Recheck the exact manifest version",
+            StepKind::Manual,
+            "Retry the registry lookup and verify the exact version before deciding whether to release it.",
+        ),
+        _ => {
+            let workflow = options.workflow.as_ref().or(package.workflow.as_ref());
+            let instruction = match package.registry {
+                Registry::GoModules => format!("Publish the Go module using its repository tag for {version}, then request that exact version from the Go proxy."),
+                Registry::Packagist => format!("Publish the repository tag for {version}, then verify that Packagist indexes the exact version from the release."),
+                _ => workflow.map_or_else(
+                    || "Use a reviewed publishing workflow to release the manifest version and verify it in the registry.".to_owned(),
+                    |workflow| format!("Release through the existing {workflow} workflow and verify the exact version in the registry."),
+                ),
+            };
+            SetupStep::new(
+                "publish-version",
+                &format!("Publish version {version}"),
+                StepKind::Manual,
+                instruction,
+            )
+        }
+    }
+}
+
+fn build_setup_plan(
+    inspection: &Inspection,
+    package: &Package,
+    options: &PlanOptions,
+) -> SetupPlan {
     if let Some(secret) = options
         .rotate_token
         .as_ref()
@@ -263,7 +353,7 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
         Registry::RubyGems | Registry::NuGet | Registry::Jsr => crate::extra_flows::trusted_flow,
         _ => ghcr_flow,
     };
-    let mode = plan_mode(package);
+    let mode = setup_mode(package);
     let mut steps = match mode {
         Some(PlanMode::Complete) => Vec::new(),
         Some(PlanMode::Attach) => flow(package, &context)
@@ -337,13 +427,48 @@ fn flow_plan(inspection: &Inspection, package: &Package, options: &PlanOptions) 
     plan
 }
 
-/// Choose the setup mode from registry state and repository identity findings.
-///
-/// Use `bootstrap` for missing packages, `attach` without trusted publishing,
-/// `repair` for stale or unverified identities, and `complete` otherwise.
-/// Unknown registry state leaves the mode unset.
+/// Choose the setup mode using package-level and exact-version evidence.
 #[must_use]
 pub fn plan_mode(package: &Package) -> Option<PlanMode> {
+    let mode = setup_mode(package);
+    if mode == Some(PlanMode::Repair) {
+        mode
+    } else {
+        version_plan_mode(package).or(mode)
+    }
+}
+
+fn version_plan_mode(package: &Package) -> Option<PlanMode> {
+    let state = package
+        .audit
+        .get("version_state")
+        .and_then(serde_json::Value::as_str);
+    if state == Some("manifest-version-unknown")
+        && package
+            .audit
+            .get("registry_state_reason")
+            .and_then(serde_json::Value::as_str)
+            != Some("exact-version lookup is unsupported for this provider")
+    {
+        return Some(PlanMode::UnknownVersion);
+    }
+    if package.exists_on_registry == Some(true)
+        && package
+            .audit
+            .get("manifest_version_exists")
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+    {
+        return Some(if state == Some("stale-manifest-version") {
+            PlanMode::StaleVersion
+        } else {
+            PlanMode::Release
+        });
+    }
+    None
+}
+
+fn setup_mode(package: &Package) -> Option<PlanMode> {
     if !package.repository_mismatches.is_empty()
         || matches!(package.publisher_settings_verified, Some(false))
     {

@@ -212,6 +212,7 @@ pub async fn run(args: &Args) -> Result<()> {
             package,
             manual,
             publisher,
+            ..
         } => (
             registry.iter().copied().collect::<BTreeSet<_>>(),
             *verify_release,

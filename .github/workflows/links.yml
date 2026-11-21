@@ -70,6 +70,8 @@ jobs:
           # Exclude case-studies directory - these are research documents from
           # external repos with references to files and issues that don't exist
           # in this repository (similar exclusion pattern as eslint.config.js)
+          # The unpublished-package report records registry URLs that returned
+          # 404 during the audit, alongside historical source references.
           args: >-
             --verbose
             --no-progress
@@ -78,6 +80,7 @@ jobs:
             --max-retries 3
             --timeout 30
             --exclude-path docs/case-studies
+            --exclude-path 'docs/unpublished-packages\.md$'
             --exclude-path scripts/fixtures
             './**/*.md'
             './**/*.html'

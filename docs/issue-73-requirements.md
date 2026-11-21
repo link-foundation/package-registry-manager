@@ -228,10 +228,10 @@ are not new network observations. Private repository identities are excluded.
 | [gh-download-gist](https://github.com/link-foundation/gh-download-gist/blob/main/package.json) | npm | `gh-download-gist@0.2.0` | Setup steps exist; validate artifact and authenticate |
 | [lino-cache](https://github.com/link-foundation/lino-cache/blob/main/package.json) | npm | `lino-cache@0.2.0` | Setup steps exist; validate artifact and authenticate |
 | [links-queue](https://github.com/link-foundation/links-queue/blob/main/js/package.json) | npm | `links-queue-js@0.15.1` | Setup steps exist; validate artifact and authenticate |
-| [links-queue](https://github.com/link-foundation/links-queue/blob/main/js/packages/express/package.json) | npm | `links-queue-express@0.1.0` | Publishing workflow proposal required |
-| [links-queue](https://github.com/link-foundation/links-queue/blob/main/js/packages/fastify/package.json) | npm | `links-queue-fastify@0.1.0` | Publishing workflow proposal required |
-| [links-queue](https://github.com/link-foundation/links-queue/blob/main/js/packages/hono/package.json) | npm | `links-queue-hono@0.1.0` | Publishing workflow proposal required |
-| [links-queue](https://github.com/link-foundation/links-queue/blob/main/js/packages/nestjs/package.json) | npm | `links-queue-nestjs@0.1.0` | Publishing workflow proposal required |
+| [links-queue](https://github.com/link-foundation/links-queue/blob/420aabbd082ea1c2cba537621e7277c5751d3273/js/packages/express/package.json) | npm | `links-queue-express@0.1.0` | Publishing workflow proposal required |
+| [links-queue](https://github.com/link-foundation/links-queue/blob/420aabbd082ea1c2cba537621e7277c5751d3273/js/packages/fastify/package.json) | npm | `links-queue-fastify@0.1.0` | Publishing workflow proposal required |
+| [links-queue](https://github.com/link-foundation/links-queue/blob/420aabbd082ea1c2cba537621e7277c5751d3273/js/packages/hono/package.json) | npm | `links-queue-hono@0.1.0` | Publishing workflow proposal required |
+| [links-queue](https://github.com/link-foundation/links-queue/blob/420aabbd082ea1c2cba537621e7277c5751d3273/js/packages/nestjs/package.json) | npm | `links-queue-nestjs@0.1.0` | Publishing workflow proposal required |
 | [links-queue](https://github.com/link-foundation/links-queue/blob/main/rust/Cargo.toml) | crates-io | `links-queue@0.3.0` | Setup steps exist; validate artifact and authenticate |
 | [rust-ai-driven-development-pipeline-template](https://github.com/link-foundation/rust-ai-driven-development-pipeline-template/blob/main/Cargo.toml) | crates-io | `example-sum-package-name@0.20.2` | Resolve identity conflict (#69) |
 | [java-ai-driven-development-pipeline-template](https://github.com/link-foundation/java-ai-driven-development-pipeline-template/blob/main/pom.xml) | maven-central | `com.linkfoundation:my-package@0.2.0` | Choose/configure publishing workflow |

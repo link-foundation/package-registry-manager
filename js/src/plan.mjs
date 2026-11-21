@@ -45,6 +45,93 @@ export function buildPlans(inspection, selected = [], options = {}) {
 }
 
 function buildPlan(inspection, packageInfo, options) {
+  const versionMode = versionPlanMode(packageInfo);
+  if (
+    !packageInfo.publishable ||
+    !versionMode ||
+    (options.rotateToken && packageInfo.registry === "crates-io")
+  ) {
+    return buildSetupPlan(inspection, packageInfo, options);
+  }
+
+  const { version, latest_version: latest = "a newer version" } = packageInfo;
+  if (versionMode !== "release") {
+    const step =
+      versionMode === "stale-version"
+        ? {
+            id: "review-manifest-version",
+            title: `Review stale manifest version ${version}`,
+            description: `The registry already reports ${latest}. Reconcile the source version with the published releases before planning another release.`,
+          }
+        : {
+            id: "recheck-manifest-version",
+            title: "Recheck the exact manifest version",
+            description:
+              "Retry the registry lookup and verify the exact version before deciding whether to release it.",
+          };
+    const plan = buildSetupPlan(inspection, packageInfo, options);
+    if (plan.mode !== "repair") {
+      plan.mode = versionMode;
+    }
+    if (plan.mode !== "repair" && !options.migrate && !options.addPublishJob) {
+      plan.steps = plan.steps.filter(({ id }) =>
+        ["check-pages", "enable-pages", "use-pages-workflow"].includes(id),
+      );
+      delete plan.prerequisites;
+      const prerequisites = planPrerequisites(
+        plan,
+        options.environment,
+        options.browser,
+      );
+      if (prerequisites.length > 0) {
+        plan.prerequisites = prerequisites;
+      }
+    }
+    plan.steps.push({ ...step, kind: "manual" });
+    return plan;
+  }
+
+  const plan = buildSetupPlan(inspection, packageInfo, options);
+  if (plan.mode !== "repair") {
+    plan.mode = "release";
+  }
+  const workflow = options.workflow ?? packageInfo.workflow;
+  const instruction =
+    packageInfo.registry === "go-modules"
+      ? `Publish the Go module using its repository tag for ${version}, then request that exact version from the Go proxy.`
+      : packageInfo.registry === "packagist"
+        ? `Publish the repository tag for ${version}, then verify that Packagist indexes the exact version from the release.`
+        : workflow
+          ? `Release through the existing ${workflow} workflow and verify the exact version in the registry.`
+          : "Use a reviewed publishing workflow to release the manifest version and verify it in the registry.";
+  const step = {
+    id: "publish-version",
+    title: `Publish version ${version}`,
+    kind: "manual",
+    description: instruction,
+  };
+  const index = plan.steps.findIndex((candidate) =>
+    [
+      "publish-tag",
+      "verify-oidc-release",
+      "verify-central-publication",
+      "verify-nuget-release",
+      "verify-packagist-package",
+    ].includes(candidate.id),
+  );
+  if (index === -1) {
+    plan.steps.push(step);
+  } else {
+    plan.steps.splice(
+      index,
+      plan.steps[index].id === "publish-tag" ? 1 : 0,
+      step,
+    );
+  }
+  return plan;
+}
+
+function buildSetupPlan(inspection, packageInfo, options) {
   if (
     options.rotateToken &&
     packageInfo.registry === "crates-io" &&
@@ -243,7 +330,7 @@ function flowPlan(inspection, packageInfo, options) {
     trustNpm: options.environment?.trustNpm,
     manual: Boolean(options.manual),
   };
-  const mode = planMode(packageInfo);
+  const mode = setupMode(packageInfo);
   let steps = FLOWS.get(packageInfo.registry)(packageInfo, context);
   if (mode === "complete") {
     steps = [];
@@ -326,12 +413,33 @@ function flowPlan(inspection, packageInfo, options) {
 }
 
 /**
- * Chooses `bootstrap` for a package missing from its registry, `attach` for
- * one without trusted publishing, `repair` for stale or unverified repository
- * identities, and `complete` when nothing is left to do.
- * Unknown registry state leaves the mode unset.
+ * Chooses a setup mode using both package-level and exact-version evidence.
  */
 export function planMode(packageInfo) {
+  const mode = setupMode(packageInfo);
+  return mode === "repair" ? mode : (versionPlanMode(packageInfo) ?? mode);
+}
+
+function versionPlanMode(packageInfo) {
+  if (
+    packageInfo.version_state === "manifest-version-unknown" &&
+    packageInfo.registry_state_reason !==
+      "exact-version lookup is unsupported for this provider"
+  ) {
+    return "unknown-version";
+  }
+  if (
+    packageInfo.exists_on_registry === true &&
+    packageInfo.manifest_version_exists === false
+  ) {
+    return packageInfo.version_state === "stale-manifest-version"
+      ? "stale-version"
+      : "release";
+  }
+  return null;
+}
+
+function setupMode(packageInfo) {
   if (
     packageInfo.repository_mismatches?.length ||
     packageInfo.publisher_settings_verified === false

@@ -142,6 +142,8 @@ export async function probeRegistryState(inspection, options = {}) {
         if (state.trusted !== undefined) {
           packageInfo.trusted_publishing = state.trusted;
         }
+        delete packageInfo.manifest_version_exists;
+        delete packageInfo.version_state;
         for (const key of [
           "registry_http_status",
           "latest_version",
@@ -244,7 +246,16 @@ export async function probePackage(packageInfo, options = {}) {
     },
   });
   if (document === undefined) {
-    return httpStatus ? { registry_http_status: httpStatus } : {};
+    return {
+      ...(httpStatus ? { registry_http_status: httpStatus } : {}),
+      ...(packageInfo.version &&
+      ["nuget", "packagist"].includes(packageInfo.registry)
+        ? {
+            version_state: "manifest-version-unknown",
+            version_evidence_url: url,
+          }
+        : {}),
+    };
   }
   let latestMissing = false;
   if (
@@ -255,15 +266,21 @@ export async function probePackage(packageInfo, options = {}) {
     const exactUrl = `${url.slice(0, -"latest".length)}${encodeURIComponent(packageInfo.version)}`;
     document = await getJson(exactUrl, options);
     latestMissing = true;
-    if (document && document.version !== packageInfo.version) {
+    if (
+      document !== null &&
+      document !== undefined &&
+      document.version !== packageInfo.version
+    ) {
       return {
+        version_state: "manifest-version-unknown",
         registry_state_reason: "invalid exact npm metadata",
-        registry_evidence_url: exactUrl,
+        version_evidence_url: exactUrl,
       };
     }
   }
   if (document === undefined) {
     return {
+      version_state: "manifest-version-unknown",
       registry_state_reason:
         "exact-version lookup failed; name presence is unknown",
     };
@@ -277,10 +294,13 @@ export async function probePackage(packageInfo, options = {}) {
     packageInfo.registry === "packagist" &&
     (!Array.isArray(document.packages?.[packageInfo.name]) ||
       document.packages[packageInfo.name].some(
-        (v) => typeof v.version !== "string",
+        (v) => typeof v?.version !== "string" || !v.version.trim(),
       ))
   ) {
     return {
+      ...(packageInfo.version
+        ? { version_state: "manifest-version-unknown" }
+        : {}),
       registry_state_reason: "invalid Packagist metadata",
       registry_evidence_url: url,
     };
@@ -295,6 +315,9 @@ export async function probePackage(packageInfo, options = {}) {
       ))
   ) {
     return {
+      ...(packageInfo.version
+        ? { version_state: "manifest-version-unknown" }
+        : {}),
       registry_state_reason: "invalid NuGet metadata",
       registry_evidence_url: url,
     };
@@ -426,7 +449,7 @@ export async function getJson(url, options = {}) {
         });
         return undefined;
       }
-      return await response.json();
+      return (await response.json()) ?? undefined;
     }
   } catch (error) {
     options.onError?.({

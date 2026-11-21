@@ -63,8 +63,13 @@ export async function versionEvidence(item, document, url, options, getJson) {
       versions = Object.keys(document.releases ?? {});
       break;
     case "nuget":
-      versions = document.versions;
-      state.latest_version = versions?.at(-1);
+      state.latest_version = document.versions.at(-1);
+      if (expected && normalizedNugetVersion(expected) === undefined) {
+        state.version_evidence_url = url;
+        state.registry_state_reason = "invalid NuGet manifest version";
+      } else {
+        versions = document.versions;
+      }
       break;
     case "packagist":
       // p2/<name>.json carries tagged stable releases only (dev branches live
@@ -197,10 +202,12 @@ export async function distributionState(item, options, base) {
       const exact = await read(state.version_evidence_url);
       if (
         exact === null ||
-        (typeof exact === "string" && /<project[\s>]/.test(exact))
+        (typeof exact === "string" &&
+          /<project(?:\s[^>]*)?>[\s\S]*<\/project\s*>/.test(exact))
       ) {
         state.manifest_version_exists = exact !== null;
       } else {
+        state.version_state = "manifest-version-unknown";
         state.registry_state_reason =
           "Maven exact-version lookup failed or returned invalid metadata";
       }
@@ -252,12 +259,12 @@ export async function distributionState(item, options, base) {
       const info = await read(evidence);
       let found;
       try {
-        found = info === null ? null : JSON.parse(info)?.Version;
+        found = JSON.parse(info)?.Version;
       } catch {
         found = undefined;
       }
       exact =
-        found === null
+        info === null
           ? { version_evidence_url: evidence, manifest_version_exists: false }
           : found === item.version
             ? { version_evidence_url: evidence, manifest_version_exists: true }

@@ -31,16 +31,20 @@ test(
     try {
       await session.page.goto("about:blank");
       assert.equal(await session.page.evaluate("navigator.webdriver"), false);
-      // browser-commander adds the one extra switch for a persistent
-      // profile so its session cookies, and with them sign-ins, survive a
-      // restart. PRM wants that, so it counts as requested.
+      // Allow PRM's window and startup settings and browser-commander's
+      // session cookie persistence switch.
+      const requestedSwitches = [
+        "--disable-features=ChromeWhatsNewUI,PromotionalTabs",
+        KEEP_SESSION_COOKIES_SWITCH,
+        "--start-maximized",
+      ];
       const report = await measureParity({
         session,
-        args: [KEEP_SESSION_COOKIES_SWITCH],
+        args: requestedSwitches,
       });
       assert.deepEqual(
         report.commandLine.extra,
-        [KEEP_SESSION_COOKIES_SWITCH],
+        requestedSwitches,
         report.commandLine.launched,
       );
       assert.deepEqual(report.unlisted, []);

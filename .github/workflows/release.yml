@@ -135,9 +135,10 @@ jobs:
   # `docker`) and every publishing job gates on its own verdict being `ok`: a
   # refused or not-yet-bootstrapped registry skips only its own publication,
   # never the GitHub release or the other registries (issue #16). The job
-  # itself succeeds in both modes; in report mode (pull requests -- a fork has
-  # no publishing secrets) the same probes only annotate. This job holds no
-  # `id-token: write`: it runs branch code on pull requests.
+  # succeeds in both modes; in report mode (pull requests -- a fork has no
+  # publishing secrets) the same probes only annotate. Release mode also
+  # requires a passing strict RustSec audit before probing any registry. This
+  # job holds no `id-token: write`: it runs branch code on pull requests.
   release-preflight:
     name: Release Preflight
     runs-on: ubuntu-latest
@@ -152,6 +153,20 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Install cargo-audit for release
+        if: >-
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.release_mode == 'instant')
+        uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+        with:
+          tool: cargo-audit@0.22.2
+
+      - name: Require a clean Cargo audit before release
+        if: >-
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.release_mode == 'instant')
+        run: bash scripts/audit-cargo-lock.sh
 
       - name: Probe every release registry
         id: probe

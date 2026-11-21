@@ -123,6 +123,16 @@ fn setup_is_safe_by_default() {
 }
 
 #[test]
+fn plan_all_accepts_the_explicit_all_flag() {
+    let repository = polyglot();
+    let args = ["--repository", &repository, "--offline", "plan"];
+    let default = run(&args, None);
+    let mut explicit = args.to_vec();
+    explicit.push("--all");
+    assert_eq!(run(&explicit, None).stdout, default.stdout);
+}
+
+#[test]
 fn setup_all_selects_every_publishable_package_and_accepts_a_registry_filter() {
     let repository = polyglot();
     let output = run(

@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { probePackage } from "../src/registry-state.mjs";
+import { buildPlans, planMode } from "../src/plan.mjs";
 
 const pkg = (registry, name, version = "1.1.0") => ({
   registry,
@@ -44,6 +45,18 @@ test("failed or invalid exact metadata remains unknown, never absent", async () 
     assert.equal(state.exists, true);
     assert.equal(state.manifest_version_exists, undefined);
   }
+});
+
+test("an unsupported exact lookup preserves package setup for RubyGems", async () => {
+  const item = pkg("rubygems", "library");
+  const state = await probePackage(item, {
+    fetch: fetchWith(() => ({ body: { name: "library", version: "1.0.0" } })),
+  });
+  assert.equal(state.version_state, "manifest-version-unknown");
+  assert.equal(
+    planMode({ ...state, exists_on_registry: state.exists }),
+    "attach",
+  );
 });
 
 test("absent older source is stale and exact public URL is retained", async () => {
@@ -230,3 +243,104 @@ test("Go proxy exact version uses @v/<version>.info for the manifest version", a
   assert.equal(missing.manifest_version_exists, false);
   assert.equal(missing.version_state, "manifest-version-absent");
 });
+
+const releaseRegistries = [
+  ["npm", "library", { version: "2.0.0", _npmUser: { trustedPublisher: {} } }],
+  [
+    "maven-central",
+    "org.example:library",
+    "<metadata><versioning><release>2.0.0</release></versioning></metadata>",
+  ],
+  ["nuget", "Library", { versions: ["2.0.0"] }],
+  [
+    "packagist",
+    "org/library",
+    { packages: { "org/library": [{ version: "v2.0.0" }] } },
+  ],
+  ["go-modules", "example.com/library", { Version: "v2.0.0" }],
+];
+
+for (const [registry, name, metadata] of releaseRegistries) {
+  test(`${registry} plans from exact manifest-version evidence`, async () => {
+    for (const [version, expectedMode, stepId] of [
+      ["3.0.0", "release", "publish-version"],
+      ["1.0.0", "stale-version", "review-manifest-version"],
+      ["4.0.0", "unknown-version", "recheck-manifest-version"],
+    ]) {
+      const item = {
+        ...pkg(
+          registry,
+          name,
+          registry === "go-modules" ? `v${version}` : version,
+        ),
+        manifest: "manifest",
+        publishable: true,
+        workflow: "release.yml",
+      };
+      const state = await probePackage(item, {
+        fetch: fetchWith((url) => {
+          if (url.endsWith("/list")) {
+            return { body: "v2.0.0\n" };
+          }
+          if (registry === "nuget" || registry === "packagist") {
+            return { body: version === "4.0.0" ? {} : metadata };
+          }
+          if (/\/(?:latest|@latest|maven-metadata\.xml)$/.test(url)) {
+            return { body: metadata };
+          }
+          if (version === "4.0.0") {
+            return {
+              body:
+                registry === "go-modules"
+                  ? { Version: null }
+                  : registry === "maven-central"
+                    ? "<html>invalid metadata</html>"
+                    : null,
+            };
+          }
+          return { status: 404, body: "" };
+        }),
+      });
+      assert.equal(
+        state.manifest_version_exists,
+        expectedMode === "unknown-version" ? undefined : false,
+      );
+      const [plan] = buildPlans({
+        repository: {
+          github_owner: "org",
+          github_repository: "repo",
+          pages_workflow: "docs.yml",
+        },
+        packages: [
+          {
+            ...item,
+            ...state,
+            version: item.version,
+            exists_on_registry: state.exists,
+            trusted_publishing: state.trusted,
+          },
+        ],
+      });
+      assert.equal(plan.mode, expectedMode);
+      const step = plan.steps.find((candidate) => candidate.id === stepId);
+      assert.ok(step);
+      assert.equal(step.kind, "manual");
+      assert.equal(step.command, undefined);
+      if (registry === "npm") {
+        assert.ok(
+          plan.steps.some((candidate) => candidate.id === "check-pages"),
+        );
+      }
+      assert.ok(
+        !plan.steps.some(
+          (candidate) =>
+            candidate.id === "first-publish" || candidate.id === "publish-tag",
+        ),
+      );
+      assert.equal(
+        plan.steps.some((candidate) => candidate.id === "publish-version"),
+        expectedMode === "release",
+      );
+    }
+  });
+}

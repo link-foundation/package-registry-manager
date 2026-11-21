@@ -424,6 +424,12 @@ pub enum PlanMode {
     Bootstrap,
     /// The package exists without trusted publishing: attach it.
     Attach,
+    /// The existing package needs a release for the exact manifest version.
+    Release,
+    /// The missing manifest version is older than the registry's latest version.
+    StaleVersion,
+    /// An exact-version lookup failed or returned invalid evidence.
+    UnknownVersion,
     /// Trusted publishing is already in use: nothing to do.
     Complete,
 }
@@ -434,6 +440,9 @@ impl fmt::Display for PlanMode {
             Self::Repair => "repair",
             Self::Bootstrap => "bootstrap",
             Self::Attach => "attach",
+            Self::Release => "release",
+            Self::StaleVersion => "stale-version",
+            Self::UnknownVersion => "unknown-version",
             Self::Complete => "complete",
         })
     }

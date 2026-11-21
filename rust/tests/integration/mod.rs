@@ -18,3 +18,5 @@ mod publisher_forms;
 
 mod scan_reliability;
 mod scan_sidecars;
+
+mod version_plans;
