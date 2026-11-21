@@ -196,20 +196,20 @@ pub async fn evidence(
             Registry::PyPi => doc["releases"].as_object().map(|v| v.contains_key(version)),
             Registry::Jsr => doc["versions"].as_object().map(|v| v.contains_key(version)),
             Registry::NuGet => {
-                if let Some(expected) = normalized_nuget_version(version) {
-                    doc["versions"].as_array().map(|versions| {
-                        versions.iter().any(|value| {
-                            value.as_str().and_then(normalized_nuget_version).as_ref()
-                                == Some(&expected)
-                        })
-                    })
-                } else {
+                let Some(expected) = normalized_nuget_version(version) else {
                     out.insert(
                         "registry_state_reason".into(),
                         json!("invalid NuGet manifest version"),
                     );
-                    None
-                }
+                    out.insert("version_state".into(), json!("manifest-version-unknown"));
+                    return out;
+                };
+                doc["versions"].as_array().map(|versions| {
+                    versions.iter().any(|value| {
+                        value.as_str().and_then(normalized_nuget_version).as_ref()
+                            == Some(&expected)
+                    })
+                })
             }
             Registry::Packagist => doc["packages"][&item.name].as_array().map(|v| {
                 v.iter().any(|v| {
