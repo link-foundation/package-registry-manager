@@ -44,7 +44,7 @@ fn names_package(package: &Package, text: &str, cwd: &str) -> bool {
 
 fn tarball_match(package: &Package, commands: &[String]) -> Option<bool> {
     let expression = crate::publishers::regex(r"\$\{\{[^}]+\}\}");
-    let publish = crate::publishers::regex(r#"npm\s+publish\s+("[^"]*"|'[^']*'|[^\s;&|]+)"#);
+    let publish = crate::publishers::regex(r#"\bnpm\s+publish\s+("[^"]*"|'[^']*'|[^\s;&|]+)"#);
     let version = crate::publishers::regex(r"^(?:v?\d|\$)");
     let expected = package.name.trim_start_matches('@').replace('/', "-");
     let mut matched = None;
