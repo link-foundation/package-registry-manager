@@ -6,7 +6,9 @@ const ENDPOINT_FILE = ".prm-cdp-endpoint";
 const BROWSER_SOCKET = /^ws:\/\/127\.0\.0\.1:(\d+)\/devtools\/browser\/[\w-]+$/;
 
 export function configuredCdpPort(value = process.env.PRM_BROWSER_CDP_PORT) {
-  if (value === undefined) return undefined;
+  if (value === undefined) {
+    return undefined;
+  }
   const port = Number(value);
   if (!/^\d+$/.test(value) || port < 1 || port > 65_535) {
     throw new Error("PRM_BROWSER_CDP_PORT must be an integer from 1 to 65535");
@@ -20,7 +22,9 @@ async function browserSocket(port) {
       redirect: "error",
       signal: AbortSignal.timeout(750),
     });
-    if (!response.ok) return undefined;
+    if (!response.ok) {
+      return undefined;
+    }
     const { webSocketDebuggerUrl } = await response.json();
     if (Number(BROWSER_SOCKET.exec(webSocketDebuggerUrl)?.[1]) === port) {
       return webSocketDebuggerUrl;
@@ -32,7 +36,9 @@ async function browserSocket(port) {
 
 /** A recorded WebSocket ID prevents attaching to a different browser on a reused port. */
 export async function runningEndpoint(profile, configuredPort) {
-  if (configuredPort) return browserSocket(configuredPort);
+  if (configuredPort) {
+    return browserSocket(configuredPort);
+  }
   const recorded = await readFile(path.join(profile, ENDPOINT_FILE), "utf8")
     .then((value) => value.trim())
     .catch(() => "");
@@ -52,9 +58,13 @@ export async function runningEndpoint(profile, configuredPort) {
 }
 
 export async function rememberEndpoint(profile, port) {
-  if (!port) return;
+  if (!port) {
+    return;
+  }
   const endpoint = await browserSocket(port);
-  if (!endpoint) return;
+  if (!endpoint) {
+    return;
+  }
   const target = path.join(profile, ENDPOINT_FILE);
   const temporary = `${target}.${randomUUID()}`;
   try {

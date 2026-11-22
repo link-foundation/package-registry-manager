@@ -21,16 +21,13 @@ import { exec } from "./exec.mjs";
 import { dispatchInputArgs } from "./workflow-inputs.mjs";
 
 import {
-  ANSI,
-  nodeOptionsWithShim,
-  runInteractive,
-  writeTtyShim,
-} from "./auth-urls.mjs";
-import {
-  approvalDeadline,
-  TWO_FACTOR_HINT,
-  withFreshLinks,
-} from "./approvals.mjs";
+  listsTrustedPublisher,
+  openLink,
+  runProcess,
+  stripAnsi,
+} from "./setup-process.mjs";
+export { listsTrustedPublisher } from "./setup-process.mjs";
+import { TRUST_STORED } from "./approvals.mjs";
 import { connectAutomation } from "./automation.mjs";
 import { runCratesApiStep } from "./crates-api.mjs";
 import {
@@ -69,10 +66,6 @@ const INTERACTIVE_CHECKS = new Set(["check-trust", "verify-trusted-publisher"]);
 const PAGES_CHANGES = new Set(["enable-pages", "use-pages-workflow"]);
 /** Checks whose failure is an answer, so their output is not echoed. */
 const QUIET_CHECKS = new Set(["check-sign-in", "check-pages"]);
-/** A trusted publisher in `npm trust list` output, human-readable or JSON. */
-const LISTED_PUBLISHER = /^\s*(?:id|type|file):\s*\S|"(?:id|type|file)"\s*:/m;
-/** What `npm trust github` prints once the registry stored the publisher. */
-const TRUST_CREATED = /Trust configuration created successfully/i;
 /** Where `--browser` opens URLs that need no automation. */
 export const BROWSER_MODES = ["default", "automated"];
 
@@ -679,7 +672,7 @@ export class SetupSession {
   }
 
   confirmTrustCreated(output) {
-    if (TRUST_CREATED.test(stripAnsi(output))) {
+    if (TRUST_STORED.test(stripAnsi(output))) {
       this.recordRecoveryChange();
       console.log("  npm stored the trusted publisher.");
       this.conditions.delete("trust-missing");
@@ -752,16 +745,6 @@ export class SetupSession {
     return submitPrefilledSignIn(this.automation, {
       log: (message) => console.log(message),
       ...options,
-    });
-  }
-
-  async approveNpmChallenge() {
-    if (!this.automation) {
-      return undefined;
-    }
-    const { approveNpmChallenge } = await import("./publisher-form.mjs");
-    return approveNpmChallenge(this.automation, {
-      log: (message) => console.log(message),
     });
   }
 
@@ -944,49 +927,12 @@ export class SetupSession {
     return true;
   }
 
-  /** Runs a step's command; `extra` is added to that child's environment only. */
-  async runProcess(step, mirror, extra = undefined) {
-    const { command, cwd } = this.prepare(step);
-    let env = extra ? { ...process.env, ...extra } : process.env;
-    const npm = ["npm", "npx"].includes(command.program);
-    if (npm) {
-      await this.detectDefaultBrowser();
-      this.shim ??= await writeTtyShim();
-      env = {
-        ...process.env,
-        NODE_OPTIONS: nodeOptionsWithShim(
-          process.env.NODE_OPTIONS,
-          this.shim.shim,
-        ),
-      };
-    }
-    const run = () =>
-      runInteractive(command, {
-        cwd,
-        env,
-        mirror,
-        stopOnLegacyLogin: npm,
-        watchStderr: npm || step.id === "trigger-release",
-        onUrl: (url, kind) => this.openLink(url, kind),
-      });
-    // npm's links expire after about 5 minutes; ask npm for a fresh one.
-    return npm ? withFreshLinks(run) : run();
+  runProcess(step, mirror, extra) {
+    return runProcess(this, step, mirror, extra);
   }
 
-  async openLink(url, kind) {
-    console.log(approvalDeadline(kind));
-    if (kind === "approve") {
-      console.log(TWO_FACTOR_HINT);
-    }
-    await this.open(url, !this.options.openWith).catch((error) =>
-      console.error(`warning: could not open ${url}: ${error.message}`),
-    );
-    await this.submitPrefilledSignIn({
-      formGraceMs: kind === "login" ? 15_000 : 5_000,
-    });
-    if (kind === "approve" && this.plan.registry === "npm") {
-      await this.approveNpmChallenge();
-    }
+  openLink(url, kind, signal) {
+    return openLink(this, url, kind, signal);
   }
 
   expand(command) {
@@ -1016,15 +962,6 @@ export class SetupSession {
 /** The plan's cleanup steps, which run after every other step, even a failed one. */
 export function cleanupSteps(plan) {
   return plan.steps.filter((step) => CLEANUP_CONDITIONS.has(step.when));
-}
-
-/** Whether `npm trust list` output names a trusted publisher. */
-export function listsTrustedPublisher(output) {
-  return LISTED_PUBLISHER.test(stripAnsi(output));
-}
-
-function stripAnsi(text) {
-  return String(text ?? "").replaceAll(ANSI, "");
 }
 
 function isTrustedRelease(document, values) {

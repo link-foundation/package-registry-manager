@@ -103,3 +103,99 @@ test(
     }
   },
 );
+
+test(
+  "reattaches to the dedicated Chromium tab and uses trusted npm approval clicks",
+  { skip: !smoke, timeout: 90_000 },
+  async (t) => {
+    const { connectAutomation } = await import("../src/automation.mjs");
+    const { watchNpmApproval } = await import("../src/npm-approval.mjs");
+    const profile = await mkdtemp(path.join(os.tmpdir(), "prm-npm-cdp-"));
+    t.after(() => rm(profile, { recursive: true, force: true }));
+    const options = { browser: parseBrowserOptions(), profile, headless: true };
+    const original = await connectAutomation(options);
+    try {
+      await original.evaluate("globalThis.prmReuse = 42");
+      const attached = await connectAutomation(options, {
+        launchRealBrowser: () =>
+          assert.fail("the running browser must be reused"),
+      });
+      try {
+        assert.equal(await attached.evaluate("globalThis.prmReuse"), 42);
+        const context = attached.pages()[0].context();
+        await context.route("https://www.npmjs.com/auth/cli/*", (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: `<meta charset="utf-8">
+              <main style="font: 16px system-ui; padding: 20px 24px; max-width: 540px">
+              <h1>Security key approval</h1>
+              <label><input type="checkbox" id="cooldownOptin_didOptForCooldown">
+              Skip two-factor checks for the next five minutes</label>
+              <button>Use security key</button>
+              <p id="status">Waiting for approval</p>
+              </main>
+              <script>
+                const box = document.querySelector('input');
+                const button = document.querySelector('button');
+                box.addEventListener('click', (event) => {
+                  if (!event.isTrusted) event.preventDefault();
+                });
+                button.addEventListener('click', (event) => {
+                  if (event.isTrusted && box.checked) {
+                    document.querySelector('#status').textContent = 'Something went wrong. Please try again later.';
+                  }
+                });
+              </script>`,
+          }),
+        );
+        await attached.goto("https://www.npmjs.com/auth/cli/first");
+        await attached.evaluate("document.querySelector('input').click()");
+        assert.equal(
+          await attached.evaluate("document.querySelector('input').checked"),
+          false,
+        );
+        const capture = async (state) => {
+          if (process.env.PRM_NPM_APPROVAL_SCREENSHOTS === "1") {
+            await attached
+              .pages()[0]
+              .locator("main")
+              .screenshot({
+                path: path.join(
+                  import.meta.dirname,
+                  "../../docs/screenshots",
+                  `npm-approval-${state}.png`,
+                ),
+              });
+          }
+        };
+        await capture("before");
+        const failure = await watchNpmApproval(attached, {
+          timeoutMs: 5_000,
+          pollIntervalMs: 10,
+          log: () => {},
+        });
+        assert.match(failure, /Something went wrong/);
+        assert.equal(
+          await attached.evaluate("document.querySelector('input').checked"),
+          true,
+        );
+        await capture("after");
+        assert.equal(attached.pages().length, 1);
+        await attached.goto("https://www.npmjs.com/auth/cli/fresh");
+        assert.equal(attached.pages().length, 1);
+        assert.match(
+          await original.evaluate("location.href"),
+          /\/auth\/cli\/fresh$/,
+        );
+      } finally {
+        await attached.close();
+      }
+      assert.match(
+        await original.evaluate("location.href"),
+        /\/auth\/cli\/fresh$/,
+      );
+    } finally {
+      await original.close();
+    }
+  },
+);

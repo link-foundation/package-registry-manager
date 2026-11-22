@@ -154,7 +154,9 @@ async function reuseNpmPage(foreground) {
     ? foreground
     : (npmPages[0] ?? foreground);
   for (const page of npmPages) {
-    if (page !== working) await page.close().catch(() => {});
+    if (page !== working) {
+      await page.close().catch(() => {});
+    }
   }
   await working.bringToFront?.().catch(() => {});
   return working;
@@ -227,10 +229,11 @@ export async function connectAutomation(
       if (!browser.attach) {
         await rememberEndpoint(profile, connection.remoteDebuggingPort).catch(
           (error) => {
-            if (verbose)
+            if (verbose) {
               console.error(
                 `Could not record browser endpoint: ${error.message}`,
               );
+            }
           },
         );
       }

@@ -9,9 +9,9 @@ use std::process::Stdio;
 use anyhow::{Context, Result};
 use regex::Regex;
 use tokio::io::AsyncReadExt;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::{mpsc::UnboundedSender, oneshot, watch};
 
-use crate::approvals::{LinkKind, EXPIRED_APPROVAL};
+use crate::approvals::{trust_stored, LinkKind, EXPIRED_APPROVAL};
 use crate::model::CommandSpec;
 
 /// How much of npm's stderr is kept to recognize an expired approval.
@@ -218,6 +218,36 @@ pub async fn run_interactive(
     stop_on_legacy_login: bool,
     watch_stderr: bool,
 ) -> Result<CommandOutput> {
+    run_interactive_controlled(
+        command,
+        cwd,
+        env,
+        mirror,
+        urls,
+        stop_on_legacy_login,
+        watch_stderr,
+        None,
+    )
+    .await
+}
+
+pub(crate) struct ApprovalControl {
+    pub stop: Option<oneshot::Receiver<()>>,
+    pub finished: watch::Sender<bool>,
+    pub trust_create: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_interactive_controlled(
+    command: &CommandSpec,
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+    mirror: bool,
+    urls: Option<UnboundedSender<(String, LinkKind)>>,
+    stop_on_legacy_login: bool,
+    watch_stderr: bool,
+    mut control: Option<ApprovalControl>,
+) -> Result<CommandOutput> {
     let mut child = tokio::process::Command::new(resolve_program(&command.program))
         .args(&command.args)
         .current_dir(cwd)
@@ -229,6 +259,7 @@ pub async fn run_interactive(
         } else {
             Stdio::inherit()
         })
+        .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("failed to run {}", command.program))?;
     let stderr = child
@@ -238,14 +269,31 @@ pub async fn run_interactive(
     let mut stdout = child.stdout.take().context("stdout is not piped")?;
     let mut scanner = AuthUrlScanner::new();
     let mut captured = Vec::new();
+    let mut stored = false;
     let mut buffer = [0_u8; 8192];
     loop {
-        let read = stdout.read(&mut buffer).await?;
+        let read = tokio::select! {
+            read = stdout.read(&mut buffer) => read?,
+            () = approval_stop(&mut control) => {
+                stop_child(&mut child).await?;
+                break;
+            }
+        };
         if read == 0 {
             break;
         }
         let chunk = &buffer[..read];
+        let tail_start = captured.len().saturating_sub(256);
         captured.extend_from_slice(chunk);
+        if let Some(control) = &control {
+            if control.trust_create
+                && !stored
+                && trust_stored(&String::from_utf8_lossy(&captured[tail_start..]))
+            {
+                stored = true;
+                control.finished.send_replace(true);
+            }
+        }
         if mirror {
             let mut terminal = std::io::stdout().lock();
             terminal.write_all(chunk)?;
@@ -258,7 +306,7 @@ pub async fn run_interactive(
             }
         }
         if stop_on_legacy_login && scanner.legacy_login() {
-            child.start_kill()?;
+            stop_child(&mut child).await?;
             break;
         }
     }
@@ -267,19 +315,53 @@ pub async fn run_interactive(
             let _ = sender.send(link);
         }
     }
-    let status = child.wait().await?;
+    let status = tokio::select! {
+        status = child.wait() => status?,
+        () = approval_stop(&mut control) => {
+            stop_child(&mut child).await?;
+            child.wait().await?
+        }
+    };
+    if let Some(control) = control {
+        control.finished.send_replace(true);
+    }
     let stderr = match stderr {
         Some(task) => task.await??,
         None => String::new(),
     };
     let expired = Regex::new(EXPIRED_APPROVAL).expect("static pattern must compile");
     Ok(CommandOutput {
-        code: status.code().unwrap_or(1),
+        code: if stored {
+            0
+        } else {
+            status.code().unwrap_or(1)
+        },
         stdout: String::from_utf8_lossy(&captured).into_owned(),
         approval_expired: expired.is_match(&stderr),
         stderr,
         legacy_login: stop_on_legacy_login && scanner.legacy_login(),
     })
+}
+
+async fn approval_stop(control: &mut Option<ApprovalControl>) {
+    if let Some(control) = control {
+        if let Some(stop) = &mut control.stop {
+            let received = stop.await.is_ok();
+            control.stop = None;
+            if received {
+                return;
+            }
+        }
+    }
+    std::future::pending().await
+}
+
+async fn stop_child(child: &mut tokio::process::Child) -> Result<()> {
+    if let Some(pid) = child.id() {
+        let _ = command_stream::zx::kill(pid, Some("SIGKILL")).await;
+        child.start_kill()?;
+    }
+    Ok(())
 }
 
 /// Mirrors a piped stderr to the terminal and returns its last
@@ -303,4 +385,61 @@ async fn watch(mut stderr: tokio::process::ChildStderr) -> Result<String> {
     Ok(ansi
         .replace_all(&String::from_utf8_lossy(&tail), "")
         .into_owned())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn npm_approval_can_stop_a_running_command() -> Result<()> {
+        let command = CommandSpec {
+            program: "sh".to_owned(),
+            args: vec![
+                "-c".to_owned(),
+                "printf 'Authenticate your account at:\nhttps://www.npmjs.com/auth/cli/fake\n'; sleep 10; printf 'completed\n'".to_owned(),
+            ],
+        };
+        let (sender, mut urls) = tokio::sync::mpsc::unbounded_channel();
+        let (stop, cancel) = oneshot::channel();
+        let (finished, mut done) = watch::channel(false);
+        let env = BTreeMap::new();
+        let cwd = std::env::current_dir()?;
+        let (result, observed) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(
+                run_interactive_controlled(
+                    &command,
+                    &cwd,
+                    &env,
+                    false,
+                    Some(sender),
+                    true,
+                    true,
+                    Some(ApprovalControl {
+                        stop: Some(cancel),
+                        finished,
+                        trust_create: true,
+                    }),
+                ),
+                async {
+                    let link = urls.recv().await;
+                    let _ = stop.send(());
+                    done.wait_for(|finished| *finished).await?;
+                    Ok::<_, anyhow::Error>(link)
+                }
+            )
+        })
+        .await?;
+        let output = result?;
+        assert_eq!(
+            observed?,
+            Some((
+                "https://www.npmjs.com/auth/cli/fake".to_owned(),
+                LinkKind::Approve
+            ))
+        );
+        assert_ne!(output.code, 0);
+        assert!(!output.stdout.contains("completed"));
+        Ok(())
+    }
 }

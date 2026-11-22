@@ -3,18 +3,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
-use command_stream::StreamingRunner;
-use regex::Regex;
-use serde_json::Value;
-use tokio::sync::mpsc::unbounded_channel;
-
-use crate::approvals::{
-    approval_deadline, next_link, LinkKind, APPROVAL_ATTEMPTS, TWO_FACTOR_HINT,
-};
-use crate::auth_urls::{
-    node_options_with_shim, resolve_program, run_interactive, write_tty_shim, CommandOutput,
-};
+use crate::auth_urls::{resolve_program, CommandOutput};
 use crate::automation::Automation;
 use crate::browser_options::BrowserOptions;
 use crate::flows::CLEANUP_CONDITIONS;
@@ -30,6 +19,10 @@ use crate::registry_state::{npm_trusted, truthy, Endpoints, Lookup, RegistryClie
 use crate::tokens::{
     cargo_home, read_cargo_token, report_token_secrets, TokenState, CRATES_TOKENS_URL,
 };
+use anyhow::{anyhow, bail, Context, Result};
+use command_stream::StreamingRunner;
+use regex::Regex;
+use serde_json::Value;
 
 mod batch;
 mod bootstrap_session;
@@ -45,6 +38,7 @@ mod nuget_ci;
 mod nuget_session;
 mod pack_session;
 mod packagist_session;
+mod process_session;
 mod publisher_session;
 mod release_session;
 mod repository_session;
@@ -829,79 +823,6 @@ impl<'a> Session<'a> {
             legacy_login: false,
             approval_expired: false,
         })
-    }
-
-    /// Run a step's command with the terminal. npm's links expire after about
-    /// 5 minutes, so an npm step that ends on an expired link is run again for
-    /// a fresh one.
-    async fn run_process(&mut self, step: &SetupStep, mirror: bool) -> Result<CommandOutput> {
-        self.run_process_with(step, mirror, &BTreeMap::new()).await
-    }
-
-    /// [`Self::run_process`] with `extra` added to the child's environment
-    /// only, never to this process's.
-    async fn run_process_with(
-        &mut self,
-        step: &SetupStep,
-        mirror: bool,
-        extra: &BTreeMap<String, String>,
-    ) -> Result<CommandOutput> {
-        let (command, cwd) = self.prepare(step)?;
-        let npm = matches!(command.program.as_str(), "npm" | "npx");
-        if !npm {
-            return self.run_once(&command, &cwd, mirror, false, extra).await;
-        }
-        self.detect_default_browser().await;
-        for attempt in 1.. {
-            let result = self.run_once(&command, &cwd, mirror, true, extra).await?;
-            match next_link(&result, attempt, APPROVAL_ATTEMPTS)? {
-                Some(message) => println!("{message}"),
-                None => return Ok(result),
-            }
-        }
-        unreachable!("next_link fails after the last attempt")
-    }
-
-    async fn run_once(
-        &mut self,
-        command: &CommandSpec,
-        cwd: &Path,
-        mirror: bool,
-        npm: bool,
-        extra: &BTreeMap<String, String>,
-    ) -> Result<CommandOutput> {
-        let mut env = extra.clone();
-        if npm {
-            if self.shim.is_none() {
-                self.shim = Some(write_tty_shim()?);
-            }
-            if let Some((_, shim)) = &self.shim {
-                let existing = std::env::var("NODE_OPTIONS").ok();
-                env.insert(
-                    "NODE_OPTIONS".to_owned(),
-                    node_options_with_shim(existing.as_deref(), &shim.to_string_lossy()),
-                );
-            }
-        }
-        let (sender, mut receiver) = unbounded_channel();
-        let (result, ()) = tokio::join!(
-            run_interactive(command, cwd, &env, mirror, Some(sender), npm, npm),
-            async {
-                while let Some((url, kind)) = receiver.recv().await {
-                    println!("{}", approval_deadline(kind, chrono::Local::now().time()));
-                    if kind == LinkKind::Approve {
-                        println!("{TWO_FACTOR_HINT}");
-                    }
-                    if let Err(error) = self
-                        .open(&url, npm && self.options.open_with.is_none())
-                        .await
-                    {
-                        eprintln!("warning: could not open {url}: {error:#}");
-                    }
-                }
-            }
-        );
-        result
     }
 
     fn expand(&self, command: &CommandSpec) -> CommandSpec {

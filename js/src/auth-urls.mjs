@@ -1,9 +1,10 @@
 import { spawn } from "command-stream";
+import { kill } from "command-stream/zx";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { EXPIRED_APPROVAL } from "./approvals.mjs";
+import { EXPIRED_APPROVAL, TRUST_STORED } from "./approvals.mjs";
 
 /**
  * Preloaded into npm so it treats piped stdout as a terminal. npm only offers
@@ -111,17 +112,51 @@ export function runInteractive(command, options) {
       shell: false,
     });
     let legacyLogin = false;
+    let exited = false;
+    let stopping = false;
+    let link;
+    let trustStored = false;
+    let approvalPageFailure;
+    let approvalLink = false;
+    const stopChild = async () => {
+      if (stopping || exited || !child.pid) {
+        return;
+      }
+      stopping = true;
+      await kill(child.pid, "SIGKILL").catch(() => child.kill());
+    };
+    const cancelLink = () => link?.abort();
+    child.on("exit", () => {
+      exited = true;
+      cancelLink();
+    });
     let openings = Promise.resolve();
     const stop = options.stopOnLegacyLogin
       ? () => {
           legacyLogin = true;
-          child.kill();
+          void stopChild();
         }
       : undefined;
     const scan =
       options.onUrl || stop
         ? authUrlScanner((url, kind) => {
-            openings = openings.then(() => options.onUrl?.(url, kind));
+            const approval = options.watchApproval;
+            if (approval) {
+              approvalLink = true;
+              cancelLink();
+              link = new globalThis.AbortController();
+              if (exited || trustStored) {
+                link.abort();
+              }
+            }
+            const signal = link?.signal;
+            openings = openings.then(async () => {
+              const failure = await options.onUrl?.(url, kind, signal);
+              if (approval && !signal.aborted && typeof failure === "string") {
+                approvalPageFailure = failure;
+                await stopChild();
+              }
+            });
             // Observe rejection until the command closes and propagates it.
             openings.catch(() => {});
           }, stop)
@@ -129,9 +164,18 @@ export function runInteractive(command, options) {
     let stdout = "";
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
+      const start = stdout.length > 256 ? stdout.length - 256 : 0;
       stdout += chunk;
       if (options.mirror !== false) {
         process.stdout.write(chunk);
+      }
+      if (
+        options.trustCreate &&
+        !trustStored &&
+        TRUST_STORED.test(stdout.slice(start).replace(ANSI, ""))
+      ) {
+        trustStored = true;
+        cancelLink();
       }
       scan?.(chunk);
     });
@@ -147,6 +191,8 @@ export function runInteractive(command, options) {
     }
     child.on("error", reject);
     child.on("close", async (code) => {
+      exited = true;
+      cancelLink();
       scan?.("\n");
       try {
         await openings;
@@ -156,6 +202,11 @@ export function runInteractive(command, options) {
           stderr: errors,
           legacyLogin,
           approvalExpired,
+          ...(options.watchApproval && {
+            approvalLink,
+            approvalPageFailure,
+            trustStored,
+          }),
         });
       } catch (error) {
         reject(error);

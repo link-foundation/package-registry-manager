@@ -3,9 +3,7 @@ import test from "node:test";
 
 import {
   acceptPasswordAutofill,
-  approveNpmChallenge,
   browserApplication,
-  npmChallengeScript,
   prepareLoginDevice,
   submitPasswordConfirmation,
   submitPrefilledSignIn,
@@ -341,56 +339,4 @@ test("does not close a working-page wrapper showing authentication success", asy
   };
   await prepareLoginDevice(wrapper, { state: {}, log: () => {} });
   assert.deepEqual(closed, []);
-});
-
-test("automatically opts in and clicks npm's security key button", async () => {
-  let calls = 0;
-  const page = {
-    evaluate: async () => {
-      calls += 1;
-      if (calls === 1) {
-        return {
-          present: true,
-          challenge: true,
-          opted: false,
-          button: true,
-          clicked: false,
-        };
-      }
-      if (calls === 2) {
-        return {
-          present: true,
-          challenge: true,
-          opted: true,
-          button: true,
-          clicked: false,
-        };
-      }
-      return {
-        present: true,
-        challenge: true,
-        opted: true,
-        button: true,
-        clicked: true,
-      };
-    },
-  };
-  const messages = [];
-  const result = await approveNpmChallenge(page, {
-    timeoutMs: 100,
-    pollIntervalMs: 1,
-    log: (message) => messages.push(message),
-  });
-  assert.equal(result.clicked, true);
-  assert.equal(calls, 3);
-  assert.ok(
-    messages.some((message) => /Clicked "Use security key"/.test(message)),
-  );
-});
-
-test("npm challenge script names the cooldown checkbox and key button", () => {
-  const script = npmChallengeScript("both");
-  assert.match(script, /cooldownOptin_didOptForCooldown/);
-  assert.match(script, /security key/i);
-  assert.match(script, /button\.click\(\)/);
 });

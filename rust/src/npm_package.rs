@@ -30,9 +30,7 @@ pub fn lists_trusted_publisher(output: &str) -> bool {
 /// which verifies it without a second 2FA-gated `npm trust list` (#24).
 #[must_use]
 pub fn trust_created(output: &str) -> bool {
-    let ansi = Regex::new(ANSI_PATTERN).expect("static pattern must compile");
-    ansi.replace_all(output, "")
-        .contains("Trust configuration created successfully")
+    crate::approvals::trust_stored(output)
 }
 
 /// npm's warnings from `npm pack`, such as fields it auto-corrected or removed

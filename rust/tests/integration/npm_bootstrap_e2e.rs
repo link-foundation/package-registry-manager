@@ -486,6 +486,15 @@ fn gives_up_after_three_expired_login_links_with_a_clear_message() {
 
 #[test]
 fn reruns_npm_publish_with_a_fresh_approval_link_once_one_expired() {
+    assert_publish_retries("FAKE_EXPIRED_PUBLISH");
+}
+
+#[test]
+fn reruns_npm_publish_after_a_done_endpoint_404() {
+    assert_publish_retries("FAKE_DONE_404");
+}
+
+fn assert_publish_retries(scenario: &str) {
     let temporary = TempDir::new().expect("create temporary directory");
     let Some((repository, state)) = prepare(&temporary) else {
         return;
@@ -496,7 +505,7 @@ fn reruns_npm_publish_with_a_fresh_approval_link_once_one_expired() {
         &state,
         &registry,
         &["--no-browser"],
-        &[("FAKE_EXPIRED_PUBLISH", "1")],
+        &[(scenario, "1")],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
