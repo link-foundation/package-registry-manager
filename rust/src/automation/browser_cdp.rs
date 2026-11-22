@@ -4,16 +4,86 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result};
 use browser_commander::browser::cdp_endpoint::fetch_cdp_version;
-use browser_commander::{connect_browser, ConnectOptions};
+use chromiumoxide::cdp::browser_protocol::network::DeleteCookiesParams;
+use chromiumoxide::cdp::browser_protocol::target::TargetId;
+use chromiumoxide::error::CdpError;
+use chromiumoxide::{Browser, Page};
+use futures_util::StreamExt;
 use reqwest::{redirect::Policy, Client, Url};
 use serde::Deserialize;
+use tokio::task::JoinHandle;
 
-use super::Automation;
+use super::{cookie_domain_matches, Automation};
 
 const ENDPOINT_FILE: &str = ".prm-cdp-endpoint";
 const PROBE_TIMEOUT: Duration = Duration::from_millis(750);
+const ATTACH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A page in a dedicated Chromium profile owned by another process.
+pub struct AttachedBrowser {
+    pub(super) page: Page,
+    browser: Browser,
+    _handler: ConnectionHandler,
+}
+
+// Dropping the connection must leave the running browser and its tabs open.
+struct ConnectionHandler(JoinHandle<()>);
+
+impl Drop for ConnectionHandler {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl AttachedBrowser {
+    async fn connect(socket: String, tab: Option<&Tab>) -> Result<Self> {
+        let (mut browser, mut events) = Browser::connect(socket).await?;
+        let handler = ConnectionHandler(tokio::spawn(async move {
+            while events.next().await.is_some() {}
+        }));
+        // Browser Commander 0.22.1 skips existing target discovery when it
+        // connects through Chromiumoxide, so it opens a new tab each time.
+        browser.fetch_targets().await?;
+        let page = if let Some(tab) = tab {
+            let id = TargetId::new(&tab.id);
+            loop {
+                match browser.get_page(id.clone()).await {
+                    Ok(page) => break page,
+                    Err(CdpError::NotFound) => tokio::time::sleep(Duration::from_millis(20)).await,
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        } else {
+            browser.new_page("about:blank").await?
+        };
+        Ok(Self {
+            page,
+            browser,
+            _handler: handler,
+        })
+    }
+
+    pub(super) async fn clear_cookies(&self, domains: &[&str]) -> Result<()> {
+        let cookies = self
+            .browser
+            .get_cookies()
+            .await?
+            .into_iter()
+            .filter(|cookie| cookie_domain_matches(&cookie.domain, domains))
+            .map(|cookie| DeleteCookiesParams {
+                name: cookie.name,
+                url: None,
+                domain: Some(cookie.domain),
+                path: Some(cookie.path),
+                partition_key: cookie.partition_key,
+            })
+            .collect();
+        self.page.delete_cookies(cookies).await?;
+        Ok(())
+    }
+}
 
 pub(super) fn configured_port() -> Result<Option<u16>> {
     std::env::var_os("PRM_BROWSER_CDP_PORT")
@@ -103,26 +173,21 @@ pub(super) async fn attach(
         return Ok(None);
     };
     let client = cdp_client()?;
-    let npm_tabs = npm_tabs(&client, port).await?;
-    let target_id = npm_tabs.first().map(|tab| tab.id.clone());
-    let connection = connect_browser(ConnectOptions {
-        ws_endpoint: Some(socket),
-        target_id,
-        fallback: true,
-        verbose,
-        timeout: Some(Duration::from_secs(10)),
-        ..ConnectOptions::default()
-    })
-    .await
-    .context("could not attach to the running browser")?;
-    let selected = connection.page.target_id().await?;
-    ensure!(
-        selected.is_some(),
-        "the attached browser did not report a working tab"
-    );
-    close_duplicates(&client, port, npm_tabs, selected.as_deref()).await;
+    let tabs = page_tabs(&client, port).await?;
+    let target = tabs
+        .iter()
+        .find(|tab| npm_page(&tab.url))
+        .or_else(|| tabs.first());
+    let connection = tokio::time::timeout(ATTACH_TIMEOUT, AttachedBrowser::connect(socket, target))
+        .await
+        .context("timed out attaching to the running browser")?
+        .context("could not attach to the running browser")?;
+    close_duplicates(&client, port, tabs, connection.page.target_id().as_ref()).await;
     let _ = connection.page.bring_to_front().await;
-    Ok(Some(Automation::Attached(connection.page)))
+    if verbose {
+        eprintln!("Attached to the running browser for the dedicated profile");
+    }
+    Ok(Some(Automation::Attached(Box::new(connection))))
 }
 
 pub(super) async fn clean_launched(
@@ -132,8 +197,8 @@ pub(super) async fn clean_launched(
     let client = cdp_client()?;
     let selected = page.target_id().await?;
     if let Some(selected) = selected {
-        let tabs = npm_tabs(&client, port).await?;
-        close_duplicates(&client, port, tabs, Some(&selected)).await;
+        let tabs = page_tabs(&client, port).await?;
+        close_duplicates(&client, port, tabs, &selected).await;
     }
     Ok(())
 }
@@ -146,22 +211,20 @@ fn cdp_client() -> Result<Client> {
         .build()?)
 }
 
-async fn npm_tabs(client: &Client, port: u16) -> Result<Vec<Tab>> {
+async fn page_tabs(client: &Client, port: u16) -> Result<Vec<Tab>> {
     let response = client
         .get(format!("http://127.0.0.1:{port}/json/list"))
         .send()
         .await?
         .error_for_status()?;
     let tabs: Vec<Tab> = serde_json::from_slice(&response.bytes().await?)?;
-    Ok(tabs
-        .into_iter()
-        .filter(|tab| tab.kind == "page" && npm_page(&tab.url))
-        .collect())
+    Ok(tabs.into_iter().filter(|tab| tab.kind == "page").collect())
 }
 
-async fn close_duplicates(client: &Client, port: u16, tabs: Vec<Tab>, selected: Option<&str>) {
+async fn close_duplicates(client: &Client, port: u16, tabs: Vec<Tab>, selected: &str) {
     for tab in tabs {
-        if Some(tab.id.as_str()) != selected
+        if tab.id != selected
+            && npm_page(&tab.url)
             && tab.id.bytes().all(|byte| byte.is_ascii_alphanumeric())
         {
             // The tab may have closed while the browser was attaching.

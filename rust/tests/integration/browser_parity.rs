@@ -99,12 +99,16 @@ async fn browser_reuses_the_running_profile_and_detaches() -> anyhow::Result<()>
     }
     let profile = tempfile::tempdir()?;
     let options = BrowserOptions::default();
-    let first = Box::pin(Automation::connect(&options, profile.path(), false, &[])).await?;
+    let mut first = Box::pin(Automation::connect(&options, profile.path(), false, &[])).await?;
     let Automation::Launched(_) = first else {
         anyhow::bail!("expected to launch a browser for the empty profile");
     };
     let result = Box::pin(async {
+        first
+            .goto("data:text/html,<main>approval smoke</main>")
+            .await?;
         first.evaluate("globalThis.prmReuse = 42").await?;
+        assert_eq!(first.evaluate("globalThis.prmReuse").await?, 42);
         let second = Box::pin(Automation::connect(&options, profile.path(), false, &[])).await?;
         let Automation::Attached(_) = second else {
             anyhow::bail!("expected to attach to the running browser");

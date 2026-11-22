@@ -3,7 +3,6 @@
 //! through the Browser Commander extension.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -24,6 +23,7 @@ use crate::profile::{default_browser_profile, ensure_profile_ignored};
 use crate::sign_in_import::IMPORT_CHOICES;
 
 mod browser_cdp;
+use browser_cdp::AttachedBrowser;
 
 /// How long `--browser-attach extension` waits for the extension to connect.
 pub const EXTENSION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -118,14 +118,7 @@ pub fn expired_cookies(state: &Value, domains: &[&str]) -> Value {
         .into_iter()
         .flatten()
         .filter(|cookie| {
-            let host = cookie["domain"].as_str().unwrap_or_default();
-            let host = host.strip_prefix('.').unwrap_or(host);
-            domains.iter().any(|domain| {
-                host == *domain
-                    || host
-                        .strip_suffix(domain)
-                        .is_some_and(|prefix| prefix.ends_with('.'))
-            })
+            cookie_domain_matches(cookie["domain"].as_str().unwrap_or_default(), domains)
         })
         .map(|cookie| {
             let mut expired = cookie.clone();
@@ -135,6 +128,16 @@ pub fn expired_cookies(state: &Value, domains: &[&str]) -> Value {
         })
         .collect();
     json!({ "cookies": cookies, "origins": [] })
+}
+
+fn cookie_domain_matches(host: &str, domains: &[&str]) -> bool {
+    let host = host.strip_prefix('.').unwrap_or(host);
+    domains.iter().any(|domain| {
+        host == *domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    })
 }
 
 /// The profile `--browser-attach snapshot` copies, if requested.
@@ -165,7 +168,7 @@ pub fn extension_instructions(directory: &Path) -> String {
 /// A connected browser that fills forms.
 pub enum Automation {
     Launched(Box<RealBrowserLaunchResult>),
-    Attached(Arc<dyn EngineAdapter>),
+    Attached(Box<AttachedBrowser>),
     Snapshot(Box<SnapshotLaunchResult>),
     WebDriver(Box<ManagedWebDriver>),
     Extension {
@@ -256,9 +259,8 @@ impl Automation {
     fn page(&self) -> Option<&dyn EngineAdapter> {
         match self {
             Self::Launched(launched) => Some(launched.page.as_ref()),
-            Self::Attached(page) => Some(page.as_ref()),
             Self::Snapshot(launched) => Some(launched.launch.page.as_ref()),
-            Self::Extension { .. } | Self::WebDriver(_) => None,
+            Self::Attached(_) | Self::Extension { .. } | Self::WebDriver(_) => None,
         }
     }
 
@@ -266,6 +268,10 @@ impl Automation {
     pub async fn goto(&mut self, url: &str) -> Result<()> {
         if let Self::WebDriver(driver) = self {
             return Ok(driver.goto(url).await?);
+        }
+        if let Self::Attached(browser) = self {
+            browser.page.goto(url).await?.wait_for_navigation().await?;
+            return Ok(());
         }
         if let Some(page) = self.page() {
             page.goto(url).await?;
@@ -287,6 +293,10 @@ impl Automation {
     pub async fn evaluate(&self, script: &str) -> Result<Value> {
         if let Self::WebDriver(driver) = self {
             return Ok(driver.evaluate(script).await?);
+        }
+        if let Self::Attached(browser) = self {
+            let result = browser.page.evaluate(script).await?;
+            return Ok(result.value().cloned().unwrap_or(Value::Null));
         }
         if let Some(page) = self.page() {
             return Ok(page.evaluate(script).await?);
@@ -324,6 +334,10 @@ impl Automation {
                 .await?
                 .click()
                 .await?);
+        }
+        if let Self::Attached(browser) = self {
+            browser.page.find_element(selector).await?.click().await?;
+            return Ok(());
         }
         if let Some(page) = self.page() {
             return Ok(page.click(selector).await?);
@@ -367,6 +381,10 @@ impl Automation {
             crate::webdriver_automation::clear_cookies(driver, domains).await?;
             return Ok(true);
         }
+        if let Self::Attached(browser) = self {
+            browser.clear_cookies(domains).await?;
+            return Ok(true);
+        }
         let Some(page) = self.page() else {
             return Ok(false);
         };
@@ -389,13 +407,10 @@ impl Automation {
             Self::Launched(launched) => {
                 let _ = launched.close().await;
             }
-            Self::Attached(page) => {
-                let _ = page.detach().await;
-            }
             Self::WebDriver(driver) => {
                 let _ = driver.close().await;
             }
-            Self::Snapshot(_) => {}
+            Self::Attached(_) | Self::Snapshot(_) => {}
         }
     }
 }
