@@ -156,11 +156,15 @@ test("CDP uses the public close function and keeps page context cookie cleanup",
   const profile = await mkdtemp(path.join(os.tmpdir(), "prm-cdp-"));
   let closed = false;
   let domain;
+  let launches = 0;
   try {
     const page = await connectAutomation(
       { browser: parseBrowserOptions(), profile },
       {
+        runningEndpoint: async () => undefined,
+        connectBrowser: async () => assert.fail("no browser is listening"),
         launchRealBrowser: async (options) => {
+          launches++;
           assert.equal(options.engine, "playwright");
           return {
             close: async () => {
@@ -182,6 +186,47 @@ test("CDP uses the public close function and keeps page context cookie cleanup",
     assert.ok(!domain.test("evilnpmjs.com"));
     await page.close();
     assert.ok(closed);
+    assert.equal(launches, 1);
+  } finally {
+    await rm(profile, { recursive: true, force: true });
+  }
+});
+
+test("CDP reuses a working npm tab and closes duplicate npm tabs", async () => {
+  const profile = await mkdtemp(path.join(os.tmpdir(), "prm-reuse-"));
+  const calls = [];
+  const tab = (url) => ({
+    url: () => url,
+    goto: async (target) => calls.push(["navigate", url, target]),
+    close: async () => calls.push(["close", url]),
+    context: () => ({ pages: () => pages }),
+  });
+  const npm = "https://www.npmjs.com/auth/cli/old";
+  const [foreground, working] = [tab("https://example.com"), tab(npm)];
+  const pages = [foreground, working, tab(npm)];
+  const endpoint = "ws://127.0.0.1:51068/devtools/browser/test";
+  try {
+    const page = await connectAutomation(
+      { browser: parseBrowserOptions(), profile },
+      {
+        runningEndpoint: async () => endpoint,
+        connectBrowser: async (options) => {
+          assert.equal(options.wsEndpoint, endpoint);
+          return {
+            page: foreground,
+            detach: async () => calls.push(["detach"]),
+          };
+        },
+        launchRealBrowser: async () => assert.fail("browser already running"),
+      },
+    );
+    await page.goto("https://www.npmjs.com/auth/cli/fresh");
+    await page.close();
+    assert.deepEqual(calls, [
+      ["close", npm],
+      ["navigate", npm, "https://www.npmjs.com/auth/cli/fresh"],
+      ["detach"],
+    ]);
   } finally {
     await rm(profile, { recursive: true, force: true });
   }

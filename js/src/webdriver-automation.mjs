@@ -111,6 +111,7 @@ export async function connectWebDriverAutomation(
     headless,
     goto: (url) => connection.page.goto(url),
     evaluate: (script) => connection.page.evaluate(script),
+    click: (selector) => connection.page.click(selector),
     close: () => connection.close(),
     async clearCookies(names) {
       const { cookies } = await connection.page.bidiCommand(

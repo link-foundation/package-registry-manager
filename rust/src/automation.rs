@@ -3,6 +3,7 @@
 //! through the Browser Commander extension.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -21,6 +22,8 @@ use serde_json::{json, Value};
 use crate::browser_options::{snapshot_browser, AttachMode, BrowserOptions, ImportScope};
 use crate::profile::{default_browser_profile, ensure_profile_ignored};
 use crate::sign_in_import::IMPORT_CHOICES;
+
+mod browser_cdp;
 
 /// How long `--browser-attach extension` waits for the extension to connect.
 pub const EXTENSION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -162,6 +165,7 @@ pub fn extension_instructions(directory: &Path) -> String {
 /// A connected browser that fills forms.
 pub enum Automation {
     Launched(Box<RealBrowserLaunchResult>),
+    Attached(Arc<dyn EngineAdapter>),
     Snapshot(Box<SnapshotLaunchResult>),
     WebDriver(Box<ManagedWebDriver>),
     Extension {
@@ -194,7 +198,7 @@ impl Automation {
         if browser.attach == Some(AttachMode::Extension) {
             return connect_extension().await;
         }
-        let options = if headless {
+        let mut options = if headless {
             quiet_launch_options(browser, profile, verbose, domains)
         } else {
             launch_options(browser, profile, verbose, domains)
@@ -221,17 +225,39 @@ impl Automation {
                 })?;
             return Ok(Self::WebDriver(Box::new(driver)));
         }
+        assert_dedicated_user_data_dir(profile)?;
         ensure_profile_ignored(profile, verbose).await?;
+        let port = browser_cdp::configured_port()?;
+        options.remote_debugging_port = port;
+        if let Some(attached) = browser_cdp::attach(profile, port, verbose).await? {
+            return Ok(attached);
+        }
         let launched = Box::pin(launch_real_browser(options))
             .await
             .context("could not launch the selected installed browser")?;
+        if let Err(error) =
+            browser_cdp::remember_endpoint(profile, launched.remote_debugging_port).await
+        {
+            if verbose {
+                eprintln!("Could not record browser endpoint: {error:#}");
+            }
+        }
+        if let Err(error) =
+            browser_cdp::clean_launched(launched.remote_debugging_port, launched.page.as_ref())
+                .await
+        {
+            if verbose {
+                eprintln!("Could not close restored npm tabs: {error:#}");
+            }
+        }
         Ok(Self::Launched(Box::new(launched)))
     }
 
-    fn launched(&self) -> Option<&RealBrowserLaunchResult> {
+    fn page(&self) -> Option<&dyn EngineAdapter> {
         match self {
-            Self::Launched(launched) => Some(launched),
-            Self::Snapshot(launched) => Some(&launched.launch),
+            Self::Launched(launched) => Some(launched.page.as_ref()),
+            Self::Attached(page) => Some(page.as_ref()),
+            Self::Snapshot(launched) => Some(launched.launch.page.as_ref()),
             Self::Extension { .. } | Self::WebDriver(_) => None,
         }
     }
@@ -241,8 +267,8 @@ impl Automation {
         if let Self::WebDriver(driver) = self {
             return Ok(driver.goto(url).await?);
         }
-        if let Some(launched) = self.launched() {
-            launched.page.goto(url).await?;
+        if let Some(page) = self.page() {
+            page.goto(url).await?;
             return Ok(());
         }
         let Self::Extension { relay, session } = self else {
@@ -262,8 +288,8 @@ impl Automation {
         if let Self::WebDriver(driver) = self {
             return Ok(driver.evaluate(script).await?);
         }
-        if let Some(launched) = self.launched() {
-            return Ok(launched.page.evaluate(script).await?);
+        if let Some(page) = self.page() {
+            return Ok(page.evaluate(script).await?);
         }
         let Self::Extension {
             session: Some(session),
@@ -288,6 +314,52 @@ impl Automation {
         Ok(response["result"]["value"].clone())
     }
 
+    /// Clicks an element using native browser input.
+    pub(crate) async fn click(&self, selector: &str) -> Result<()> {
+        if let Self::WebDriver(driver) = self {
+            use browser_commander::browser::webdriver::Locator;
+            return Ok(driver
+                .client()
+                .find(Locator::Css(selector))
+                .await?
+                .click()
+                .await?);
+        }
+        if let Some(page) = self.page() {
+            return Ok(page.click(selector).await?);
+        }
+        let Self::Extension {
+            session: Some(session),
+            ..
+        } = self
+        else {
+            bail!("no page is open in your browser");
+        };
+        let selector = serde_json::to_string(selector)?;
+        let position = self.evaluate(&format!(r"(() => {{
+            const element = document.querySelector({selector});
+            if (!element || element.matches(':disabled')) throw new Error('element unavailable');
+            element.scrollIntoView({{ block: 'center', inline: 'center' }});
+            const rect = element.getBoundingClientRect();
+            const x = rect.x + rect.width / 2;
+            const y = rect.y + rect.height / 2;
+            if (!element.contains(document.elementFromPoint(x, y))) throw new Error('element is obscured');
+            return {{ x, y }};
+        }})()")).await?;
+        for input in ["mousePressed", "mouseReleased"] {
+            session
+                .send(
+                    "Input.dispatchMouseEvent",
+                    json!({
+                        "type": input, "x": position["x"], "y": position["y"],
+                        "button": "left", "clickCount": 1,
+                    }),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Removes the cookies of `domains` from a launched profile; returns
     /// whether it could. The user's own browser is never touched.
     pub async fn clear_cookies(&self, domains: &[&str]) -> Result<bool> {
@@ -295,13 +367,11 @@ impl Automation {
             crate::webdriver_automation::clear_cookies(driver, domains).await?;
             return Ok(true);
         }
-        let Some(launched) = self.launched() else {
+        let Some(page) = self.page() else {
             return Ok(false);
         };
-        let state = launched.page.export_storage_state().await?;
-        launched
-            .page
-            .restore_storage_state(expired_cookies(&state, domains))
+        let state = page.export_storage_state().await?;
+        page.restore_storage_state(expired_cookies(&state, domains))
             .await?;
         Ok(true)
     }
@@ -318,6 +388,9 @@ impl Automation {
             // Gracefully, so a relaunch can open the same profile again.
             Self::Launched(launched) => {
                 let _ = launched.close().await;
+            }
+            Self::Attached(page) => {
+                let _ = page.detach().await;
             }
             Self::WebDriver(driver) => {
                 let _ = driver.close().await;
