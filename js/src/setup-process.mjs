@@ -72,14 +72,15 @@ export async function openLink(session, url, kind, signal) {
   ) {
     return undefined;
   }
+  const formGraceMs = kind === "login" ? 15_000 : 5_000;
   if (!signal) {
-    await session.submitPrefilledSignIn({ formGraceMs: 5_000 });
+    await session.submitPrefilledSignIn({ formGraceMs });
     return undefined;
   }
   const link = new globalThis.AbortController();
   const active = AbortSignal.any([signal, link.signal]);
   const signIn = session.submitPrefilledSignIn({
-    formGraceMs: kind === "login" ? 15_000 : 5_000,
+    formGraceMs,
     signal: active,
   });
   try {
