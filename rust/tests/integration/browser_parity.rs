@@ -3,7 +3,7 @@ use browser_commander::{
     connect_browser, measure_session_parity, ConnectOptions, LaunchOptions, MeasureParityOptions,
     KEEP_SESSION_COOKIES_SWITCH,
 };
-use package_registry_manager::automation::launch_options;
+use package_registry_manager::automation::{launch_options, Automation};
 use package_registry_manager::browser_options::BrowserOptions;
 use serde_json::Value;
 
@@ -90,4 +90,45 @@ async fn browser_quiet_api_profile_launches_headlessly() -> anyhow::Result<()> {
     launched.close().await?;
     assert_eq!(result??, serde_json::json!(2));
     Ok(())
+}
+
+#[tokio::test]
+async fn browser_reuses_the_running_profile_and_detaches() -> anyhow::Result<()> {
+    if std::env::var("PRM_BROWSER_SMOKE").as_deref() != Ok("1") {
+        return Ok(());
+    }
+    let profile = tempfile::tempdir()?;
+    let options = BrowserOptions::default();
+    let mut first = Box::pin(Automation::connect(&options, profile.path(), false, &[])).await?;
+    let Automation::Launched(_) = first else {
+        anyhow::bail!("expected to launch a browser for the empty profile");
+    };
+    let result = Box::pin(async {
+        first
+            .goto("data:text/html,<main>approval smoke</main>")
+            .await?;
+        first.evaluate("globalThis.prmReuse = 42").await?;
+        assert_eq!(first.evaluate("globalThis.prmReuse").await?, 42);
+        let second = Box::pin(Automation::connect(&options, profile.path(), false, &[])).await?;
+        let Automation::Attached(_) = second else {
+            anyhow::bail!("expected to attach to the running browser");
+        };
+        assert_eq!(second.evaluate("globalThis.prmReuse").await?, 42);
+        second.close().await;
+        assert_eq!(first.evaluate("globalThis.prmReuse").await?, 42);
+        std::fs::write(
+            profile.path().join(".prm-cdp-endpoint"),
+            "ws://127.0.0.1:1/devtools/browser/stale\n",
+        )?;
+        let recovered = Box::pin(Automation::connect(&options, profile.path(), false, &[])).await?;
+        let Automation::Attached(_) = recovered else {
+            anyhow::bail!("expected to recover the running browser from its launch arguments");
+        };
+        assert_eq!(recovered.evaluate("globalThis.prmReuse").await?, 42);
+        recovered.close().await;
+        anyhow::Ok(())
+    })
+    .await;
+    first.close().await;
+    result
 }

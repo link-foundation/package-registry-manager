@@ -9,6 +9,10 @@ export const APPROVAL_WINDOW_MS = 5 * 60_000;
 export const APPROVAL_ATTEMPTS = 3;
 /** npm's error once its approval session expired while it polled for the result. */
 export const EXPIRED_APPROVAL = /Invalid response from web login endpoint/i;
+const DONE_NOT_FOUND =
+  /(?:\b404\b[^\r\n]*\/-\/v1\/done\b|\/-\/v1\/done\b[^\r\n]*\b404\b)/i;
+export const TRUST_STORED =
+  /Trust configuration created successfully|npm stored the trusted publisher/i;
 
 /** Shown with every npm approval link. */
 export const TWO_FACTOR_HINT =
@@ -35,7 +39,11 @@ export function expiredApproval(result) {
   if (result.legacyLogin) {
     return "npm fell back to its legacy username prompt";
   }
-  if (result.code !== 0 && result.approvalExpired) {
+  if (
+    result.code !== 0 &&
+    (result.approvalExpired ||
+      (result.approvalLink && DONE_NOT_FOUND.test(result.stderr)))
+  ) {
     return "npm's approval session ended";
   }
   return undefined;
@@ -51,17 +59,35 @@ export async function withFreshLinks(
 ) {
   for (let number = 1; ; number += 1) {
     const result = await attempt();
-    const reason = expiredApproval(result);
+    if (result.code === 0 || result.trustStored) {
+      return result;
+    }
+    const expired = expiredApproval(result);
+    const pageFailure = result.approvalPageFailure;
+    const reason =
+      pageFailure ??
+      expired ??
+      (result.approvalLink
+        ? `npm exited with status ${result.code}`
+        : undefined);
     if (!reason) {
       return result;
     }
     if (number >= attempts) {
+      if (pageFailure) {
+        throw new Error(
+          `npm approval failed ${attempts} times (${pageFailure})`,
+        );
+      }
+      if (!expired) {
+        return result;
+      }
       throw new Error(
         `the browser link expired ${attempts} times (${reason}); re-run the command when you are ready to approve within 5 minutes`,
       );
     }
     log(
-      `\nThe link expired before it was approved (${reason}); requesting a fresh one (attempt ${number + 1} of ${attempts}).`,
+      `\n${expired && !pageFailure ? "The link expired before it was approved" : "npm approval failed"} (${reason}); requesting a fresh one (attempt ${number + 1} of ${attempts}).`,
     );
   }
 }

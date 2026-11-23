@@ -3,12 +3,33 @@
 //! How long a link stays valid, how the tool recognizes an expired one, and
 //! how often it asks npm for a fresh one.
 
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
 use chrono::NaiveTime;
+use regex::Regex;
 
-use crate::auth_urls::CommandOutput;
+use crate::auth_urls::{CommandOutput, ANSI_PATTERN};
+
+pub(crate) mod browser;
+
+static DONE_NOT_FOUND: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:\b404\b[^\r\n]*/-/v1/done\b|/-/v1/done\b[^\r\n]*\b404\b)")
+        .expect("static pattern must compile")
+});
+
+static ANSI: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(ANSI_PATTERN).expect("static pattern must compile"));
+
+static TRUST_STORED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)Trust configuration created successfully|npm stored the trusted publisher")
+        .expect("static pattern must compile")
+});
+
+pub(crate) fn trust_stored(output: &str) -> bool {
+    TRUST_STORED.is_match(&ANSI.replace_all(output, ""))
+}
 
 /// How long npm keeps a web login or approval session open.
 pub const APPROVAL_WINDOW: Duration = Duration::from_secs(5 * 60);
@@ -70,18 +91,53 @@ pub fn next_link(
     attempt: usize,
     attempts: usize,
 ) -> Result<Option<String>> {
-    let Some(reason) = expired_approval(output) else {
-        return Ok(None);
-    };
+    expired_approval(output)
+        .map(|reason| retry_expired(reason, attempt, attempts))
+        .transpose()
+}
+
+fn retry_expired(reason: &str, attempt: usize, attempts: usize) -> Result<String> {
     if attempt >= attempts {
         bail!(
             "the browser link expired {attempts} times ({reason}); re-run the command when you are ready to approve within 5 minutes"
         );
     }
-    Ok(Some(format!(
+    Ok(format!(
         "\nThe link expired before it was approved ({reason}); requesting a fresh one (attempt {} of {attempts}).",
         attempt + 1
-    )))
+    ))
+}
+
+pub(crate) fn next_approval(
+    output: &CommandOutput,
+    linked: bool,
+    page_failure: Option<&str>,
+    attempt: usize,
+) -> Result<Option<String>> {
+    if output.code == 0 {
+        return Ok(None);
+    }
+    if let Some(reason) = page_failure {
+        if attempt >= APPROVAL_ATTEMPTS {
+            bail!("npm approval failed {APPROVAL_ATTEMPTS} times ({reason})");
+        }
+        return Ok(Some(retry(reason, attempt)));
+    }
+    if linked && DONE_NOT_FOUND.is_match(&output.stderr) {
+        return retry_expired("npm's approval session ended", attempt, APPROVAL_ATTEMPTS).map(Some);
+    }
+    if let Some(message) = next_link(output, attempt, APPROVAL_ATTEMPTS)? {
+        return Ok(Some(message));
+    }
+    Ok((linked && attempt < APPROVAL_ATTEMPTS)
+        .then(|| retry(&format!("npm exited with status {}", output.code), attempt)))
+}
+
+fn retry(reason: &str, attempt: usize) -> String {
+    format!(
+        "\nnpm approval failed ({reason}); requesting a fresh one (attempt {} of {APPROVAL_ATTEMPTS}).",
+        attempt + 1
+    )
 }
 
 /// The closing note once a package publishes through trusted publishing.
@@ -90,4 +146,33 @@ pub fn oidc_release_note(workflow: &str) -> String {
     format!(
         "Future releases publish from {workflow} through trusted publishing; no login is needed."
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn npm_approval_retry_classifies_page_errors_done_404_and_exit_status() -> Result<()> {
+        let mut output = CommandOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            legacy_login: false,
+            approval_expired: false,
+        };
+        let page = next_approval(&output, true, Some("Something went wrong"), 1)?;
+        assert!(page.unwrap().contains("Something went wrong"));
+        let failure = next_approval(&output, true, None, 1)?;
+        assert!(failure.unwrap().contains("npm exited with status 1"));
+        assert!(next_approval(&output, false, None, 1)?.is_none());
+        output.stderr =
+            "npm error 404 Not Found - GET https://registry.npmjs.org/-/v1/done?authId=fake"
+                .to_owned();
+        let expired = next_approval(&output, true, None, 2)?;
+        assert!(expired.unwrap().contains("approval session ended"));
+        output.code = 0;
+        assert!(next_approval(&output, true, Some("Something went wrong"), 2)?.is_none());
+        Ok(())
+    }
 }

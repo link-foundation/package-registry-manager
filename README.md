@@ -166,10 +166,12 @@ elsewhere); it cannot be combined with `--no-browser`.
 npm's login and approval links stay valid for about 5 minutes, so every link
 is printed with its deadline, such as `Sign in within about 5 minutes (until
 14:05).`; approval links add a reminder that npm asks for the 2FA code on the
-page. When a link expires (npm falls back to its legacy `Username:` prompt or
-reports `Invalid response from web login endpoint`), the CLI asks npm for a
-fresh link, up to 3 links in total, and then stops with a message to re-run
-when you are ready to approve within 5 minutes.
+page. When npm offers the five-minute cooldown, the automated browser
+checks the box, verifies it stayed checked, and clicks **Use security key**
+once per link. Complete the Touch ID or security-key prompt in the browser.
+The CLI watches for page errors, expiry, and unsuccessful npm exits and asks
+npm for a fresh link when needed, up to 3 links in total. It stops on success.
+With `--open-with` or `--no-browser`, use the browser controls yourself.
 
 The npm session the CLI opened stays signed in after the run: the token stays
 in npm's user configuration, and the next run reuses it while `npm whoami`
@@ -198,8 +200,14 @@ still reports the profile as not ignored. A profile left in
 `.package-registry-manager/browser-profile` by an earlier release is protected
 the same way, with a warning to delete it.
 
-The automated profile starts fresh, from the installed Chrome channel, with
-no extra switches. Every change to that is opt-in:
+Both CLIs reuse a running Chromium browser for the dedicated profile. They can
+also find a browser started with a fixed loopback debugging port before an
+endpoint was recorded. Use `PRM_BROWSER_CDP_PORT` to specify the port explicitly
+and pass the same dedicated `--browser-profile`.
+Each npm approval opens in the same tab and replaces the previous link.
+
+When the dedicated browser is closed, the tool starts the installed Chrome
+channel with its default launch settings. Launch options include:
 
 - `--browser-executable <path>` launches a specific browser binary instead of
   the channel's.

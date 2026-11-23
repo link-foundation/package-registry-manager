@@ -10,7 +10,8 @@
 // FAKE_RELEASE_RUN=failed-publish (the last release failed with E404), and
 // FAKE_REPO_TOKEN_NAMES (comma-separated repository secret names; default NPM_TOKEN),
 // FAKE_LEGACY_LOGIN=<n> (the first n web logins fall back to Username:), and
-// FAKE_EXPIRED_PUBLISH=<n> (the first n publish approvals expire), and
+// FAKE_EXPIRED_PUBLISH=<n> (the first n publish approvals expire),
+// FAKE_DONE_404=<n> (the first n publish completion polls return 404), and
 // FAKE_PAGES=missing|legacy|workflow (the GitHub Pages site; default workflow),
 // and FAKE_TRUST_GITHUB=fail (npm trust github fails), and
 // FAKE_CARGO_PUBLISH=fail (cargo publish fails). cargo records the
@@ -152,6 +153,10 @@ if (tool === "npm") {
     }
     if (failsAgain("FAKE_EXPIRED_PUBLISH")) {
       console.error("npm error Invalid response from web login endpoint");
+      process.exit(1);
+    }
+    if (failsAgain("FAKE_DONE_404")) {
+      console.error("npm error 404 Not Found - GET https://registry.npmjs.org/-/v1/done?authId=fake");
       process.exit(1);
     }
     set("published", true);

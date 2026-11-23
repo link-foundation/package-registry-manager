@@ -3,12 +3,20 @@ import path from "node:path";
 
 import {
   attachViaExtension,
+  connectBrowser,
   EXTENSION_DIRECTORY,
   launchRealBrowser,
   findBrowserSource,
 } from "browser-commander";
 
 import { connectWebDriverAutomation } from "./webdriver-automation.mjs";
+import {
+  configuredCdpPort,
+  isNpmPage,
+  rememberEndpoint,
+  runningEndpoint,
+} from "./browser-cdp.mjs";
+import { assertDedicatedProfile } from "./browser-catalogue.mjs";
 
 import { snapshotBrowser } from "./browser-options.mjs";
 import { defaultBrowserProfile, ensureProfileIgnored } from "./profile.mjs";
@@ -123,9 +131,10 @@ export function isSamePage(candidate, page) {
  */
 export async function closeExtraPages(page) {
   const pages = page?.context?.()?.pages?.() ?? [];
+  const hasWorkingPage = pages.includes(page);
   let closed = 0;
   for (const candidate of pages) {
-    if (isSamePage(candidate, page)) {
+    if (hasWorkingPage ? candidate === page : isSamePage(candidate, page)) {
       continue;
     }
     try {
@@ -136,6 +145,21 @@ export async function closeExtraPages(page) {
     }
   }
   return closed;
+}
+
+async function reuseNpmPage(foreground) {
+  const pages = foreground.context().pages();
+  const npmPages = pages.filter((page) => isNpmPage(page.url()));
+  const working = npmPages.includes(foreground)
+    ? foreground
+    : (npmPages[0] ?? foreground);
+  for (const page of npmPages) {
+    if (page !== working) {
+      await page.close().catch(() => {});
+    }
+  }
+  await working.bringToFront?.().catch(() => {});
+  return working;
 }
 
 /**
@@ -177,29 +201,65 @@ export async function connectAutomation(
       dependencies,
     );
   }
+  const options = launchOptions(browser, profile, verbose, domains, headless);
+  let endpoint;
   if (!browser.attach) {
+    assertDedicatedProfile(profile);
     await ensureProfileIgnored(profile, { verbose });
+    options.remoteDebuggingPort = configuredCdpPort();
+    endpoint = await (dependencies.runningEndpoint ?? runningEndpoint)(
+      profile,
+      options.remoteDebuggingPort,
+    );
   }
-  const connection = await (
-    dependencies.launchRealBrowser ?? launchRealBrowser
-  )(launchOptions(browser, profile, verbose, domains, headless));
-  await closeExtraPages(connection.page);
+  const connection = endpoint
+    ? await (dependencies.connectBrowser ?? connectBrowser)({
+        engine: "playwright",
+        wsEndpoint: endpoint,
+        timeout: 10_000,
+        verbose,
+      })
+    : await (dependencies.launchRealBrowser ?? launchRealBrowser)(options);
+  const close = () => (endpoint ? connection.detach() : connection.close());
+  let page = connection.page;
+  try {
+    if (endpoint) {
+      page = await reuseNpmPage(page);
+    } else {
+      if (!browser.attach) {
+        await rememberEndpoint(profile, connection.remoteDebuggingPort).catch(
+          (error) => {
+            if (verbose) {
+              console.error(
+                `Could not record browser endpoint: ${error.message}`,
+              );
+            }
+          },
+        );
+      }
+      await closeExtraPages(page);
+    }
+  } catch (error) {
+    await close();
+    throw error;
+  }
   if (!headless) {
-    await maximizeWindow(connection.page).catch(() => {});
+    await maximizeWindow(page).catch(() => {});
   }
   return {
     headless,
-    goto: (url) => connection.page.goto(url),
-    click: (selector) => connection.page.click(selector),
+    reused: Boolean(endpoint),
+    goto: (url) => page.goto(url),
+    click: (selector, options) => page.click(selector, options),
     pid: () => connection.pid?.(),
-    evaluate: (script) => connection.page.evaluate(script),
-    url: () => connection.page.url(),
-    pages: () => connection.page.context().pages(),
-    close: () => connection.close(),
+    evaluate: (script) => page.evaluate(script),
+    url: () => page.url(),
+    pages: () => page.context().pages(),
+    close,
     async clearCookies(names) {
       for (const name of names) {
         const escaped = name.replaceAll(".", "\\.");
-        await connection.page
+        await page
           .context()
           .clearCookies({ domain: new RegExp(`(?:^|\\.)${escaped}$`) });
       }
@@ -229,11 +289,24 @@ async function connectExtension() {
     url: () => currentUrl,
     pages: () => [api],
     async click(selector) {
-      await api.evaluate(`(() => {
+      const position = await api.evaluate(`(() => {
         const element = document.querySelector(${JSON.stringify(selector)});
-        if (!element) throw new Error('selector not found: ' + ${JSON.stringify(selector)});
-        element.click();
+        if (!element || element.matches(':disabled')) throw new Error('element unavailable');
+        element.scrollIntoView({ block: 'center', inline: 'center' });
+        const rect = element.getBoundingClientRect();
+        const x = rect.x + rect.width / 2;
+        const y = rect.y + rect.height / 2;
+        if (!element.contains(document.elementFromPoint(x, y))) throw new Error('element is obscured');
+        return { x, y };
       })()`);
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        await session.send("Input.dispatchMouseEvent", {
+          ...position,
+          type,
+          button: "left",
+          clickCount: 1,
+        });
+      }
     },
     async evaluate(expression) {
       const { result, exceptionDetails } = await session.send(

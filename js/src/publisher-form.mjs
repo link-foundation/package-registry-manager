@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 
 import { isSamePage } from "./automation.mjs";
@@ -173,6 +174,7 @@ export async function acceptPasswordAutofill(
   page,
   {
     click,
+    signal,
     pressKeys,
     app = "Google Chrome",
     pid,
@@ -201,13 +203,16 @@ export async function acceptPasswordAutofill(
   if (clickField) {
     await clickField().catch(() => {});
   }
-  await new Promise((resolve) => setTimeout(resolve, 750));
+  await delay(750, undefined, { signal }).catch(() => {});
+  if (signal?.aborted) {
+    return false;
+  }
   const press = pressKeys ?? (() => pressPasswordAutofillKeys({ app, pid }));
   if (!(await press())) {
     return false;
   }
   const deadline = Date.now() + timeoutMs;
-  for (;;) {
+  while (!signal?.aborted) {
     const stateAfter = await page
       .evaluate(passwordPromptScript())
       .catch(() => null);
@@ -218,8 +223,9 @@ export async function acceptPasswordAutofill(
     if (Date.now() >= deadline) {
       return false;
     }
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    await delay(pollIntervalMs, undefined, { signal }).catch(() => {});
   }
+  return false;
 }
 
 /** Fill PyPI's confirm-password page from the browser and submit it. */
@@ -337,6 +343,7 @@ export async function submitPrefilledSignIn(
     formGraceMs = 3_000,
     autofillDelayMs = 3_000,
     twoFactorGraceMs = 2_000,
+    signal,
     pressKeys,
     click,
     app,
@@ -355,9 +362,12 @@ export async function submitPrefilledSignIn(
   let announcedPrefill = false;
   let attemptedAutofill = false;
   let retried = false;
-  for (;;) {
+  while (!signal?.aborted) {
     const signIn =
       (await page.evaluate(signInScript()).catch(() => ({}))) ?? {};
+    if (signal?.aborted) {
+      return undefined;
+    }
     if (signIn.present && !formSeenAt) {
       formSeenAt = Date.now();
     }
@@ -369,15 +379,18 @@ export async function submitPrefilledSignIn(
       );
       const twoFactorDeadline = Date.now() + twoFactorGraceMs;
       for (;;) {
-        if (state.remembered || state.confirmed) {
+        if (signal?.aborted || state.remembered || state.confirmed) {
           return signIn;
         }
         if (Date.now() >= twoFactorDeadline) {
           return signIn;
         }
-        await new Promise((resolve) =>
-          setTimeout(resolve, Math.min(pollIntervalMs, 250)),
+        await delay(Math.min(pollIntervalMs, 250), undefined, { signal }).catch(
+          () => {},
         );
+        if (signal?.aborted) {
+          return signIn;
+        }
         await prepareLoginDevice(page, { log, state });
       }
     }
@@ -403,7 +416,11 @@ export async function submitPrefilledSignIn(
         state,
         log,
         pollIntervalMs,
+        signal,
       });
+    }
+    if (signal?.aborted) {
+      return undefined;
     }
     if (signIn.failed && signIn.alreadySubmitted && !retried) {
       retried = true;
@@ -422,7 +439,7 @@ export async function submitPrefilledSignIn(
     if (Date.now() >= deadline || (!sawForm && Date.now() >= formDeadline)) {
       return signIn;
     }
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    await delay(pollIntervalMs, undefined, { signal }).catch(() => {});
   }
 }
 
@@ -589,76 +606,5 @@ export async function fillPublisherForm(
         );
       }
     }
-  }
-}
-
-/** npm's security-key page: opt in to the 5-minute cooldown and press the key button. */
-export function npmChallengeScript(mode = "") {
-  const clickBox = mode === "optin" || mode === "both";
-  const clickButton = mode === "button" || mode === "both";
-  return `(() => {
-    const box = document.querySelector('#cooldownOptin_didOptForCooldown');
-    const button = Array.from(document.querySelectorAll('button')).find((candidate) =>
-      /^(?:use|authenticate with|continue with)\\s+security key$/i.test(candidate.innerText.trim())
-    );
-    const text = document.body?.innerText ?? '';
-    const challenge = /two-factor authentication|security key|use touch id/i.test(text);
-    let opted = Boolean(box?.checked);
-    let clicked = false;
-    if (${JSON.stringify(clickBox)} && box && !box.checked) {
-      box.click();
-      box.dispatchEvent(new Event('input', { bubbles: true }));
-      box.dispatchEvent(new Event('change', { bubbles: true }));
-      opted = true;
-    }
-    if (${JSON.stringify(clickButton)} && button && !button.disabled) {
-      button.click();
-      clicked = true;
-    }
-    return { present: Boolean(box || button), challenge, opted, button: Boolean(button), clicked };
-  })()`;
-}
-
-/**
- * Approve npm's `npm publish`/`npm trust` security-key page in the automated
- * browser: check the 5-minute cooldown box and click "Use security key". Touch
- * ID or the physical key still has to be confirmed by the person.
- */
-export async function approveNpmChallenge(
-  page,
-  { timeoutMs = 20_000, pollIntervalMs = 500, log = () => {} } = {},
-) {
-  if (typeof page?.evaluate !== "function") {
-    return undefined;
-  }
-  const deadline = Date.now() + timeoutMs;
-  let announced = false;
-  for (;;) {
-    const state = await page.evaluate(npmChallengeScript()).catch(() => null);
-    if (state?.challenge && !announced) {
-      announced = true;
-      log(
-        '  npm is asking for a security key; opting in to the 5-minute cooldown and clicking "Use security key".',
-      );
-    }
-    if (state?.present && state?.challenge) {
-      if (!state.opted) {
-        await page.evaluate(npmChallengeScript("optin")).catch(() => null);
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-      const clicked = await page
-        .evaluate(npmChallengeScript("button"))
-        .catch(() => null);
-      if (clicked?.clicked) {
-        log(
-          '  Clicked "Use security key"; approve with Touch ID or the security key in the browser.',
-        );
-        return clicked;
-      }
-    }
-    if (Date.now() >= deadline) {
-      return state;
-    }
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 }
