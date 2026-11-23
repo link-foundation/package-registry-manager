@@ -7,6 +7,7 @@ import test from "node:test";
 import { withFreshLinks } from "../src/approvals.mjs";
 import { runInteractive } from "../src/auth-urls.mjs";
 import { npmApprovalState, watchNpmApproval } from "../src/npm-approval.mjs";
+import { openLink } from "../src/setup-process.mjs";
 
 test(
   "npm uses native clicks, checks cooldown readback and retries the command",
@@ -146,4 +147,22 @@ test("browser failures after npm has stored the trusted publisher cannot trigger
   });
   assert.equal(result.trustStored, true);
   assert.equal(count, 1);
+});
+
+test("a queued approval does not open the browser after the command succeeds", async () => {
+  let opened = 0;
+  const session = {
+    options: {},
+    open: () => {
+      opened += 1;
+    },
+  };
+  const result = await openLink(
+    session,
+    "https://www.npmjs.com/auth/cli/finished",
+    "approve",
+    AbortSignal.abort(),
+  );
+  assert.equal(result, undefined);
+  assert.equal(opened, 0);
 });

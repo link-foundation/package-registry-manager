@@ -58,18 +58,17 @@ export async function openLink(session, url, kind, signal) {
   if (kind === "approve") {
     console.log(TWO_FACTOR_HINT);
   }
+  const automate = !session.options.openWith && !session.options.noBrowser;
+  if (automate && signal?.aborted) {
+    return undefined;
+  }
   try {
-    await session.open(url, !session.options.openWith);
+    await session.open(url, automate);
   } catch (error) {
     console.error(`warning: could not open ${url}: ${error.message}`);
     return undefined;
   }
-  if (
-    !session.automation ||
-    session.options.noBrowser ||
-    session.options.openWith ||
-    signal?.aborted
-  ) {
+  if (!session.automation || !automate || signal?.aborted) {
     return undefined;
   }
   const formGraceMs = kind === "login" ? 15_000 : 5_000;
