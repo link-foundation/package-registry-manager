@@ -51,9 +51,9 @@ impl Session<'_> {
         }
         let trust_create = npm && step.id == "attach-trusted-publisher";
         for attempt in 1.. {
-            let (result, linked, failure) = self
-                .run_once(&command, &cwd, &env, mirror, npm, trust_create)
-                .await?;
+            // Each attempt holds the subprocess buffer and browser watcher across awaits.
+            let (result, linked, failure) =
+                Box::pin(self.run_once(&command, &cwd, &env, mirror, npm, trust_create)).await?;
             if !npm {
                 return Ok(result);
             }

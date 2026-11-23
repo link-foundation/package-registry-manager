@@ -353,7 +353,7 @@ async fn approval_stop(control: &mut Option<ApprovalControl>) {
             }
         }
     }
-    std::future::pending().await
+    std::future::pending::<()>().await;
 }
 
 async fn stop_child(child: &mut tokio::process::Child) -> Result<()> {

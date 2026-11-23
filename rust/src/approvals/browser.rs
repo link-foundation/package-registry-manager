@@ -10,7 +10,7 @@ use crate::automation::Automation;
 const COOLDOWN: &str = "#cooldownOptin_didOptForCooldown";
 const KEY: &str = "[data-prm-npm-security-key]";
 
-const STATE: &str = r#"(() => {
+const STATE: &str = r"(() => {
   if (location.protocol === 'chrome-error:') return { failure: 'the approval page could not load' };
   if (location.protocol !== 'https:' || !/(^|\.)npmjs\.com$/i.test(location.hostname)) return {};
   const text = document.body?.innerText ?? '';
@@ -28,7 +28,7 @@ const STATE: &str = r#"(() => {
   }
   button?.setAttribute('data-prm-npm-security-key', '');
   return { cooldown: box ? box.checked : null, key: Boolean(button) };
-})()"#;
+})()";
 
 #[derive(Default, Deserialize)]
 struct State {
@@ -57,10 +57,11 @@ impl ApprovalPage for Automation {
     }
 }
 
-pub(crate) async fn watch(page: &Automation) -> String {
+pub async fn watch(page: &Automation) -> String {
     watch_page(page, APPROVAL_WINDOW, Duration::from_millis(500)).await
 }
 
+#[allow(clippy::future_not_send)] // The watcher stays on the same task as the approval command.
 async fn watch_page(page: &impl ApprovalPage, timeout: Duration, interval: Duration) -> String {
     let deadline = Instant::now() + timeout;
     let mut requested_key = false;
