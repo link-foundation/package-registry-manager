@@ -248,6 +248,7 @@ export async function connectAutomation(
   }
   return {
     headless,
+    reused: Boolean(endpoint),
     goto: (url) => page.goto(url),
     click: (selector, options) => page.click(selector, options),
     pid: () => connection.pid?.(),

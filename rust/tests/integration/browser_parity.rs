@@ -116,6 +116,16 @@ async fn browser_reuses_the_running_profile_and_detaches() -> anyhow::Result<()>
         assert_eq!(second.evaluate("globalThis.prmReuse").await?, 42);
         second.close().await;
         assert_eq!(first.evaluate("globalThis.prmReuse").await?, 42);
+        std::fs::write(
+            profile.path().join(".prm-cdp-endpoint"),
+            "ws://127.0.0.1:1/devtools/browser/stale\n",
+        )?;
+        let recovered = Box::pin(Automation::connect(&options, profile.path(), false, &[])).await?;
+        let Automation::Attached(_) = recovered else {
+            anyhow::bail!("expected to recover the running browser from its launch arguments");
+        };
+        assert_eq!(recovered.evaluate("globalThis.prmReuse").await?, 42);
+        recovered.close().await;
         anyhow::Ok(())
     })
     .await;

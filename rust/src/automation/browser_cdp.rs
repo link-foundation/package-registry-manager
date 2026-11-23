@@ -17,6 +17,8 @@ use tokio::task::JoinHandle;
 
 use super::{cookie_domain_matches, Automation};
 
+mod process;
+
 const ENDPOINT_FILE: &str = ".prm-cdp-endpoint";
 const PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 const ATTACH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -144,7 +146,9 @@ async fn running_endpoint(profile: &Path, port: Option<u16>) -> Option<(u16, Str
             }
         }
     }
-    None
+    // A browser launched with a fixed port may predate the recorded endpoint.
+    let port = process::debugging_port(profile).await?;
+    Some((port, browser_socket(port).await?))
 }
 
 #[derive(Deserialize)]

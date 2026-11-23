@@ -200,9 +200,10 @@ still reports the profile as not ignored. A profile left in
 `.package-registry-manager/browser-profile` by an earlier release is protected
 the same way, with a warning to delete it.
 
-Both CLIs reuse a running Chromium browser recorded for the dedicated profile.
-If you start Chromium yourself with a fixed loopback debugging port, set
-`PRM_BROWSER_CDP_PORT` to that port and pass the same dedicated `--browser-profile`.
+Both CLIs reuse a running Chromium browser for the dedicated profile. They can
+also find a browser started with a fixed loopback debugging port before an
+endpoint was recorded. Use `PRM_BROWSER_CDP_PORT` to specify the port explicitly
+and pass the same dedicated `--browser-profile`.
 Each npm approval opens in the same tab and replaces the previous link.
 
 When the dedicated browser is closed, the tool starts the installed Chrome

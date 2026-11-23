@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -115,12 +115,14 @@ test(
     const options = { browser: parseBrowserOptions(), profile, headless: true };
     const original = await connectAutomation(options);
     try {
+      assert.equal(original.reused, false);
       await original.evaluate("globalThis.prmReuse = 42");
       const attached = await connectAutomation(options, {
         launchRealBrowser: () =>
           assert.fail("the running browser must be reused"),
       });
       try {
+        assert.equal(attached.reused, true);
         assert.equal(await attached.evaluate("globalThis.prmReuse"), 42);
         const context = attached.pages()[0].context();
         await context.route("https://www.npmjs.com/auth/cli/*", (route) =>
@@ -194,6 +196,20 @@ test(
         await original.evaluate("location.href"),
         /\/auth\/cli\/fresh$/,
       );
+      await writeFile(
+        path.join(profile, ".prm-cdp-endpoint"),
+        "ws://127.0.0.1:1/devtools/browser/stale\n",
+      );
+      const recovered = await connectAutomation(options, {
+        launchRealBrowser: () =>
+          assert.fail("recover the active browser from its launch arguments"),
+      });
+      try {
+        assert.equal(recovered.reused, true);
+        assert.match(recovered.url(), /\/auth\/cli\/fresh$/);
+      } finally {
+        await recovered.close();
+      }
     } finally {
       await original.close();
     }
