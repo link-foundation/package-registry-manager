@@ -91,6 +91,7 @@ async fn watch_page(page: &impl ApprovalPage, timeout: Duration, interval: Durat
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
+    use std::future::{ready, Future};
 
     use super::*;
 
@@ -102,7 +103,7 @@ mod tests {
     }
 
     impl ApprovalPage for Page {
-        async fn state(&self) -> State {
+        fn state(&self) -> impl Future<Output = State> {
             let mut state = State {
                 cooldown: Some(self.box_clicks.get() >= 2),
                 key: true,
@@ -114,17 +115,17 @@ mod tests {
                     state.failure = Some("Something went wrong".to_owned());
                 }
             }
-            state
+            ready(state)
         }
 
-        async fn click(&self, selector: &str) -> Result<()> {
+        fn click(&self, selector: &str) -> impl Future<Output = Result<()>> {
             if selector == COOLDOWN {
                 self.box_clicks.set(self.box_clicks.get() + 1);
             } else {
                 assert_eq!(self.box_clicks.get(), 2);
             }
             self.clicks.borrow_mut().push(selector.to_owned());
-            Ok(())
+            ready(Ok(()))
         }
     }
 
