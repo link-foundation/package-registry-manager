@@ -11,11 +11,21 @@ npx package-registry-manager inspect --repository /path/to/repository
 npx package-registry-manager plan --repository /path/to/repository --format json
 npx package-registry-manager setup --repository /path/to/repository --registry npm
 npx package-registry-manager setup --repository /path/to/repository --all --execute
+npx package-registry-manager status --repository /path/to/repository --wait
 ```
 
 The package installs the command as both `package-registry-manager` and
 `package-registry-manager-js`; use the second name when the Rust command of the
 same name is also on your `PATH`.
+
+`status` is a read-only view of the newest release run and the exact versions
+named by the package manifests or by a release-tag dispatch. It shows active and
+failed jobs, whether the release publishes through trusted publishing, and each
+package's expected and latest registry versions. Use `--run <id>` for a known
+run, `--wait` to follow it until completion, `--require-published` for CI, and
+`--no-release` to inspect only local and registry evidence. JSON output keeps all
+jobs and evidence URLs. Account status scans every repository and aggregates the
+same per-package states; `--run` and `--wait` apply to a single repository.
 
 Setup is a dry run unless `--execute` is present. It can publish the first
 version after confirmation; later versions publish through CI. Missing CI
@@ -27,6 +37,7 @@ Account scans and setup are available in both ports:
 ```sh
 package-registry-manager inspect --org link-foundation
 package-registry-manager plan --user LOGIN --format json
+package-registry-manager status --org link-foundation --require-published
 package-registry-manager setup --org link-foundation --all --execute --browser-import auto
 ```
 

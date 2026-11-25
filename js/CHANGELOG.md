@@ -7,6 +7,12 @@ currently shares its release version with the Rust implementation.
 
 ### Added
 
+- `status` reports the newest release workflow run (including tag-dispatched
+  publishes), its active and failed jobs, the release version, and each
+  package's expected and latest registry version. It supports `--run`, `--wait`,
+  `--require-published`, `--no-release`, JSON output, and account scans, and
+  recognizes crates.io's default-on OIDC exchange with an opt-out token
+  fallback.
 - PyPI setup submits a prefilled sign-in form automatically, retries once after
   an invalid login or an expired two-factor login, never reads the credential
   values, and tells the user when passkey/2FA or unrecognized-device email

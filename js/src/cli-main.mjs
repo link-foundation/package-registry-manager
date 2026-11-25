@@ -20,6 +20,14 @@ import {
 import { importSources } from "./sign-in-import.mjs";
 import { accountCommand } from "./organization-setup.mjs";
 import { defaultScope } from "./default-scope.mjs";
+import {
+  buildStatusReport,
+  captureGh,
+  collectReleaseStatus,
+  renderStatusText,
+  selectStatusWorkflow,
+  waitForReleaseStatus,
+} from "./status.mjs";
 
 const HELP = `Usage: package-registry-manager-js [global options] <command>
 
@@ -28,6 +36,7 @@ Commands:
   plan [--registry <registry>]    Print ordered setup plans
   setup --registry <registry>     Bootstrap or attach trusted publishing
   setup --all                     Set up every publishable package in one session
+  status                          Show live release jobs and registry versions
 
 Global options:
   -h, --help                      Print this help
@@ -56,6 +65,15 @@ Plan and setup options:
   --ref <branch|pr>               Bootstrap a pushed branch or PR head before merge
   --package <name>                Plan only this package, or select it for
                                   setup when a registry has several
+
+Status options:
+  --run <id>                      Read this release run instead of the newest
+  --wait                          Poll until the release run finishes
+  --interval-ms <N>               Poll interval for --wait (default: 5000)
+  --timeout-ms <N>                Wait limit for --wait (default: 1800000)
+  --require-published             Exit nonzero unless every version is on its
+                                  registry
+  --no-release                    Skip GitHub release-run lookups
 
 Setup options:
   --dry-run                       Print the flow without running it (default)
@@ -127,6 +145,12 @@ export async function main(args = process.argv.slice(2)) {
       "verify-release": { type: "boolean", default: false },
       workflow: { type: "string" },
       "add-publish-job": { type: "boolean", default: false },
+      run: { type: "string" },
+      wait: { type: "boolean", default: false },
+      "interval-ms": { type: "string" },
+      "timeout-ms": { type: "string" },
+      "require-published": { type: "boolean", default: false },
+      "no-release": { type: "boolean", default: false },
       environment: { type: "string" },
       "dry-run": { type: "boolean", default: false },
       registry: { type: "string", multiple: true },
@@ -161,7 +185,9 @@ export async function main(args = process.argv.slice(2)) {
     return;
   }
   if (positionals.length !== 1) {
-    throw new Error("expected exactly one command: inspect, plan, or setup");
+    throw new Error(
+      "expected exactly one command: inspect, plan, setup, or status",
+    );
   }
   if (!["text", "json"].includes(values.format)) {
     throw new Error("--format must be 'text' or 'json'");
@@ -210,6 +236,37 @@ export async function main(args = process.argv.slice(2)) {
       "--rotate-token requires setup --registry crates-io and a valid secret name",
     );
   }
+  const runId = parseRunId(values.run);
+  const intervalMs = parseMilliseconds(
+    values["interval-ms"],
+    "--interval-ms",
+    5_000,
+  );
+  const timeoutMs = parseMilliseconds(
+    values["timeout-ms"],
+    "--timeout-ms",
+    30 * 60_000,
+  );
+  if (command !== "status") {
+    for (const option of [
+      "run",
+      "wait",
+      "interval-ms",
+      "timeout-ms",
+      "require-published",
+      "no-release",
+    ]) {
+      if (values[option] !== undefined && values[option] !== false) {
+        throw new Error(`--${option} requires the status command`);
+      }
+    }
+  }
+  if (values.wait && values["no-release"]) {
+    throw new Error("--wait and --no-release are mutually exclusive");
+  }
+  if (values.run !== undefined && values["no-release"]) {
+    throw new Error("--run and --no-release are mutually exclusive");
+  }
   const tokenExpiryDays =
     values["token-expiry-days"] === undefined
       ? undefined
@@ -230,10 +287,13 @@ export async function main(args = process.argv.slice(2)) {
     if (values.org && values.user) {
       throw new Error("--org and --user are mutually exclusive");
     }
+    if (command === "status" && (runId !== undefined || values.wait)) {
+      throw new Error("account status does not support --run or --wait");
+    }
     if (values.repository !== undefined || values.ref) {
       throw new Error("account scans cannot use --repository or --ref");
     }
-    if (!["inspect", "plan", "setup"].includes(command)) {
+    if (!["inspect", "plan", "setup", "status"].includes(command)) {
       throw new Error(`unknown command '${command}'`);
     }
     if (
@@ -313,6 +373,34 @@ export async function main(args = process.argv.slice(2)) {
   }
 
   const registries = (values.registry ?? []).map(parseRegistry);
+  if (command === "status") {
+    const report = await statusReport({
+      inspection,
+      repository,
+      values,
+      registries,
+      runId,
+      intervalMs,
+      timeoutMs,
+    });
+    if (values.format === "json") {
+      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    } else {
+      process.stdout.write(
+        renderStatusText(report, { verbose: values.verbose }),
+      );
+    }
+    if (values["require-published"] && !report.summary.ok) {
+      process.exitCode = 1;
+    }
+    if (
+      values.wait &&
+      (report.release.state === "failed" || report.release.wait_timeout)
+    ) {
+      process.exitCode = 1;
+    }
+    return;
+  }
   if (!["plan", "setup"].includes(command)) {
     throw new Error(`unknown command '${command}'`);
   }
@@ -417,6 +505,94 @@ export async function main(args = process.argv.slice(2)) {
     },
     values.all || values.migrate,
   );
+}
+
+async function statusReport({
+  inspection,
+  repository,
+  values,
+  registries,
+  runId,
+  intervalMs,
+  timeoutMs,
+}) {
+  const selected = inspection.packages.filter(
+    (packageInfo) =>
+      (!registries.length || registries.includes(packageInfo.registry)) &&
+      (!values.package || packageInfo.name === values.package),
+  );
+  if (values.package && selected.length === 0) {
+    throw new Error(`package '${values.package}' was not found`);
+  }
+  const workflow = await statusWorkflow(
+    repository,
+    inspection,
+    selected,
+    values.workflow,
+  );
+  let release;
+  if (values["no-release"]) {
+    release = { state: "skipped", workflow, run: null, jobs: [] };
+  } else {
+    const releaseOptions = {
+      slug: inspection.repository.github_owner
+        ? `${inspection.repository.github_owner}/${inspection.repository.github_repository}`
+        : null,
+      workflow,
+      runId,
+      capture: captureGh,
+    };
+    release = values.wait
+      ? await waitForReleaseStatus({
+          ...releaseOptions,
+          intervalMs,
+          timeoutMs,
+          onPoll: values.verbose
+            ? (status) =>
+                process.stderr.write(
+                  `status: run ${status.run?.id ?? "pending"} ${status.state}\n`,
+                )
+            : undefined,
+        })
+      : await collectReleaseStatus(releaseOptions);
+  }
+  return buildStatusReport(inspection, {
+    registries,
+    package: values.package,
+    release,
+    expectedVersions: true,
+    probeOptions: { verbose: values.verbose },
+  });
+}
+
+async function statusWorkflow(repository, inspection, packages, explicit) {
+  if (explicit !== undefined) {
+    return workflowOverride(repository, explicit);
+  }
+  if (inspection.repository.release_workflow) {
+    return inspection.repository.release_workflow;
+  }
+  return selectStatusWorkflow(inspection, packages);
+}
+
+function parseRunId(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(value) || Number(value) <= 0) {
+    throw new Error("--run must be a positive run id");
+  }
+  return Number(value);
+}
+
+function parseMilliseconds(value, option, fallback) {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (!/^\d+$/.test(value) || Number(value) <= 0) {
+    throw new Error(`${option} must be a positive integer`);
+  }
+  return Number(value);
 }
 
 async function workflowOverride(repository, workflow, adding = false) {

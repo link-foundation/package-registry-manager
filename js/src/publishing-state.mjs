@@ -29,7 +29,8 @@ export function publishingPolicy(contents, registry, grantOverride) {
           .some(
             (step) =>
               /crates-io-auth-action@/.test(step) &&
-              !/\bif:[\s\S]*\bvars\./.test(step),
+              !/\bif:\s*(?:\$\{\{\s*)?false\b/.test(step) &&
+              !/\bif:[\s\S]*\bvars\.\w+\s*==\s*['"]true['"]/.test(step),
           )
       : registry === "pypi"
         ? /pypa\/gh-action-pypi-publish@/.test(text)
@@ -37,7 +38,8 @@ export function publishingPolicy(contents, registry, grantOverride) {
   const fallback =
     registry === "crates-io"
       ? /outputs\.token\s*\|\|\s*secrets\./.test(text) &&
-        /continue-on-error:\s*true/.test(text)
+        (/continue-on-error:\s*true/.test(text) ||
+          /vars\.\w+\s*!=\s*['"]true['"]/.test(text))
       : /outcome == 'failure'/.test(text) &&
         /continue-on-error:\s*true/.test(text);
   const facts = authenticationFacts(text, registry);

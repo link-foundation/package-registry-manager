@@ -11,6 +11,14 @@ import { listCratesTokens, tokenExpiryFindings } from "./crates-tokens.mjs";
 import { SetupSession } from "./setup.mjs";
 import { runCratesApiStep } from "./crates-api.mjs";
 import { readWorkflows } from "./workflows.mjs";
+import {
+  buildStatusReport,
+  captureGh,
+  collectReleaseStatus,
+  renderStatusText,
+  selectStatusWorkflow,
+  summarizeReports,
+} from "./status.mjs";
 
 async function prepareRepository(item) {
   const root = item.inspection.repository.root;
@@ -107,6 +115,72 @@ export async function accountCommand(command, options, outputPlans) {
         process.exitCode = 1;
       }
       return scan;
+    }
+    if (command === "status") {
+      const reports = [];
+      for (const item of scan.repositories) {
+        if (!item.inspection) {
+          continue;
+        }
+        const packages = item.inspection.packages.filter(
+          (packageInfo) =>
+            (!options.registries?.length ||
+              options.registries.includes(packageInfo.registry)) &&
+            (!options.package || packageInfo.name === options.package),
+        );
+        const workflow = selectStatusWorkflow(item.inspection, packages);
+        const release = options.noRelease
+          ? { state: "skipped", workflow, run: null, jobs: [] }
+          : await collectReleaseStatus({
+              slug: item.repository,
+              workflow,
+              branch: item.default_branch,
+              capture: options.capture ?? captureGh,
+            });
+        const report = await buildStatusReport(item.inspection, {
+          registries: options.registries,
+          package: options.package,
+          release,
+          expectedVersions: true,
+          probeOptions: { verbose: options.verbose },
+        });
+        report.repository.root = `https://github.com/${item.repository}`;
+        reports.push(report);
+        if (options.format !== "json") {
+          process.stdout.write(
+            renderStatusText(report, { verbose: options.verbose }),
+          );
+        }
+      }
+      const summary = summarizeReports(reports);
+      if (options.format === "json") {
+        process.stdout.write(
+          `${JSON.stringify(
+            {
+              schema_version: 1,
+              account: scan.account,
+              repositories: reports,
+              summary,
+              ...(scan.repositories.some((item) => item.error)
+                ? {
+                    errors: scan.repositories
+                      .filter((item) => item.error)
+                      .map((item) => ({
+                        repository: item.repository,
+                        error: item.error,
+                      })),
+                  }
+                : {}),
+            },
+            null,
+            2,
+          )}\n`,
+        );
+      }
+      if (options.requirePublished && !summary.ok) {
+        process.exitCode = 1;
+      }
+      return reports;
     }
     let items = scan.repositories.filter((item) => item.inspection);
     const errors = scan.repositories.filter((item) => item.error);

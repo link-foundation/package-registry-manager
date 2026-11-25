@@ -149,6 +149,42 @@ test("finds the job that publishes to npm through a script (#16)", async () => {
   );
 });
 
+test("recognizes default-on crates OIDC with an opt-out token fallback (#797)", async () => {
+  const root = await repository({
+    "rust/Cargo.toml": '[package]\nname = "tool"\nversion = "1.0.0"\n',
+    "rust/scripts/publish-crate.rs": [
+      'let mut cmd = Command::new("cargo");',
+      'cmd.arg("publish");',
+      "",
+    ].join("\n"),
+    ".github/workflows/release.yml": [
+      "on: push",
+      "jobs:",
+      "  finalize-release:",
+      "    permissions:",
+      "      contents: write",
+      "      id-token: write",
+      "    steps:",
+      "      - name: Authenticate with crates.io (OIDC trusted publishing)",
+      "        if: vars.CRATES_IO_TOKEN_FALLBACK != 'true'",
+      "        uses: rust-lang/crates-io-auth-action@v1",
+      "      - name: Publish to Crates.io",
+      "        env:",
+      "          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}",
+      "        run: rust-script rust/scripts/publish-crate.rs",
+      "",
+    ].join("\n"),
+  });
+  const inspection = await inspectRepository(root);
+  const crate = inspection.packages.find(
+    (item) => item.registry === "crates-io",
+  );
+  assert.equal(crate.workflow, "release.yml");
+  assert.deepEqual(crate.workflow_jobs, ["finalize-release"]);
+  assert.equal(crate.publishing_policy, "oidc-with-token-fallback");
+  assert.deepEqual(crate.token_secrets, ["CARGO_REGISTRY_TOKEN"]);
+});
+
 test("never falls back to a workflow named like a release", async () => {
   const root = await repository({
     "package.json": '{"name": "tool", "version": "1.0.0"}\n',
